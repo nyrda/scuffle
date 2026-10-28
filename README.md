@@ -43,6 +43,28 @@ On Linux, Waystone uses a Proton build and `umu-run` from the usual places,
 such as `~/.steam/root/compatibilitytools.d`. Pick another Proton build in the
 settings. All clients share one Wine prefix in `~/.local/share/waystone/prefix`.
 
+## Launch options
+
+Each client's ⋯ menu has **Launch options…** for arguments that Wow.exe
+understands: the graphics API, windowed or fullscreen, the console, no sound,
+compatibility mode and no driver extensions. Other arguments, such as
+`-config Config2.wtf`, go into the extra field. Waystone sets `-launcherlogin`,
+`-uid` and `-initialgamemode` itself. On Linux a client can also have its own
+environment variables.
+
+On Linux the **Launch** card in the settings sets what runs around every client:
+
+- GameMode runs the game through `gamemoderun`.
+- MangoHud sets `MANGOHUD=1`, which works through umu's container.
+- An option that cannot work with the chosen Proton build or this machine,
+  such as Wayland, HDR or ntsync, is greyed out and shown off. Its choice is
+  kept for a build or tool that has it.
+- NVIDIA Reflex appears only on a machine with an NVIDIA GPU.
+- The Proton log goes to `~/.local/share/waystone/logs/steam-battlenet.log`.
+- Environment variables are `NAME=value` lines. A client's own variables win.
+- A wrapper command goes before `umu-run`, as in Steam. For example
+  `gamescope -w 2560 -h 1440 -f --`.
+
 ## Signing in
 
 The first **Play** opens Battle.net's sign-in page in your browser. After you

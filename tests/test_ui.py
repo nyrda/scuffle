@@ -1,5 +1,6 @@
 """Check the sign-in page's clipboard handling with a real Qt clipboard."""
 import os
+import sys
 
 import pytest
 
@@ -148,12 +149,17 @@ def test_the_folder_cannot_change_under_queued_downloads(qt, window, tmp_path):
 @pytest.fixture
 def styled(qt, monkeypatch, tmp_path):
     """The real style and a Proton build with a long name, set before the window is built."""
-    from types import SimpleNamespace
     from waystone.ui import app as ui
     monkeypatch.setattr(ui, 'cache_dir', lambda: tmp_path / 'style')
     ui.prepare(qt)
-    build = SimpleNamespace(name='GE-Proton10-25 with a very long name from a custom folder', path='/opt/proton')
-    monkeypatch.setattr(pages, 'find_protons', lambda: [build])
+    from waystone import launch
+    from waystone.runtime.proton import Proton
+    from waystone.ui import launch_options
+    build = Proton('GE-Proton10-25 with a very long name from a custom folder', tmp_path / 'proton')
+    build.path.mkdir()
+    # Both the list and the build a launch would pick, so nothing depends on this machine's builds.
+    monkeypatch.setattr(launch_options, 'find_protons', lambda: [build])
+    monkeypatch.setattr(launch, 'find_protons', lambda: [build])
 
 
 def test_settings_never_scroll_sideways_at_the_minimum_size(qt, styled, window):
@@ -754,3 +760,157 @@ def test_a_short_fact_fills_the_free_cell_instead_of_a_row_of_its_own(qt):
                     ('Folder', '/games/_classic_era_')])
     key, value = card.cells[-1]
     assert key.text() == 'Folder' and card.grid.getItemPosition(card.grid.indexOf(value)) == (2, 1, 1, 3)
+
+
+def installed_wow(window, tmp_path, monkeypatch):
+    window.settings.root = str(tmp_path / 'games')
+    window.open_library()
+    monkeypatch.setattr(window.library, 'state', lambda code: {'version': '12.0.5.66741', 'region': 'eu',
+                                                                'locale': 'enUS', 'folder': '_retail_'}
+                        if code == 'wow' else None)
+    window.client_list.select('wow')
+    window.refresh()
+
+
+def test_a_clients_launch_options_save_restore_and_show_on_its_page(qt, window, tmp_path, monkeypatch):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from waystone.launch_options import ClientOptions
+    from waystone.settings import Settings
+    installed_wow(window, tmp_path, monkeypatch)
+    window.client_page.launch_action.trigger()
+    page = window.options_page
+    assert window.stack.currentWidget() is page
+    next(b for b in page.graphics.group.buttons() if b.text() == 'DirectX 11').click()
+    page.switches['-console'].setChecked(True)
+    page.arguments.setText('-config Other.wtf')
+    if page.environment:
+        page.environment.text.setPlainText('DXVK_HUD=fps')
+    QTest.keyClick(page.close_button, Qt.Key_Escape)          # Esc returns at once and keeps the typing
+    assert window.stack.currentWidget() is window.client_page
+    expected = ClientOptions(graphics='-d3d11', switches=['-console'], arguments='-config Other.wtf',
+                             environment={'DXVK_HUD': 'fps'} if page.environment else {})
+    assert Settings.load().client_launch == {'wow': expected}
+    window.refresh()
+    assert ('Launch options', '-d3d11 -console -config Other.wtf' + (' · 1 variable' if page.environment else '')) \
+        in window.facts('wow')
+    assert 'launch options' in window.client_page.primary.toolTip()
+    # A reserved argument is pointed out and not saved. Reopening shows what was saved.
+    window.open_launch_options()
+    assert page.switches['-console'].isChecked() and page.graphics.value() == '-d3d11'
+    page.arguments.setText('-config Other.wtf -uid wow')
+    page.close_button.click()
+    assert Settings.load().client_launch['wow'].arguments == '-config Other.wtf'
+    window.open_launch_options()
+    assert page.arguments.text() == '-config Other.wtf'
+    page.reset_button.click()
+    assert Settings.load().client_launch == {}
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='Linux launch settings')
+def test_linux_launch_settings_save_valid_input_and_keep_it_through_mistakes(qt, window, programs_on_path):
+    from waystone.settings import Settings
+    window.open_settings()
+    launch = window.settings_page.launch
+    launch.boxes['log'].setChecked(True)          # works with any build and machine
+    launch.environment.text.setPlainText('DXVK_HUD=fps')
+    launch.environment.flush()
+    launch.wrapper.setText('gamescope -f --')
+    launch.wrapper.editingFinished.emit()
+    saved = Settings.load().linux_launch
+    assert saved.log and saved.environment == {'DXVK_HUD': 'fps'} and saved.wrapper == 'gamescope -f --'
+    assert not launch.wrapper_note.isVisibleTo(launch)
+    # Mistakes are named under their field and the saved values stay as they were.
+    launch.environment.text.setPlainText('DXVK_HUD=full\nBAD NAME=1')
+    launch.environment.flush()
+    launch.wrapper.setText('missing-tool --')
+    launch.wrapper.editingFinished.emit()
+    assert 'Line 2' in launch.environment.problem.text() and launch.environment.problem.isVisibleTo(launch)
+    assert 'missing-tool was not found' in launch.wrapper_note.text()
+    saved = Settings.load().linux_launch
+    assert saved.environment == {'DXVK_HUD': 'fps'} and saved.wrapper == 'missing-tool --'
+    launch.wrapper.setText('gamescope "unclosed')
+    launch.wrapper.editingFinished.emit()
+    assert Settings.load().linux_launch.wrapper == 'missing-tool --'
+
+
+@pytest.fixture
+def programs_on_path(tmp_path, monkeypatch):
+    folder = tmp_path / 'bin'
+    folder.mkdir()
+    (folder / 'gamescope').write_text('#!/bin/sh\n')
+    (folder / 'gamescope').chmod(0o755)
+    monkeypatch.setenv('PATH', str(folder))
+    return folder
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='Linux launch settings')
+def test_an_option_that_cannot_work_here_shows_off_and_keeps_its_choice(qt, styled, window, programs_on_path):
+    from waystone.launch_options import LinuxOptions
+    from waystone.settings import Settings
+    window.settings.linux_launch = LinuxOptions(gamemode=True, wayland=True)
+    window.open_settings()
+    launch = window.settings_page.launch
+    # No gamemoderun, and a Proton build without Wayland or an ntsync switch.
+    for name, note in [('gamemode', 'gamemoderun was not found'), ('wayland', 'Not in this Proton build'),
+                       ('ntsync', 'Not adjustable')]:
+        box = launch.boxes[name]
+        assert not box.isChecked() and not box.isEnabled() and note in launch.notes[name].text()
+    launch.boxes['log'].setChecked(True)
+    saved = Settings.load().linux_launch
+    assert saved.log and saved.gamemode and saved.wayland and saved.ntsync
+    # Once gamemoderun is installed, the saved choice shows again.
+    (programs_on_path / 'gamemoderun').write_text('#!/bin/sh\n')
+    (programs_on_path / 'gamemoderun').chmod(0o755)
+    launch.update_notes()
+    assert launch.boxes['gamemode'].isChecked() and launch.boxes['gamemode'].isEnabled()
+
+
+def test_the_client_page_without_linux_saves_arguments_and_keeps_hidden_variables(qt):
+    from waystone import catalog
+    from waystone.launch_options import ClientOptions
+    from waystone.ui.client_options import ClientOptionsPage
+    page = ClientOptionsPage(linux=False)
+    saved = []
+    page.changed.connect(lambda code, options: saved.append((code, options)))
+    page.load(catalog.get('wow'), ClientOptions(switches=['-console'], environment={'DXVK_HUD': 'fps'}))
+    assert page.environment is None and page.focus_chain()[-1] is page.arguments
+    page.switches['-nosound'].setChecked(True)
+    # The variables were set on Linux. This page cannot show them, and keeps them as they were.
+    assert saved[-1] == ('wow', ClientOptions(switches=['-console', '-nosound'], environment={'DXVK_HUD': 'fps'}))
+    page.reset_button.click()
+    assert saved[-1] == ('wow', ClientOptions())
+
+
+def test_extra_arguments_that_contradict_a_toggle_save_with_a_calm_note(qt):
+    from waystone import catalog
+    from waystone.launch_options import ClientOptions
+    from waystone.ui.client_options import ClientOptionsPage
+    page = ClientOptionsPage(linux=False)
+    saved = []
+    page.changed.connect(lambda code, options: saved.append(options))
+    page.load(catalog.get('wow'), ClientOptions(graphics='-d3d12'))
+    page.show()
+    page.arguments.setText('-d3d11')
+    note = page.arguments_note
+    assert note.objectName() == 'caution' and not note.isHidden() and 'contradicts DirectX 12' in note.text()
+    page.hide()                         # leaving the page saves what was typed
+    assert saved[-1].arguments == '-d3d11'
+    next(b for b in page.graphics.group.buttons() if b.text() == 'Automatic').click()
+    assert note.isHidden()
+
+
+@pytest.fixture
+def bad_launch_options(tmp_path):
+    """A settings file without a folder and with launch options that cannot load, for the window fixture."""
+    import json
+    (tmp_path / 'config_dir').mkdir()
+    (tmp_path / 'config_dir/settings.json').write_text(json.dumps({'client_launch': {'wow': {'graphics': ['-d3d11']}}}))
+
+
+def test_dropped_launch_options_are_reported_before_the_folder_notice(qt, bad_launch_options, window):
+    banner = window.client_page.banner
+    assert 'invalid and were removed' in banner.text.text() and banner.isVisible()
+    banner.close_button.click()
+    assert 'Choose an installation folder' in banner.text.text() and banner.isVisible()
+    assert banner.action.text() == 'Choose folder'

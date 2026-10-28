@@ -153,6 +153,11 @@ QLabel#titlelarge {{ font-size: 24pt; font-weight: 600; }}
 QComboBox, QLineEdit {{ background: #1f2229; color: {TEXT}; border: 1px solid {BORDER};
                        border-radius: 6px; padding: 0 10px; min-height: {CONTROL_HEIGHT - 2}px; }}
 QComboBox:hover, QLineEdit:focus, QComboBox:focus {{ border-color: #4a6fb0; }}
+QPlainTextEdit {{ background: #1f2229; color: {TEXT}; border: 1px solid {BORDER}; border-radius: 6px;
+                  padding: 4px 6px; }}
+QPlainTextEdit:focus {{ border-color: #4a6fb0; }}
+QLabel#problem {{ color: #f19a9a; font-size: 9.5pt; }}
+QLabel#caution {{ color: #f0c27a; font-size: 9.5pt; }}
 QLineEdit:read-only {{ background: transparent; border-color: #262a33; color: #c9ced6; }}
 QLineEdit[locked="true"] {{ color: {FAINT}; }}
 QComboBox::drop-down {{ border: none; width: 26px; }}

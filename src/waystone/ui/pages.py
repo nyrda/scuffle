@@ -13,8 +13,8 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComb
 
 from .. import catalog
 from ..launch import looks_like_redirect, open_browser, parse_ticket
-from ..runtime.proton import find_protons
 from ..settings import LOCALE_NAMES, MEGABYTE, REGIONS, Settings
+from .launch_options import LaunchSettings
 from .style import BACKGROUND, FAMILY_NAMES, SPACING, client_color, size_text, tile
 from .widgets import (Banner, ElidedLabel, FactsCard, Segmented, StorageCard, duration_text, fixed, label,
                       progress_variants, tone)
@@ -196,6 +196,7 @@ class ClientPage(Page):
     verify_clicked = Signal()
     open_folder_clicked = Signal()
     hide_clicked = Signal()
+    launch_options_clicked = Signal()
     mode_changed = Signal(str)
 
     def __init__(self):
@@ -273,6 +274,7 @@ class ClientPage(Page):
         menu = QMenu(self.more)
         self.verify_action = menu.addAction('Verify files', self.verify_clicked.emit)
         self.folder_action = menu.addAction('Open folder', self.open_folder_clicked.emit)
+        self.launch_action = menu.addAction('Launch options…', self.launch_options_clicked.emit)
         self.menu_separator = menu.addSeparator()
         self.hide_action = menu.addAction('Hide from list', self.hide_clicked.emit)
         self.more.setMenu(menu)
@@ -567,17 +569,19 @@ class SettingsPage(Page):
         # Launch
         launch = self.section_layouts['launch']
         self.launch_widgets: list[QWidget] = []
-        # On Linux the game runs in Proton.
-        self.proton = None
+        # On Linux the game runs in Proton, with the options around it.
+        self.launch = self.proton = None
         if sys.platform != 'win32':
-            self.proton = fixed(QComboBox())
-            self.proton.setToolTip('Runs the game through umu-run. Builds from Steam and ProtonUp '
-                                   'are found automatically.')
-            grid = self.card(launch, 'Proton', 'The Windows compatibility layer the game runs in on Linux.')
-            self.row(grid, 'Build', self.proton)
-        self.launch_empty = label('The game starts directly on Windows. There is nothing to set here yet.', 'muted',
-                                  wrap=True)
-        self.launch_empty.setVisible(self.proton is None)
+            self.launch = LaunchSettings()
+            self.launch.changed.connect(self.apply)
+            self.proton = self.launch.proton
+            grid = self.card(launch, 'Linux', 'How the game runs on Linux, for every client. '
+                             'Each client adds its own under ⋯ and Launch options.')
+            grid.addWidget(self.launch, 0, 0)
+            grid.setColumnStretch(0, 1)
+        self.launch_empty = label('The game starts directly on Windows. Each client has its own '
+                                  'launch options under ⋯.', 'muted', wrap=True)
+        self.launch_empty.setVisible(self.launch is None)
         launch.addWidget(self.launch_empty)
 
         for layout in self.section_layouts.values():
@@ -587,7 +591,7 @@ class SettingsPage(Page):
         self.show_section('general')
 
         self._loading = False
-        for widget in [self.region, self.locale, self.limit] + ([self.proton] if self.proton else []):
+        for widget in [self.region, self.locale, self.limit]:
             # Long entries such as Proton build names must not widen the page past a small window.
             widget.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
             widget.setMinimumContentsLength(5)
@@ -684,7 +688,7 @@ class SettingsPage(Page):
         elif self.section == 'downloads':
             chain += [self.limit, *self.download_fields]
         else:
-            chain += [self.proton] if self.proton else []
+            chain += self.launch.focus_chain() if self.launch else []
             for widget in self.launch_widgets:
                 chain += widget.focus_chain() if hasattr(widget, 'focus_chain') else [widget]
         return chain
@@ -778,7 +782,6 @@ class SettingsPage(Page):
     def values(self) -> dict:
         return {'root': self.root.text().strip(), 'region': self.region.currentData(),
                 'locale': self.locale.currentData(), 'limit': self.limit.currentData(),
-                'proton': self.proton.currentData() if self.proton else '',
                 'show_other': self.show_other.isChecked()}
 
     def load(self, settings: Settings, installed: list[str], downloading=None) -> None:
@@ -795,16 +798,8 @@ class SettingsPage(Page):
         for value in sorted(set([0, 1, 2, 5, 10, 25, 50, 100, current])):
             self.limit.addItem('No limit' if value == 0 else f'{value} MB/s', value)
         self.limit.setCurrentIndex(self.limit.findData(current))
-        if self.proton is not None:
-            self.proton.clear()
-            self.proton.addItem('Newest installed build', '')
-            for proton in find_protons():
-                self.proton.addItem(proton.name, str(proton.path))
-            index = self.proton.findData(settings.proton)
-            if index < 0 and settings.proton:
-                self.proton.addItem(Path(settings.proton).name, settings.proton)
-                index = self.proton.count() - 1
-            self.proton.setCurrentIndex(max(index, 0))
+        if self.launch is not None:
+            self.launch.load(settings)
         self._loading = False
         self.update_free()
         self.update_other()
@@ -847,7 +842,8 @@ class SettingsPage(Page):
         s.root = values['root'] or s.root
         s.region, s.locale = values['region'], values['locale']
         s.bandwidth_limit = int(values['limit']) * MEGABYTE
-        s.proton = values['proton']
+        if self.launch is not None:
+            self.launch.apply(s)      # the Proton build and the Linux launch options
         s.show_other_clients = values['show_other']
         # Only a box the user changed counts. A locked box shows the client for its download,
         # and the user's own choice for it stays.

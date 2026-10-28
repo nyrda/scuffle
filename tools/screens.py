@@ -8,11 +8,18 @@ The client catalog comes from tests/fixtures/catalog-us.json, so no state depend
 what Blizzard publishes today.
 """
 import json
+import os
 from pathlib import Path
 import sys
+import tempfile
 import time
 
-from PySide6.QtWidgets import QApplication
+# Folders of its own, so no state reads or touches the user's settings, sign-in or library.
+_home = tempfile.mkdtemp(prefix='waystone-screens-')
+for _name in ['XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'APPDATA', 'LOCALAPPDATA']:
+    os.environ[_name] = os.path.join(_home, _name.lower())
+
+from PySide6.QtWidgets import QApplication, QScrollArea
 
 from waystone import discovery
 from waystone.downloads import FAILED, PAUSED, QUEUED, RUNNING, Job
@@ -31,13 +38,15 @@ def main(output: Path) -> None:
     ui.prepare(application)
     window = ui.MainWindow()
     window.check_updates = lambda: None
+    fake_installed(window, 'wow')               # one installed client in a throwaway folder
+    window.library.installed = lambda: ['wow']
     window.settings.region = 'us'               # the region the catalog fixture was captured for
     window.on_storage(window.library.storage() if window.library else {})
     window.settings.extra_clients = ['wow_classic_era_ptr']
     window.populate()
     window.show()
 
-    def shot(name, arrange=None):
+    def shot(name, arrange=None, reveal=None):
         for size, (width, height) in SIZES.items():
             window.resize(width, height)
             window.refresh()
@@ -47,6 +56,13 @@ def main(output: Path) -> None:
                 arrange()
                 for _ in range(3):
                     application.processEvents()
+            if reveal is not None:
+                # Scrolled after the resize, so the part under review is in view at every size.
+                scroll = reveal.parentWidget()
+                while scroll is not None and not isinstance(scroll, QScrollArea):
+                    scroll = scroll.parentWidget()
+                scroll.ensureWidgetVisible(reveal, 0, 40)
+                application.processEvents()
             window.grab().save(str(output / f'{name}-{size}.png'))
 
     window.updates.clear()
@@ -161,12 +177,64 @@ def main(output: Path) -> None:
     window.settings.extra_clients = ['wow_classic_era_ptr']
     window.populate()
     window.client_list.select('wow')
+    launch_states(window, shot)
     from waystone.ui import pages
     pages.open_browser = lambda url: None
     window.signed_in = lambda: False             # the sign-in page only appears without a session
     window.on_sign_in_requested('https://eu.account.battle.net/login/?externalChallenge=login&app=wow')
     shot('11-sign-in')
     print(f'Wrote {len(list(output.glob("*.png")))} screenshots to {output}')
+
+
+def launch_states(window, shot) -> None:
+    """The Linux launch settings and one client's launch options, fine and with mistakes."""
+    from waystone.launch_options import ClientOptions
+    page = window.settings_page
+    if page.launch is not None:
+        window.open_settings('launch')
+        shot('20-launch-settings', reveal=page.launch.environment)
+        launch = page.launch
+        launch.boxes['gamemode'].setChecked(True)
+        launch.boxes['log'].setChecked(True)
+        launch.wrapper.setText('gamescope-not-installed -f --')
+        launch.environment.text.setPlainText('DXVK_HUD=fps\nVKD3D CONFIG=dxr')
+        shot('20b-launch-settings-mistakes', reveal=launch.environment.problem)
+        window.settings_page.load(window.settings, *window.kept_split())
+    code = 'wow'
+    if not (window.library and window.library.state(code)):
+        fake_installed(window, code)
+    window.client_list.select(code)
+    window.show_client_page()
+    window.open_launch_options()
+    shot('21-launch-options-empty')
+    options = window.options_page
+    options.load(ui.catalog.get(code), ClientOptions(graphics='-d3d11', switches=['-console'],
+                                                     arguments='-config Config2.wtf',
+                                                     environment={'DXVK_HUD': 'fps'}))
+    shot('21b-launch-options')
+    options.arguments.setText('-config Config2.wtf -d3d12')
+    shot('21d-launch-options-overlap', reveal=options.arguments_note)
+    options.arguments.setText('-console -uid wow')
+    if options.environment:
+        options.environment.text.setPlainText('DXVK_HUD=fps\n1BAD=yes')
+    shot('21c-launch-options-mistakes', reveal=options.environment.problem if options.environment else None)
+    window.settings.client_launch[code] = ClientOptions(graphics='-d3d11', switches=['-console'],
+                                                        environment={'DXVK_HUD': 'fps'})
+    options.load(ui.catalog.get(code), window.settings.client_launch[code])
+    window.show_client_page()
+    shot('22-client-with-launch-options')
+    window.settings.client_launch.pop(code)
+
+
+def fake_installed(window, code: str) -> None:
+    """Show a client as installed, as the tests do, when this machine has none. Nothing is written."""
+    import tempfile
+    if not window.library:
+        window.settings.root = tempfile.mkdtemp(prefix='waystone-screens-')
+        window.open_library()
+    state = window.library.state
+    window.library.state = lambda c: ({'version': '12.0.5.66741', 'region': 'eu', 'locale': 'enUS',
+                                       'folder': '_retail_'} if c == code else state(c))
 
 
 if __name__ == '__main__':

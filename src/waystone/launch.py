@@ -1,6 +1,7 @@
 """Sign in, renew the session and start a client."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
@@ -14,6 +15,7 @@ import webbrowser
 from . import catalog, system
 from .auth.bgs import CredentialRejected, login, renew
 from .auth.vault import Vault
+from .launch_options import ClientOptions, OptionError, has_nvidia, linux_environment, wrapper_command
 from .library import Library, LibraryError
 from .runtime.game import GameRuntime, LinuxRuntime, WindowsRuntime
 from .runtime.proton import Proton, find_protons, find_umu
@@ -78,6 +80,37 @@ def make_runtime(settings: Settings) -> GameRuntime:
     return LinuxRuntime(bridge, data_dir() / 'prefix', select_proton(settings), umu)
 
 
+def log_dir() -> Path:
+    """Where Proton writes steam-battlenet.log when its log is on."""
+    return data_dir() / 'logs'
+
+
+@dataclass
+class LaunchPlan:
+    """What the user's launch options add to a client's start."""
+    arguments: list[str]
+    environment: dict[str, str]
+    wrapper: list[str]
+
+
+def launch_plan(settings: Settings, code: str, *, windows: bool = system.WINDOWS) -> LaunchPlan:
+    """The user's arguments, variables and wrappers for one client, checked before signing in."""
+    label = catalog.get(code).label
+    options = settings.client_launch.get(code) or ClientOptions()
+    try:
+        arguments = options.game_arguments()
+    except OptionError as error:
+        raise LaunchError(f'The launch options of {label} need a fix. {error}') from None
+    if windows:
+        return LaunchPlan(arguments, {}, [])
+    try:
+        wrapper = wrapper_command(settings.linux_launch)
+    except OptionError as error:
+        raise LaunchError(f'{error} Change it in Settings.') from None
+    environment = linux_environment(settings.linux_launch, options, nvidia=has_nvidia(), log_dir=log_dir())
+    return LaunchPlan(arguments, environment, wrapper)
+
+
 class Launcher:
     def __init__(self, settings: Settings, library: Library, runtime: GameRuntime | None = None,
                  vault: Vault | None = None):
@@ -120,7 +153,8 @@ class Launcher:
         if self.library.running(code):
             raise LaunchError(f'{entry.label} is already running')
         executable = self.library.executable(code)
-        arguments = entry.launch_arguments(mode, state.get('launch_arguments'))
+        plan = launch_plan(self.settings, code)
+        arguments = entry.launch_arguments(mode, [*(state.get('launch_arguments') or []), *plan.arguments])
         version = int(state['version'].rsplit('.', 1)[-1])
         status = status or (lambda text: None)
         with self.vault.locked():
@@ -128,7 +162,8 @@ class Launcher:
             self.renew(version, sign_in)
             status('Starting')
             ack = self.vault.directory / f'.launch-{os.getpid()}-{time.time_ns()}.ack'
-            process = self.runtime.start(executable, arguments, self.vault.token, ack)
+            process = self.runtime.start(executable, arguments, self.vault.token, ack,
+                                         environment=plan.environment, wrapper=plan.wrapper)
             try:
                 deadline = time.monotonic() + STARTUP_TIMEOUT
                 while time.monotonic() < deadline:
@@ -141,7 +176,10 @@ class Launcher:
                     if process.poll() is not None:
                         break
                     time.sleep(0.1)
-                raise LaunchError(f'{entry.label} did not start. Check its runtime and try again.')
+                # A wrapper's or variable's failure is otherwise silent, since its output is not kept.
+                hint = ' Your launch options may be the cause.' if plan.arguments or plan.environment \
+                    or plan.wrapper else ''
+                raise LaunchError(f'{entry.label} did not start. Check its runtime and try again.{hint}')
             finally:
                 ack.unlink(missing_ok=True)
                 self.vault.token.unlink(missing_ok=True)

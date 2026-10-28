@@ -8,6 +8,7 @@ from pathlib import Path
 import sys
 
 from . import system
+from .launch_options import ClientOptions, LinuxOptions
 
 
 MEGABYTE = 1_000_000      # speed limits are in decimal MB/s, like every size and rate shown
@@ -61,6 +62,12 @@ class Settings:
     selected: str = 'wow'
     modes: dict[str, str] = field(default_factory=dict)
     last_played: dict[str, int] = field(default_factory=dict)   # client -> Unix time
+    # Launch options. The Linux ones apply to every client, and each client can add its own.
+    linux_launch: LinuxOptions = field(default_factory=LinuxOptions)
+    client_launch: dict[str, ClientOptions] = field(default_factory=dict)
+
+    # What load() had to drop from the file, for the window to report. Not saved.
+    problems = ()
 
     @property
     def auth_host(self) -> str:
@@ -87,9 +94,28 @@ class Settings:
             value = known.get(name, [])
             known[name] = sorted({code for code in value if catalog.is_product(code)}) if isinstance(value, list) else []
         known['show_other_clients'] = known.get('show_other_clients') is True
+        launch, clients = known.pop('linux_launch', {}), known.pop('client_launch', {})
         settings = cls(**known)
         settings.validate()
+        settings.load_launch_options(launch, clients)
         return settings
+
+    def load_launch_options(self, launch, clients) -> None:
+        """Read the launch options leniently. A bad value is dropped and reported, never fatal."""
+        from . import catalog
+        problems: list[str] = []
+        self.linux_launch = LinuxOptions.from_json(launch, problems)
+        self.client_launch = {}
+        for code, data in (clients.items() if isinstance(clients, dict) else []):
+            if code not in catalog.BY_CODE:
+                problems.append(f'Launch options of an unknown client {code} were removed.')
+                continue
+            options = ClientOptions.from_json(data, catalog.BY_CODE[code].label, problems)
+            if options is not None:
+                self.client_launch[code] = options
+        if not isinstance(clients, dict):
+            problems.append('The launch options of the clients were unreadable and were removed.')
+        self.problems = tuple(problems)
 
     def validate(self) -> None:
         if self.region not in REGIONS:

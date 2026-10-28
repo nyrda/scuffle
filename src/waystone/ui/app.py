@@ -21,6 +21,7 @@ from ..launch import Launcher, LaunchError
 from ..library import Library, update_available
 from ..ngdp.cdn import CDNClient
 from ..settings import LOCALE_NAMES, MEGABYTE, REGIONS, Settings, cache_dir, data_dir
+from .client_options import ClientOptionsPage, summary as options_summary
 from .pages import ClientPage, FolderPage, QueuePage, SettingsPage, SignInPage
 from .style import SPACING, dark_palette, make_images, size_text, stylesheet
 from .widgets import ClientList, DownloadBar, fixed, label, progress_variants
@@ -86,6 +87,10 @@ class MainWindow(QMainWindow):
         self.client_page.open_folder_clicked.connect(self.open_folder)
         self.client_page.mode_changed.connect(self.remember_mode)
         self.client_page.hide_clicked.connect(self.hide_client)
+        self.client_page.launch_options_clicked.connect(self.open_launch_options)
+        self.options_page = ClientOptionsPage()
+        self.options_page.changed.connect(self.save_launch_options)
+        self.options_page.closed.connect(self.show_client_page)
         self.settings_page = SettingsPage()
         self.settings_page.saved.connect(self.on_settings_saved)
         self.settings_page.closed.connect(self.show_client_page)
@@ -101,7 +106,8 @@ class MainWindow(QMainWindow):
         self.queue_page.resume.connect(self.retry_or_resume)
         self.queue_page.cancel.connect(self.cancel_from_queue)
         self.queue_page.limit_changed.connect(self.set_limit)
-        for page in [self.client_page, self.settings_page, self.sign_in_page, self.folder_page, self.queue_page]:
+        for page in [self.client_page, self.settings_page, self.sign_in_page, self.folder_page, self.queue_page,
+                     self.options_page]:
             self.stack.addWidget(page)
         right.addWidget(self.stack, 1)
         self.download_bar = DownloadBar()
@@ -125,10 +131,19 @@ class MainWindow(QMainWindow):
         self.check_updates()
         self.discover()
         self.measure_storage()
+        # Messages for every page, one at a time. The next shows once the current one is dismissed,
+        # if it still applies then.
+        self.startup_notices: list[tuple] = []
+        if self.settings.problems:
+            # First, since the file is rewritten without them on the next save.
+            self.startup_notices.append((lambda: True, f'Some saved launch options were invalid and were '
+                                         f'removed. {self.settings.problems[0]}', 'info'))
         if not self.library:
-            self.notify('Choose an installation folder before installing a client.', 'info',
-                        'Choose folder', lambda: (self.open_settings(), self.open_folder_picker(str(Path.home()))),
-                        client='')
+            self.startup_notices.append((
+                lambda: not self.library, 'Choose an installation folder before installing a client.', 'info',
+                'Choose folder', lambda: (self.open_settings(), self.open_folder_picker(str(Path.home())))))
+        self.client_page.banner.dismissed.connect(self.next_startup_notice)
+        self.next_startup_notice()
         timer = QTimer(self)
         timer.timeout.connect(self.refresh)
         timer.start(1000)
@@ -274,6 +289,9 @@ class MainWindow(QMainWindow):
                 facts.append(('Language', language))
             if isinstance(self.updates.get(code), str):
                 facts.append(('New version', self.updates[code]))
+            options = self.settings.client_launch.get(code)
+            if options and options.active():
+                facts.append(('Launch options', options_summary(options)))
             return facts
         job = self.downloads.job(code) if self.downloads else None
         if job and job.total_bytes:
@@ -397,7 +415,7 @@ class MainWindow(QMainWindow):
         self.client_page.show_client(
             client, status=status, tone_name=tone_name, primary=primary,
             primary_enabled=bool(self.library) and not launching and primary != 'Queued',
-            primary_tip='' if self.library else 'Choose an installation folder in Settings first.',
+            primary_tip=self.primary_tip(code),
             installed=bool(state),
             busy=(launching and self.phases[code] != 'Running') or preparing, progress=progress,
             busy_launch=launching, queued=bool(job and job.status == QUEUED),
@@ -424,6 +442,14 @@ class MainWindow(QMainWindow):
                 not (focused.isVisible() and focused.isEnabled()):
             # A control that just hid itself hands focus to the main button, or the list.
             (button if button.isEnabled() else self.client_list).setFocus()
+
+    def primary_tip(self, code: str) -> str:
+        if not self.library:
+            return 'Choose an installation folder in Settings first.'
+        options = self.settings.client_launch.get(code)
+        if options and options.active() and self.library.state(code):
+            return f'Starts with your launch options: {options_summary(options)}'
+        return ''
 
     def align_download_bar(self):
         holder = getattr(self.stack.currentWidget(), 'column_holder', None)
@@ -465,6 +491,12 @@ class MainWindow(QMainWindow):
         code = self.selected() if client is None else client
         self.messages[code or ''] = (text, kind, action, callback)
         self.show_notice()
+
+    def next_startup_notice(self):
+        while self.startup_notices and '' not in self.messages:
+            applies, *notice = self.startup_notices.pop(0)
+            if applies():
+                self.notify(*notice, client='')
 
     def dismiss_notice(self):
         current = self.selected()
@@ -524,6 +556,23 @@ class MainWindow(QMainWindow):
         self.settings_page.close_button.setFocus()  # so Esc closes it at once
         self.settings_button.setChecked(True)
         self.client_list.set_active(False)
+
+    def open_launch_options(self):
+        code = self.selected()
+        if not code or self.stack.currentWidget() is self.sign_in_page:
+            return
+        self.options_page.load(catalog.get(code), self.settings.client_launch.get(code))
+        self.stack.setCurrentWidget(self.options_page)
+        self.options_page.close_button.setFocus()     # so Esc closes it at once
+        self.client_list.set_active(False)
+        self.refresh()
+
+    def save_launch_options(self, code: str, options):
+        if options.active():
+            self.settings.client_launch[code] = options
+        else:
+            self.settings.client_launch.pop(code, None)
+        self.settings.save()
 
     def open_folder_picker(self, folder: str):
         self.folder_page.start(folder)
