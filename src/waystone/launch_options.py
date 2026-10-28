@@ -289,9 +289,11 @@ def linux_environment(options: LinuxOptions, client: ClientOptions | None = None
         variables['PROTON_NO_NTSYNC'] = '1'
     if options.log:
         variables.update(PROTON_LOG='1', PROTON_LOG_DIR=str(log_dir))
-    variables.update(options.environment)
+    # Paths such as ~/.config/MangoHud/wow.conf or $HOME/dxvk.conf work as in a shell.
+    expand = lambda values: {name: os.path.expanduser(os.path.expandvars(value)) for name, value in values.items()}
+    variables.update(expand(options.environment))
     if client is not None:
-        variables.update(client.environment)
+        variables.update(expand(client.environment))
     return variables
 
 

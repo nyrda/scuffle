@@ -219,6 +219,16 @@ def get(code: str) -> Client:
     raise ValueError(f'Unknown client {code!r}')
 
 
+def other_game(code: str) -> str:
+    """The version a test client runs when it is another game than its live client, such as a
+    Classic Era PTR carrying a Burning Crusade build. Empty when it is the same game."""
+    client = get(code)
+    mine, live = release(code), release(client.parent) if client.parent else None
+    if not client.test or not mine or not live or patch(mine.version)[:1] == patch(live.version)[:1]:
+        return ''
+    return '.'.join(map(str, patch(mine.version)))
+
+
 def stale(code: str) -> bool:
     """A test or other client whose patch is behind the live client it belongs with."""
     client = get(code)
@@ -234,6 +244,8 @@ def visible(clients_: list[Client] | None = None, *, extra=(), hidden=(), instal
 
     Live clients unless hidden, chosen or installed test clients unless hidden, the
     same for other clients while they are shown at all, and anything with a download.
+    An installed other client stays unless it is hidden itself, since the switch is for
+    finding new ones.
     """
     pool = list(clients() if clients_ is None else clients_)
     codes = {c.code for c in pool}
@@ -242,7 +254,7 @@ def visible(clients_: list[Client] | None = None, *, extra=(), hidden=(), instal
     for client in pool:
         if client.code in downloading:
             shown.append(client)
-        elif client.code in hidden or (client.category == OTHER and not show_other):
+        elif client.code in hidden or (client.category == OTHER and not show_other and client.code not in installed):
             continue
         elif client.category == LIVE or client.code in extra or client.code in installed:
             shown.append(client)

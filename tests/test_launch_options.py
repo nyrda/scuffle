@@ -343,3 +343,27 @@ def test_a_relative_wrapper_is_made_absolute_since_the_game_starts_in_its_own_fo
     monkeypatch.chdir(tmp_path)
     words = wrapper_command(LinuxOptions(wrapper='./wrap --flag'))
     assert words == [str(tool), '--flag']
+
+
+def test_the_newest_proton_is_the_newest_build_not_the_last_used_folder(tmp_path, monkeypatch):
+    import os
+    from waystone import launch
+    from waystone.runtime.proton import Proton
+    builds = []
+    for name, built, used in [('GE-Proton11-11', 1792432585, 1), ('UMU-Proton-10.0-4', 1750000000, 2)]:
+        folder = tmp_path / name
+        folder.mkdir()
+        (folder / 'version').write_text(f'{built} {name}\n')
+        os.utime(folder, (used, used))
+        builds.append(Proton(name, folder))
+    monkeypatch.setattr(launch, 'find_protons', lambda: builds)
+    assert launch.select_proton(Settings()).name == 'GE-Proton11-11'
+
+
+def test_paths_in_variables_expand_as_in_a_shell(monkeypatch, tmp_path):
+    from waystone.launch_options import linux_environment
+    monkeypatch.setenv('HOME', str(tmp_path))
+    options = LinuxOptions(environment={'MANGOHUD_CONFIGFILE': '~/mango.conf', 'DXVK_CONFIG_FILE': '$HOME/dxvk.conf'})
+    variables = linux_environment(options, nvidia=False, log_dir=tmp_path)
+    assert variables['MANGOHUD_CONFIGFILE'] == f'{tmp_path}/mango.conf'
+    assert variables['DXVK_CONFIG_FILE'] == f'{tmp_path}/dxvk.conf'

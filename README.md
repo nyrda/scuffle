@@ -20,8 +20,8 @@ Discovery modes, and Forever. **Settings › Clients** chooses what else appears
 - **Test clients**: the PTRs and betas, each with its own checkbox.
 - **Other public clients**: older builds Blizzard still publishes openly, such
   as the Dark Realm Test, a retail event build and a Classic submission build.
-  Turn on **Show other public clients** to choose from them. Turned off, none of
-  them is listed, installed ones included. Many are old and may not connect.
+  Turn on **Show other public clients** to choose from them. Turned off, only
+  installed ones stay listed. Many are old and may not connect.
 
 Each row shows the version Blizzard publishes for your region, and whether the
 client is installed, downloading or older than its live game. Any client,

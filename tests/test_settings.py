@@ -83,3 +83,11 @@ def test_launch_options_of_a_discovered_client_survive_a_restart(config):
     # The catalog has not found the client yet when settings load at start.
     loaded = Settings.load()
     assert loaded.client_launch == saved.client_launch and not loaded.problems
+
+
+def test_an_installed_other_client_stays_listed_while_other_clients_are_off():
+    other = catalog.describe('wowlivetest', '10.2.5.52646')
+    codes = lambda **kw: [c.code for c in catalog.visible([other], **kw)]
+    assert codes() == [] and codes(extra=['wowlivetest']) == []
+    assert codes(installed=['wowlivetest']) == ['wowlivetest']
+    assert codes(installed=['wowlivetest'], hidden=['wowlivetest']) == []

@@ -65,7 +65,7 @@ def select_proton(settings: Settings) -> Proton:
         return match or Proton(chosen.name, chosen)
     if not found:
         raise LaunchError('No Proton build was found. Install one with Steam, ProtonUp or your launcher of choice.')
-    return sorted(found, key=lambda p: p.path.stat().st_mtime)[-1]
+    return max(found, key=lambda p: p.built)
 
 
 def make_runtime(settings: Settings) -> GameRuntime:

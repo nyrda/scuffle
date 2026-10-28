@@ -40,6 +40,7 @@ def main(output: Path) -> None:
     window.check_updates = lambda: None
     fake_installed(window, 'wow')               # one installed client in a throwaway folder
     window.library.installed = lambda: ['wow']
+    window.clear_notice('')                     # the folder notice from before it was chosen
     window.settings.region = 'us'               # the region the catalog fixture was captured for
     window.on_storage(window.library.storage() if window.library else {})
     window.settings.extra_clients = ['wow_classic_era_ptr']
@@ -155,7 +156,7 @@ def main(output: Path) -> None:
     window.populate()
     window.settings_page.lock_folder('')
     window.open_settings()
-    window.open_folder_picker('/mnt/games/Waystone')
+    window.open_folder_picker(window.settings.root)     # the throwaway folder, never the user's own
     # The folder tree loads in the background. Give it the time a person would see.
     deadline = time.monotonic() + 2
     while time.monotonic() < deadline:

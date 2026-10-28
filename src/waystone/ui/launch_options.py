@@ -295,8 +295,8 @@ class LaunchSettings(QWidget):
             say(self.wrapper_note, f'{error} Not saved until fixed.')
             return
         if words and options_module.find_program(words[0]) is None:
-            # Saved anyway, since it may be installed later. The launch says so too.
-            say(self.wrapper_note, f'{words[0]} was not found. Install it or check the name.')
+            # Saved anyway, since it may be installed later, so a caution and not an error.
+            say(self.wrapper_note, f'{words[0]} was not found. Install it or check the name.', 'caution')
         else:
             say(self.wrapper_note, '')
         if not self._loading:

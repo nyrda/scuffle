@@ -1036,3 +1036,43 @@ def test_typing_in_settings_does_not_check_for_updates_each_time(qt, window, mon
     assert calls == []
     page.locale.setCurrentIndex(page.locale.findData('deDE'))
     assert calls == [1]
+
+
+def test_a_ptr_carrying_another_game_says_which_version_it_runs(qt, window):
+    import json
+    from pathlib import Path
+    from waystone import catalog
+    snapshot = json.loads((Path(__file__).parent / 'fixtures/catalog-us.json').read_text())
+    snapshot['products']['wow_classic_era_ptr']['version'] = '2.5.6.70006'
+    window.on_catalog(window.settings.region, snapshot)
+    window.open_settings('clients')
+    assert window.settings_page.choices['wow_classic_era_ptr']['note'].text() == 'Runs 2.5.6'
+    assert window.settings_page.choices['wow_classic_ptr']['note'].text() == ''
+    catalog.apply(None)
+
+
+def test_the_empty_page_offers_its_own_way_back_to_the_clients(qt, window):
+    from waystone import catalog
+    window.settings.hidden_clients = [c.code for c in catalog.clients()]
+    window.populate()
+    window.refresh()
+    page = window.client_page
+    assert page.focus_chain() == [page.empty_button]
+    page.empty_button.click()
+    assert window.stack.currentWidget() is window.settings_page and window.settings_page.section == 'clients'
+
+
+def test_a_missing_wrapper_is_a_caution_and_an_unfinished_argument_shows_what_was_saved(qt, programs_on_path):
+    from waystone import catalog
+    from waystone.launch_options import ClientOptions
+    from waystone.settings import Settings
+    from waystone.ui.client_options import ClientOptionsPage
+    from waystone.ui.launch_options import LaunchSettings
+    launch = LaunchSettings()
+    launch.load(Settings())
+    launch.wrapper.setText('not-installed --')
+    assert launch.wrapper_note.objectName() == 'caution'
+    page = ClientOptionsPage(linux=False)
+    page.load(catalog.get('wow'), ClientOptions(switches=['-console']))
+    page.arguments.setText('"unclosed')
+    assert page.preview.text() == 'Saved: adds -console'

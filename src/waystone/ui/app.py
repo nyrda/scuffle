@@ -88,6 +88,7 @@ class MainWindow(QMainWindow):
         self.client_page.mode_changed.connect(self.remember_mode)
         self.client_page.hide_clicked.connect(self.hide_client)
         self.client_page.launch_options_clicked.connect(self.open_launch_options)
+        self.client_page.show_clients_clicked.connect(lambda: self.open_settings('clients'))
         self.options_page = ClientOptionsPage()
         self.options_page.changed.connect(self.save_launch_options)
         self.options_page.closed.connect(self.show_client_page)

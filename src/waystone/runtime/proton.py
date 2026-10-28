@@ -13,6 +13,14 @@ class Proton:
     path: Path
 
     @property
+    def built(self) -> float:
+        """When the build was made, from its version file. A folder's time changes when it is used."""
+        try:
+            return float((self.path / 'version').read_text().split()[0])
+        except (OSError, ValueError, IndexError):
+            return self.path.stat().st_mtime
+
+    @property
     def wine(self) -> Path:
         for relative in ['files/bin/wine', 'dist/bin/wine']:
             if (self.path / relative).is_file():

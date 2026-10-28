@@ -182,9 +182,12 @@ class ClientOptionsPage(Page):
     def update_preview(self) -> None:
         try:
             words = ClientOptions(**{**self.options().__dict__, 'arguments': self.arguments.text()}).game_arguments()
+            saved = ''
         except OptionError:
-            words = self.options().game_arguments()
-        self.preview.setText(f'Adds {" ".join(words)}' if words else 'Starts with the game\'s own defaults.')
+            # The field has a mistake, so the game would still get what was saved last.
+            words, saved = self.options().game_arguments(), 'Saved: '
+        self.preview.setText(f'{saved}{"adds" if saved else "Adds"} {" ".join(words)}' if words else
+                             'Starts with the game\'s own defaults.')
         drafts = self.arguments.text().strip() or (self.environment and self.environment.text.toPlainText().strip())
         self.reset_button.setEnabled(self.options().active() or bool(drafts))
 

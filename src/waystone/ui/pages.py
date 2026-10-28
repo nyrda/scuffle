@@ -197,6 +197,7 @@ class ClientPage(Page):
     verify_clicked = Signal()
     open_folder_clicked = Signal()
     hide_clicked = Signal()
+    show_clients_clicked = Signal()
     launch_options_clicked = Signal()
     mode_changed = Signal(str)
 
@@ -320,6 +321,10 @@ class ClientPage(Page):
         empty.addWidget(label('No clients listed', 'pagetitle'))
         empty.addWidget(label('Every client is hidden from the list. Settings can show them again.', 'muted',
                               wrap=True))
+        self.empty_button = fixed(QPushButton('Show clients'))
+        self.empty_button.clicked.connect(self.show_clients_clicked.emit)
+        empty.addSpacing(8)
+        empty.addWidget(self.empty_button, 0, Qt.AlignLeft)
         self.empty.hide()
         self.grid.addWidget(self.empty, 1, 0)
         self.storage_gap = QWidget()
@@ -371,6 +376,8 @@ class ClientPage(Page):
 
     def focus_chain(self) -> list[QWidget]:
         """The page's controls in reading order, for the window's tab order."""
+        if not self.empty.isHidden():
+            return [self.empty_button]
         widgets = [self.banner.action, self.banner.close_button, *([self.modes.current()] if self.modes.current() else []),
                    self.primary, self.cancel, self.more]
         return widgets
@@ -451,8 +458,8 @@ class SettingsPage(Page):
                    'builds. Many are old and may not connect.')]
 
     # Every note a client row can show, for the width of their column.
-    NOTES = ['Installed', 'Downloading', 'Queued', 'Paused', 'Install failed', 'Not in this region',
-             'Older than live', 'Old build']
+    NOTES = ['Installed', 'Downloading', 'Queued', 'Paused', 'Install failed', 'Update failed', 'Needs repair',
+             'Repair failed', 'Not in this region', 'Older than live', 'Old build', 'Runs 12.12.12']
 
     saved = Signal()
     recheck_catalog = Signal()
@@ -797,7 +804,8 @@ class SettingsPage(Page):
             client = catalog.get(code)
             note = (('Installed' if code in self.installed else '') or self.downloading.get(code, '')
                     or ('Not in this region' if catalog.checked() and not release else '')
-                    or (('Older than live' if client.test else 'Old build') if catalog.stale(code) else ''))
+                    or (('Older than live' if client.test else 'Old build') if catalog.stale(code) else '')
+                    or (f'Runs {catalog.other_game(code)}' if catalog.other_game(code) else ''))
             choice['note'].setText(note)
         self._loading = was_loading
 

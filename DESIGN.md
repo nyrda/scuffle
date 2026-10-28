@@ -32,7 +32,7 @@ Clients come in three categories.
 | Test | Retail PTR, Retail PTR 2, MoP Classic PTR, Classic Era PTR | `wowt`, `wowxptr`, `wow_classic_ptr`, `wow_classic_era_ptr` | install UID | when chosen or installed |
 | Test | Retail Beta, Forever Beta | `wow_beta`, `wow_classic_beta` | install UID | when chosen or installed |
 | Other | Dark Realm Test, Retail Event, Classic Submission, Forever China Beta | `wowlivetest`, `wowe1`, `wowz`, `wow_cn_beta`, found by discovery | install UID | when shown, and chosen or installed |
-| Other | any other public product | found by discovery | the product code | when shown, and chosen or installed |
+| Other | any other public product | found by discovery | the product code | when installed, or shown and chosen |
 
 The live and test clients are built in. Their labels, install UIDs and modes come
 from Battle.net's public catalog (the `catalogs` product on the CDN). Its
@@ -200,12 +200,12 @@ Settings include the installation folder, region, locale, bandwidth limit, the
 clients listed, each client's launch options and, on Linux, the Proton build
 with its launch options. `extra_clients` holds the test and other clients chosen
 for the list, `hidden_clients` the clients left out of it, live ones too, and
-`show_other_clients` whether other public clients appear at all. A client with a
-download stays listed until the download is gone. Client codes the catalog does
-not know are kept, since discovery can find them again. An installed client the
-catalog does not offer now still gets a row in Settings, so it can be shown
-again after it was hidden. Entries that cannot be a product code are dropped
-when loading.
+`show_other_clients` whether other public clients that are not installed appear.
+A client with a download stays listed until the download is gone. Client codes
+the catalog does not know are kept, since discovery can find them again. An
+installed client the catalog does not offer now still gets a row in Settings, so
+it can be shown again after it was hidden. Entries that cannot be a product code
+are dropped when loading.
 
 The settings page has four sections: General for the folder, region and
 language, Clients for the three categories, Downloads for the speed limit, and
