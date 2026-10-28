@@ -8,7 +8,7 @@ States are simulated in memory. Nothing is installed, downloaded, launched or sa
 from pathlib import Path
 import sys
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QScrollArea
 
 from waystone.downloads import FAILED, PAUSED, QUEUED, RUNNING, Job
 from waystone.settings import Settings
@@ -29,11 +29,18 @@ def main(output: Path) -> None:
     window.populate()
     window.show()
 
-    def shot(name):
+    def shot(name, reveal=None):
         for size, (width, height) in SIZES.items():
             window.resize(width, height)
             window.refresh()
             for _ in range(3):
+                application.processEvents()
+            if reveal is not None:
+                # Scrolled after the resize, so the part under review is in view at every size.
+                scroll = reveal.parentWidget()
+                while scroll is not None and not isinstance(scroll, QScrollArea):
+                    scroll = scroll.parentWidget()
+                scroll.ensureWidgetVisible(reveal, 0, 40)
                 application.processEvents()
             window.grab().save(str(output / f'{name}-{size}.png'))
 
@@ -123,12 +130,51 @@ def main(output: Path) -> None:
         time.sleep(0.02)
     shot('10b-folder')
     window.show_client_page()
+    launch_states(window, shot)
     from waystone.ui import pages
     pages.open_browser = lambda url: None
     window.signed_in = lambda: False             # the sign-in page only appears without a session
     window.on_sign_in_requested('https://eu.account.battle.net/login/?externalChallenge=login&app=wow')
     shot('11-sign-in')
     print(f'Wrote {len(list(output.glob("*.png")))} screenshots to {output}')
+
+
+def launch_states(window, shot) -> None:
+    """The Linux launch settings and one client's launch options, fine and with mistakes."""
+    from waystone.launch_options import ClientOptions
+    page = window.settings_page
+    if page.launch is not None:
+        window.open_settings()
+        shot('12-launch-settings', page.launch.environment)
+        launch = page.launch
+        launch.boxes['gamemode'].setChecked(True)
+        launch.boxes['log'].setChecked(True)
+        launch.wrapper.setText('gamescope-not-installed -f --')
+        launch.environment.text.setPlainText('DXVK_HUD=fps\nVKD3D CONFIG=dxr')
+        shot('12b-launch-settings-mistakes', launch.environment.problem)
+        window.settings_page.load(window.settings, *window.kept_split())
+    code = 'wow'
+    if not (window.library and window.library.state(code)):
+        return
+    window.client_list.select(code)
+    window.show_client_page()
+    window.open_launch_options()
+    shot('13-launch-options-empty')
+    options = window.options_page
+    options.load(ui.catalog.get(code), ClientOptions(graphics='-d3d11', switches=['-console'],
+                                                     arguments='-config Config2.wtf',
+                                                     environment={'DXVK_HUD': 'fps'}))
+    shot('13b-launch-options')
+    options.arguments.setText('-console -uid wow')
+    if options.environment:
+        options.environment.text.setPlainText('DXVK_HUD=fps\n1BAD=yes')
+    shot('13c-launch-options-mistakes', options.environment.problem if options.environment else None)
+    window.settings.client_launch[code] = ClientOptions(graphics='-d3d11', switches=['-console'],
+                                                        environment={'DXVK_HUD': 'fps'})
+    options.load(ui.catalog.get(code), window.settings.client_launch[code])
+    window.show_client_page()
+    shot('14-client-with-launch-options')
+    window.settings.client_launch.pop(code)
 
 
 if __name__ == '__main__':

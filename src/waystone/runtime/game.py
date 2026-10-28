@@ -19,7 +19,9 @@ class GameRuntime:
     def prepare(self) -> None:
         """Make the runtime usable before the first bridge call."""
 
-    def start(self, executable: Path, arguments: list[str], token: Path, ack: Path) -> subprocess.Popen:
+    def start(self, executable: Path, arguments: list[str], token: Path, ack: Path, *,
+              environment: dict[str, str] | None = None, wrapper: list[str] = ()) -> subprocess.Popen:
+        """Start the game. The environment and wrapper commands apply on Linux only."""
         raise NotImplementedError
 
 
@@ -32,7 +34,7 @@ class WindowsRuntime(GameRuntime):
     def __init__(self, bridge: Path):
         self.bridge = NativeBridge(bridge)
 
-    def start(self, executable, arguments, token, ack):
+    def start(self, executable, arguments, token, ack, *, environment=None, wrapper=()):
         command = _launch_arguments(self.bridge.executable, executable, arguments, token, ack)
         env = os.environ | {'WOW_BROKER_PIPE': '1'}
         return subprocess.Popen(command, env=env, cwd=executable.parent, stdin=subprocess.DEVNULL,
@@ -71,8 +73,24 @@ class LinuxRuntime(GameRuntime):
             message = result.stderr.decode(errors='replace')[-400:]
             raise RuntimeFailure(f'Proton could not create the Wine prefix: {message}')
 
-    def start(self, executable, arguments, token, ack):
-        env = self.environment() | {'WOW_BROKER_PIPE': '1'}
-        command = [str(self.umu), *_launch_arguments(self.bridge_executable, executable, arguments, token, ack)]
+    def game_environment(self, extra: dict[str, str] | None = None) -> dict:
+        """The game's environment: Waystone's defaults, then the user's, then what the runtime needs."""
+        extra = dict(extra or {})
+        env = self.environment()
+        if extra.get('PROTON_LOG', '0') not in ('', '0') and 'WINEDEBUG' not in extra:
+            # Proton picks its log channels only when WINEDEBUG is unset.
+            env.pop('WINEDEBUG', None)
+        env.update(extra)
+        env.pop('UMU_CONTAINER_NSENTER', None)
+        env.update(WINEPREFIX=str(self.prefix), PROTONPATH=str(self.proton.path), GAMEID=self.GAMEID,
+                   WOW_BROKER_PIPE='1')
+        return env
+
+    def start(self, executable, arguments, token, ack, *, environment=None, wrapper=()):
+        # Wrappers such as gamemoderun or gamescope go around umu-run, and so around the game.
+        # Prefix creation and bridge calls never run through them.
+        env = self.game_environment(environment)
+        command = [*wrapper, str(self.umu),
+                   *_launch_arguments(self.bridge_executable, executable, arguments, token, ack)]
         return subprocess.Popen(command, env=env, cwd=executable.parent, stdin=subprocess.DEVNULL,
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)

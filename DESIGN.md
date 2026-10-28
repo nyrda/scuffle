@@ -103,9 +103,46 @@ The bridge does DPAPI protection, the device fingerprint, the registry write
 and the game start. The game runs in its own runtime and never joins another
 client's container.
 
+## Launch options
+
+Each client has its own game arguments, stored by client code. They apply on
+Linux and Windows. The toggles cover arguments that the current clients list in
+their own usage text (`Wow.exe -help`): `-d3d12` or `-d3d11`, `-windowed` or
+`-fullscreen`, `-console`, `-nosound`, `-compat` and `-nodriverext`. Extra
+arguments are split like a shell command line, with backslashes kept for
+Windows paths. Waystone sets `-launcherlogin`, `-uid` and `-initialgamemode`
+itself, so the extra arguments may not contain them. The game gets
+`-launcherlogin -uid <uid>`, the product configuration's arguments, the user's
+arguments and then the game mode.
+
+On Linux, global options shape the game process:
+
+| Option | Effect | Notes |
+| --- | --- | --- |
+| GameMode | `gamemoderun` before `umu-run` | gamemode stays active while umu-run waits for the game |
+| MangoHud | `MANGOHUD=1` | pressure-vessel imports the host's MangoHud Vulkan layer. The `mangohud` wrapper's `LD_PRELOAD` would only reach umu-run |
+| Wayland | `PROTON_ENABLE_WAYLAND=1` | offered when the chosen Proton build reads it |
+| HDR | `PROTON_ENABLE_HDR=1` | offered when the chosen Proton build reads it |
+| NVIDIA Reflex | `PROTON_ENABLE_NVAPI=1`, or `PROTON_DISABLE_NVAPI=1` when off | shown only with an NVIDIA GPU. The game uses NVAPI for Reflex. It has no DLSS |
+| ntsync | `PROTON_NO_NTSYNC=1` when off | on by default in builds that offer the switch, and needs `/dev/ntsync` |
+| Proton log | `PROTON_LOG=1`, `PROTON_LOG_DIR=<data>/logs` | Proton writes `steam-battlenet.log`. Waystone's quiet `WINEDEBUG` is left out so Proton picks its channels |
+
+The game command is the user's wrapper command, `gamemoderun`, `umu-run`, the
+bridge and `Wow.exe`, in that order. Its environment is the inherited one, then
+Waystone's defaults, the toggles, the global variables and the client's own
+variables. `WINEPREFIX`, `PROTONPATH`, `GAMEID` and `WOW_BROKER_PIPE` are applied
+last and cannot be overridden. Prefix creation and bridge calls get neither the
+wrappers nor the user's variables. The options are checked before the session
+is renewed, so a missing wrapper never spends a sign-in. On Windows only the
+arguments apply.
+
+Invalid launch options in the settings file are dropped and reported in the
+window instead of stopping the start.
+
 ## Settings and state
 
 Settings live in the platform's configuration directory. Credentials live in
 the platform's data directory with owner-only permissions and DPAPI protection.
 Settings include the installation folder, region, locale, bandwidth limit,
-the test clients shown and, on Linux, the Proton build.
+the test clients shown, each client's launch options and, on Linux, the Proton
+build with its launch options.

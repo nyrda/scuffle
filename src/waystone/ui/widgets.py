@@ -339,7 +339,7 @@ class FactsCard(QFrame):
         self.names: list[str] = []
         self.texts: list[str] = []
 
-    WIDE = {'Folder', 'Installs into', 'Download size'}
+    WIDE = {'Folder', 'Installs into', 'Download size', 'Launch options'}
     PLACEHOLDERS = {'Never', 'Not known yet', 'Being calculated'}
 
     def set_facts(self, facts: list[tuple[str, str]]) -> None:

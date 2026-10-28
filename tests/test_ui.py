@@ -1,5 +1,6 @@
 """Check the sign-in page's clipboard handling with a real Qt clipboard."""
 import os
+import sys
 
 import pytest
 
@@ -149,7 +150,8 @@ def styled(qt, monkeypatch, tmp_path):
     monkeypatch.setattr(ui, 'cache_dir', lambda: tmp_path / 'style')
     ui.prepare(qt)
     build = SimpleNamespace(name='GE-Proton10-25 with a very long name from a custom folder', path='/opt/proton')
-    monkeypatch.setattr(pages, 'find_protons', lambda: [build])
+    from waystone.ui import launch_options
+    monkeypatch.setattr(launch_options, 'find_protons', lambda: [build])
 
 
 def test_settings_never_scroll_sideways_at_the_minimum_size(qt, styled, window):
@@ -490,3 +492,84 @@ def test_ctrl_c_in_the_terminal_closes_the_window(qt, window):
     finally:
         for number, handler in previous.items():
             signal.signal(number, handler)
+
+
+def installed_wow(window, tmp_path, monkeypatch):
+    window.settings.root = str(tmp_path / 'games')
+    window.open_library()
+    monkeypatch.setattr(window.library, 'state', lambda code: {'version': '12.0.5.66741', 'region': 'eu',
+                                                                'locale': 'enUS', 'folder': '_retail_'}
+                        if code == 'wow' else None)
+    window.client_list.select('wow')
+    window.refresh()
+
+
+def test_a_clients_launch_options_save_restore_and_show_on_its_page(qt, window, tmp_path, monkeypatch):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from waystone.launch_options import ClientOptions
+    from waystone.settings import Settings
+    installed_wow(window, tmp_path, monkeypatch)
+    window.client_page.launch_action.trigger()
+    page = window.options_page
+    assert window.stack.currentWidget() is page
+    next(b for b in page.graphics.group.buttons() if b.text() == 'DirectX 11').click()
+    page.switches['-console'].setChecked(True)
+    page.arguments.setText('-config Other.wtf')
+    if page.environment:
+        page.environment.text.setPlainText('DXVK_HUD=fps')
+    QTest.keyClick(page.close_button, Qt.Key_Escape)          # Esc returns at once and keeps the typing
+    assert window.stack.currentWidget() is window.client_page
+    expected = ClientOptions(graphics='-d3d11', switches=['-console'], arguments='-config Other.wtf',
+                             environment={'DXVK_HUD': 'fps'} if page.environment else {})
+    assert Settings.load().client_launch == {'wow': expected}
+    window.refresh()
+    assert ('Launch options', '-d3d11 -console -config Other.wtf' + (' · 1 variable' if page.environment else '')) \
+        in window.facts('wow')
+    assert 'launch options' in window.client_page.primary.toolTip()
+    # A reserved argument is pointed out and not saved. Reopening shows what was saved.
+    window.open_launch_options()
+    assert page.switches['-console'].isChecked() and page.graphics.value() == '-d3d11'
+    page.arguments.setText('-config Other.wtf -uid wow')
+    page.close_button.click()
+    assert Settings.load().client_launch['wow'].arguments == '-config Other.wtf'
+    window.open_launch_options()
+    assert page.arguments.text() == '-config Other.wtf'
+    page.reset_button.click()
+    assert Settings.load().client_launch == {}
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='Linux launch settings')
+def test_linux_launch_settings_save_valid_input_and_keep_it_through_mistakes(qt, window, programs_on_path):
+    from waystone.settings import Settings
+    window.open_settings()
+    launch = window.settings_page.launch
+    launch.boxes['mangohud'].setChecked(True)
+    launch.environment.text.setPlainText('DXVK_HUD=fps')
+    launch.environment.flush()
+    launch.wrapper.setText('gamescope -f --')
+    launch.wrapper.editingFinished.emit()
+    saved = Settings.load().linux_launch
+    assert saved.mangohud and saved.environment == {'DXVK_HUD': 'fps'} and saved.wrapper == 'gamescope -f --'
+    assert not launch.wrapper_note.isVisibleTo(launch)
+    # Mistakes are named under their field and the saved values stay as they were.
+    launch.environment.text.setPlainText('DXVK_HUD=full\nBAD NAME=1')
+    launch.environment.flush()
+    launch.wrapper.setText('missing-tool --')
+    launch.wrapper.editingFinished.emit()
+    assert 'Line 2' in launch.environment.problem.text() and launch.environment.problem.isVisibleTo(launch)
+    assert 'missing-tool was not found' in launch.wrapper_note.text()
+    saved = Settings.load().linux_launch
+    assert saved.environment == {'DXVK_HUD': 'fps'} and saved.wrapper == 'missing-tool --'
+    launch.wrapper.setText('gamescope "unclosed')
+    launch.wrapper.editingFinished.emit()
+    assert Settings.load().linux_launch.wrapper == 'missing-tool --'
+
+
+@pytest.fixture
+def programs_on_path(tmp_path, monkeypatch):
+    folder = tmp_path / 'bin'
+    folder.mkdir()
+    (folder / 'gamescope').write_text('#!/bin/sh\n')
+    (folder / 'gamescope').chmod(0o755)
+    monkeypatch.setenv('PATH', str(folder))

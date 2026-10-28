@@ -13,8 +13,8 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComb
 
 from .. import catalog
 from ..launch import looks_like_redirect, open_browser, parse_ticket
-from ..runtime.proton import find_protons
 from ..settings import LOCALE_NAMES, MEGABYTE, REGIONS, Settings
+from .launch_options import LaunchSettings
 from .style import BACKGROUND, FAMILY_NAMES, SPACING, client_color, size_text, tile
 from .widgets import (Banner, ElidedLabel, FactsCard, Segmented, StorageCard, duration_text, fixed, label,
                       progress_variants, tone)
@@ -194,6 +194,7 @@ class ClientPage(Page):
     cancel_clicked = Signal()
     verify_clicked = Signal()
     open_folder_clicked = Signal()
+    launch_options_clicked = Signal()
     mode_changed = Signal(str)
 
     def __init__(self):
@@ -271,6 +272,7 @@ class ClientPage(Page):
         menu = QMenu(self.more)
         self.verify_action = menu.addAction('Verify files', self.verify_clicked.emit)
         self.folder_action = menu.addAction('Open folder', self.open_folder_clicked.emit)
+        self.launch_action = menu.addAction('Launch options…', self.launch_options_clicked.emit)
         self.more.setMenu(menu)
         actions.addWidget(self.primary)
         actions.addWidget(self.cancel)
@@ -491,13 +493,16 @@ class SettingsPage(Page):
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         single.addWidget(spacer, 1)
         self.row(grid, 'Speed limit', single)
-        # On Linux the game runs in Proton. One row here instead of a card of its own.
-        self.proton = None
+        # On Linux the game runs in Proton, with the options around it in a card of their own.
+        self.launch = self.proton = None
         if sys.platform != 'win32':
-            self.proton = fixed(QComboBox())
-            self.proton.setToolTip('Runs the game through umu-run. Builds from Steam and ProtonUp '
-                                   'are found automatically.')
-            self.row(grid, 'Proton', self.proton)
+            self.launch = LaunchSettings()
+            self.launch.changed.connect(self.apply)
+            self.proton = self.launch.proton
+            grid = self.card(content, 'Launch', 'How the game runs on Linux, for every client. '
+                             'Each client adds its own under ⋯ and Launch options.')
+            grid.addWidget(self.launch, 0, 0)
+            grid.setColumnStretch(0, 1)
 
         tests = [c for c in catalog.CLIENTS if c.test]
         grid = self.card(content, 'Test clients',
@@ -539,7 +544,7 @@ class SettingsPage(Page):
         # Every choice applies at once. The folder applies when its field is left,
         # since a half-typed path is not a folder.
         self._loading = False
-        for widget in [self.region, self.locale, self.limit] + ([self.proton] if self.proton else []):
+        for widget in [self.region, self.locale, self.limit]:
             # Long entries such as Proton build names must not widen the page past a small window.
             widget.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
             widget.setMinimumContentsLength(5)
@@ -589,12 +594,11 @@ class SettingsPage(Page):
     def focus_chain(self) -> list[QWidget]:
         """The page's controls in reading order, for the window's tab order."""
         return [self.close_button, self.browse, self.region, self.locale, self.limit,
-                *([self.proton] if self.proton else []), *self.extras.values()]
+                *(self.launch.focus_chain() if self.launch else []), *self.extras.values()]
 
     def values(self) -> dict:
         return {'root': self.root.text().strip(), 'region': self.region.currentData(),
                 'locale': self.locale.currentData(), 'limit': self.limit.currentData(),
-                'proton': self.proton.currentData() if self.proton else '',
                 'extra': sorted(code for code, box in self.extras.items() if box.isChecked())}
 
     def lock_clients(self, installed, downloading=None) -> None:
@@ -627,16 +631,8 @@ class SettingsPage(Page):
         for value in sorted(set([0, 1, 2, 5, 10, 25, 50, 100, current])):
             self.limit.addItem('No limit' if value == 0 else f'{value} MB/s', value)
         self.limit.setCurrentIndex(self.limit.findData(current))
-        if self.proton is not None:
-            self.proton.clear()
-            self.proton.addItem('Newest installed build', '')
-            for proton in find_protons():
-                self.proton.addItem(proton.name, str(proton.path))
-            index = self.proton.findData(settings.proton)
-            if index < 0 and settings.proton:
-                self.proton.addItem(Path(settings.proton).name, settings.proton)
-                index = self.proton.count() - 1
-            self.proton.setCurrentIndex(max(index, 0))
+        if self.launch is not None:
+            self.launch.load(settings)
         self._loading = False
         self.update_free()
 
@@ -678,7 +674,8 @@ class SettingsPage(Page):
         s.root = values['root'] or s.root
         s.region, s.locale = values['region'], values['locale']
         s.bandwidth_limit = int(values['limit']) * MEGABYTE
-        s.proton = values['proton']
+        if self.launch is not None:
+            self.launch.apply(s)
         # A locked box shows the client for another reason. The user's own choice for it stays.
         locked = {code for code, box in self.extras.items() if not box.isEnabled()}
         s.extra_clients = sorted({code for code in values['extra'] if code not in locked}
