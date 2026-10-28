@@ -18,6 +18,31 @@ Not in scope: account ownership filtering, several Battle.net identities,
 starting a client before its download finished, and delta patches. The game
 reports account problems itself after login.
 
+### Client removal
+
+The installed client's menu opens an in-app confirmation page. It quotes the
+storage card's content size as an upper bound because other clients can share
+those bytes. Keeping WTF and Interface is checked by default to protect addons
+and settings. They move to `Waystone-backup-<code>-<uuid>` inside the managed root.
+
+`Library.uninstall` runs under the library lock on the DownloadManager worker.
+It refuses running clients, unfinished updates, and existing jobs, including
+paused and failed jobs. It validates ownership against every other client's
+installed and pending folder with case-insensitive comparisons. Removal checks
+containment and refuses symlinks in game files, state, backups, and the CASC store.
+
+Before moving any files, it atomically writes `.waystone/uninstall.json`.
+Readers immediately treat that client as not installed. The game folder moves
+to `.waystone-trash-<uuid>`; selected settings move to the backup. Removal then
+rewrites `.build.info`, deletes the client's entire state and trash, and calls
+the existing cleanup with a zero compaction threshold. Other clients' plans
+keep shared content alive. Cleanup waits if another client is running or updating.
+Only after completion is the journal removed. Every lock acquisition recovers
+an interrupted removal, and startup queues recovery on the worker. Recovery is
+idempotent across each rename and deletion. Once started, removal cannot pause
+or cancel. Unstarted uninstall jobs are ignored when restoring `downloads.json`,
+so a new launch never deletes a client from an old, uncommitted confirmation.
+
 ## Clients
 
 Clients come in three categories.

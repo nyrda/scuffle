@@ -29,6 +29,17 @@ installed or not, can be hidden from the list there or with **Hide from list**
 in its **⋯** menu. Waystone looks up the current clients on Blizzard's version
 service in the background and keeps the last answer for when it is offline.
 
+To free space, choose **Uninstall…** in an installed client's **⋯** menu.
+The confirmation shows its measured content size; shared content stays for the
+other clients. By default, Waystone moves WTF and Interface, including settings
+and addons, to `Waystone-backup-<client>-<id>` inside the installation folder.
+Uncheck that option to delete them too. All other files in that client's game
+folder are deleted. **Hide from list** leaves the installation on disk.
+
+Close the client and finish any unfinished update or remove its download job
+before uninstalling. Removal runs in the background. If Waystone closes halfway
+through, it finishes the removal on the next start.
+
 ## Run
 
 ```sh
@@ -123,3 +134,7 @@ nix develop
 pytest
 PYTHONPATH=src python -m waystone
 ```
+
+To check the uninstall tests against deliberate failures, run
+`nix develop -c python3 tools/check_uninstall_mutations.py`. The script restores
+each source file and writes its report under `.pytest_cache/uninstall-mutations`.

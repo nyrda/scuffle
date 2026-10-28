@@ -1366,3 +1366,106 @@ def test_every_page_starts_at_the_same_height_on_a_tall_window(qt, window):
         widget = title()
         titles[name] = widget.mapTo(window, widget.rect().topLeft()).y()
     assert max(titles.values()) - min(titles.values()) <= 3, titles
+
+
+@pytest.mark.parametrize('blocker', ['none', 'running', 'external_running', 'queued', 'paused', 'failed', 'pending'])
+def test_uninstall_menu_is_only_available_for_idle_installed_clients(qt, window, tmp_path, monkeypatch, blocker):
+    from waystone.downloads import Job
+    from waystone.library import atomic_json
+    window.settings.root = str(tmp_path / 'games')
+    window.open_library()
+    window.downloads.shutdown()
+    installed(window, monkeypatch, ['wow'])
+    window.populate()
+    window.client_list.select('wow')
+    if blocker == 'running':
+        window.phases['wow'] = 'Running'
+    elif blocker == 'external_running':
+        monkeypatch.setattr(window.library, 'running', lambda code: code == 'wow')
+    elif blocker in {'queued', 'paused', 'failed'}:
+        window.downloads.jobs.append(Job('wow', 'update', status=blocker))
+    elif blocker == 'pending':
+        atomic_json(window.library.client_dir('wow') / 'pending.json', {'phase': 'preparing'})
+    window.refresh()
+    action = window.client_page.uninstall_action
+    assert action.isVisible() and action.isEnabled() == (blocker == 'none')
+    if blocker != 'none':
+        assert action.toolTip()
+        window.open_uninstall()
+        assert window.stack.currentWidget() is window.client_page
+    window.client_list.select('wowf')
+    window.refresh()
+    assert not action.isVisible()
+
+
+@pytest.mark.parametrize('keep', [True, False])
+def test_uninstall_confirmation_cancel_and_explicit_choice(qt, window, tmp_path, monkeypatch, keep):
+    window.settings.root = str(tmp_path / 'games')
+    window.open_library()
+    installed(window, monkeypatch, ['wow'])
+    window.populate()
+    window.client_list.select('wow')
+    window.on_storage({'clients': {'wow': 12_000_000_000}, 'stored': 12_000_000_000})
+    requests = []
+    monkeypatch.setattr(window.downloads, 'enqueue', lambda *args, **kwargs: requests.append((args, kwargs)))
+    window.client_page.uninstall_action.trigger()
+    page = window.uninstall_page
+    assert window.stack.currentWidget() is page
+    assert 'World of Warcraft' in page.title.text() and '12.0 GB' in page.details.text()
+    assert 'shared' in page.details.text() and 'WTF and Interface' in page.warning.text()
+    assert page.keep.isChecked() and 'recommended' in page.keep.text()
+    page.cancel.click()
+    assert not requests and window.stack.currentWidget() is window.client_page
+    window.client_page.uninstall_action.trigger()
+    page.keep.setChecked(keep)
+    page.confirm.click()
+    assert requests == [(('wow', 'uninstall'), {'keep_settings': keep})]
+    assert window.stack.currentWidget() is window.client_page
+
+
+def test_uninstall_confirmation_rechecks_if_client_starts(qt, window, tmp_path, monkeypatch):
+    window.settings.root = str(tmp_path / 'games')
+    window.open_library()
+    installed(window, monkeypatch, ['wow'])
+    window.populate()
+    window.client_list.select('wow')
+    window.open_uninstall()
+    window.phases['wow'] = 'Running'
+    monkeypatch.setattr(window.downloads, 'enqueue', lambda *a, **k: pytest.fail('Running client was queued'))
+    window.confirm_uninstall()
+    assert not window.uninstall_page.confirm.isEnabled()
+    assert 'Close the client' in window.uninstall_page.problem.text()
+    assert window.stack.currentWidget() is window.uninstall_page
+
+
+@pytest.mark.parametrize('code', ['wow', 'wow_classic_era_ptr'])
+def test_uninstall_completion_refreshes_storage_and_not_installed_notice(qt, window, tmp_path, monkeypatch, code):
+    from waystone.downloads import DONE, RUNNING, Job
+    window.settings.root = str(tmp_path / 'games')
+    window.open_library()
+    window.populate()
+    window.client_list.select(code)
+    job = Job(code, 'uninstall', status=RUNNING, stage='uninstalling')
+    window.downloads.jobs.append(job)
+    monkeypatch.setattr(window.downloads, 'current', lambda: job if job.status == RUNNING else None)
+    window.on_job(job)
+    window.client_list.select(code)
+    window.refresh()
+    assert window.status(code)[0] == 'Uninstalling'
+    assert not window.client_page.primary.isEnabled()
+    window.client_list.select('wowf')
+    window.refresh()
+    assert not window.download_bar.toggle.isEnabled() and not window.download_bar.cancel.isEnabled()
+    window.open_queue()
+    assert not window.queue_page.cards[code]['toggle'].isEnabled()
+    assert not window.queue_page.cards[code]['cancel'].isEnabled()
+    window.client_list.select(code)
+    window.show_client_page()
+    measured = []
+    monkeypatch.setattr(window, 'measure_storage', lambda: measured.append(True))
+    job.status = DONE
+    job.result = {'uninstalled': code, 'backup': str(tmp_path / 'Waystone-backup-wow-test')}
+    window.on_job(job)
+    assert measured == [True] and window.status(code)[0] == 'Not installed'
+    assert 'uninstalled' in window.client_page.banner.text.text()
+    assert 'Waystone-backup-wow-test' in window.client_page.banner.text.text()

@@ -70,6 +70,12 @@ def main(output: Path) -> None:
     window.updates.clear()
     window.client_list.select('wow')
     shot('01-installed-ready')
+    window.storage['clients']['wow'] = 92_400_000_000
+    window.open_uninstall()
+    shot('01b-uninstall-confirmation')
+    window.uninstall_page.keep.setChecked(False)
+    shot('01c-uninstall-delete-settings')
+    window.show_client_page()
     window.client_list.select('wow_classic_era')
     shot('02-not-installed')
     if window.downloads:

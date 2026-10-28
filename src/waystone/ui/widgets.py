@@ -39,6 +39,7 @@ def tone(widget: QWidget, value: str) -> None:
 
 # What each stage of an install or update is doing, in the user's words.
 STAGES = {
+    'uninstalling': 'Removing client files…',
     'indexing_seed': 'Reading installed content…', 'metadata': 'Fetching build information…',
     'discovery': 'Checking the latest version…', 'seeding_cdn_index': 'Fetching download indexes…',
     'cdn_indexes': 'Fetching download indexes…', 'planning': 'Working out what to download…',
@@ -660,7 +661,7 @@ class DownloadBar(QFrame):
         from ..downloads import PAUSED, QUEUED, RUNNING
         self.client, self._paused = job.client, job.status == PAUSED
         verb = {'install': 'Installing', 'update': 'Updating', 'verify': 'Verifying',
-                'repair': 'Repairing'}[job.kind]
+                'repair': 'Repairing', 'uninstall': 'Uninstalling'}[job.kind]
         if job.status in {PAUSED, QUEUED}:
             # The state first, so a shortened title still says it.
             self.title.setText(f"{'Paused' if job.status == PAUSED else 'Queued'} · {label_text}")
@@ -681,6 +682,9 @@ class DownloadBar(QFrame):
         self.cancel.setToolTip(f'Cancel {label_text}')
         # A queued job is taken out on the Downloads page, so the bar has one Cancel at most.
         self.cancel.setVisible(controls and job.status != QUEUED)
+        removing = job.kind == 'uninstall' and job.status == RUNNING
+        self.toggle.setEnabled(not removing)
+        self.cancel.setEnabled(not removing)
         self.toggle.setToolTip(f'{self.toggle.text()} {label_text}')
         self.queue.setText(f'Downloads · {waiting + 1}' if waiting else 'Downloads')
 

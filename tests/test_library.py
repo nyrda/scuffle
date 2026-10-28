@@ -932,3 +932,230 @@ def test_a_paused_update_reserves_the_folder_it_moves_into(tmp_path):
     event = SyntheticBuild("0.0.2.2", changed=b"event content", product="wowe1", folder="_moved_")
     with pytest.raises(UpdateError, match="_moved_, which Forever already uses"):
         run_build(root, FixtureCDN(event, tmp_path / "event-cache"), product="wowe1")
+
+
+@pytest.fixture
+def uninstall_pair(tmp_path):
+    root = tmp_path / 'uninstall-library'
+    forever = SyntheticBuild()
+    retail = SyntheticBuild('0.0.2.2', changed=b'retail only', product='wow', folder='_retail_')
+    run_build(root, FixtureCDN(forever, tmp_path / 'forever-cache'))
+    run_build(root, FixtureCDN(retail, tmp_path / 'retail-cache'), product='wow')
+    return Library(root), forever, retail
+
+
+def test_uninstall_removes_only_selected_client_and_unused_content(uninstall_pair, tmp_path):
+    library, forever, retail = uninstall_pair
+    other_state = library.state('wow')
+    other_files = {p.relative_to(library.root): p.read_bytes()
+                   for p in (library.root / '_retail_').rglob('*') if p.is_file()}
+    with library.locked():
+        result = library.uninstall('wowf', keep_settings=False)
+    assert not (library.root / '_forever_').exists()
+    assert not library.client_dir('wowf').exists()
+    assert library.installed() == ['wow'] and library.state('wowf') is None
+    assert library.state('wow') == other_state
+    assert all((library.root / path).read_bytes() == data for path, data in other_files.items())
+    assert result['uninstalled'] == 'wowf' and result['cleanup']['forgotten_objects'] > 0
+    rows = parse_psv((library.root / '.build.info').read_bytes())
+    assert [row['Product'] for row in rows] == ['wow']
+    with CascStore(library.root) as store:
+        assert not store.has(forever.changed.ekey)
+        assert store.has(retail.changed.ekey) and store.has(forever.common.ekey)
+    with updater_for(library.root, FixtureCDN(retail, tmp_path / 'verify'), product='wow') as updater:
+        assert updater.verify()['ok']
+
+
+@pytest.mark.parametrize('keep', [True, False])
+def test_uninstall_settings_backup_preserves_user_files(uninstall_pair, keep):
+    library, _, _ = uninstall_pair
+    game = library.root / '_forever_'
+    (game / 'WTF' / 'account.wtf').write_bytes(b'personal settings')
+    # Windows paths are case insensitive; Linux users can have either spelling.
+    (game / 'Interface').mkdir(exist_ok=True)
+    (game / 'Interface' / 'addon.lua').write_bytes(b'personal addon')
+    (game / 'other-user-file').write_bytes(b'delete with game')
+    with library.locked():
+        result = library.uninstall('wowf', keep_settings=keep)
+    assert not game.exists()
+    backups = list(library.root.glob('Waystone-backup-wowf-*'))
+    if keep:
+        assert len(backups) == 1 and result['backup'] == str(backups[0])
+        assert (backups[0] / 'WTF/account.wtf').read_bytes() == b'personal settings'
+        assert (backups[0] / 'Interface/addon.lua').read_bytes() == b'personal addon'
+        assert not (backups[0] / 'other-user-file').exists()
+    else:
+        assert not backups and result['backup'] == ''
+
+
+@pytest.mark.parametrize('blocker', ['running', 'pending', 'empty_pending', 'job'])
+def test_uninstall_refuses_busy_client_without_changing_files(uninstall_pair, monkeypatch, blocker):
+    from waystone.library import atomic_json
+    library, _, _ = uninstall_pair
+    if blocker == 'running':
+        monkeypatch.setattr(library, 'running', lambda code: code == 'wowf')
+    elif blocker in {'pending', 'empty_pending'}:
+        atomic_json(library.client_dir('wowf') / 'pending.json', {} if blocker == 'empty_pending' else {'phase': 'preparing'})
+    else:
+        monkeypatch.setattr(library, 'has_download_job', lambda code: code == 'wowf')
+    before = (library.root / '.build.info').read_bytes()
+    with library.locked(), pytest.raises(UpdateError, match='Close|unfinished update|download job'):
+        library.uninstall('wowf')
+    assert library.state('wowf') and (library.root / '_forever_/Wow.exe').is_file()
+    assert (library.root / '.build.info').read_bytes() == before
+    assert not library.uninstall_record.exists()
+
+
+@pytest.mark.parametrize('location', ['game', 'settings', 'state', 'build_info', 'store', 'nested_file',
+                                      'lock', 'identity', 'record', 'client_state'])
+def test_uninstall_refuses_symlinks_without_touching_the_target(uninstall_pair, tmp_path, location):
+    import shutil
+    library, _, _ = uninstall_pair
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    sentinel = outside / 'keep'
+    sentinel.write_bytes(b'never touch')
+    targets = {'game': library.root / '_forever_', 'settings': library.root / '_forever_/WTF',
+               'state': library.client_dir('wowf'), 'build_info': library.root / '.build.info',
+               'store': library.root / 'Data/data', 'nested_file': library.root / '_forever_/Wow.exe',
+               'lock': library.state_dir / 'library.lock', 'identity': library.state_dir / 'identity.json',
+               'record': library.uninstall_record, 'client_state': library.client_dir('wowf') / 'state.json'}
+    path = targets[location]
+    if path.is_dir():
+        shutil.rmtree(path)
+        path.symlink_to(outside, target_is_directory=True)
+    else:
+        path.unlink(missing_ok=True)
+        path.symlink_to(sentinel)
+    with pytest.raises(UpdateError, match='symbolic link'):
+        with library.locked():
+            library.uninstall('wowf')
+    assert sentinel.read_bytes() == b'never touch'
+    assert path.is_symlink()
+    if location != 'record':
+        assert not library.uninstall_record.exists()
+
+
+@pytest.mark.parametrize('folder', ['../outside', 'absolute', 'Data', '.waystone', '_RETAIL_', '_retail_'])
+def test_uninstall_refuses_unsafe_or_other_client_folder(uninstall_pair, folder):
+    from waystone.library import atomic_json
+    library, _, _ = uninstall_pair
+    outside = library.root.parent / 'outside'
+    outside.mkdir()
+    (outside / 'keep').write_bytes(b'outside user file')
+    if folder == 'absolute':
+        folder = str(outside)
+    state = library.state('wowf')
+    state['folder'] = folder
+    atomic_json(library.client_dir('wowf') / 'state.json', state)
+    other = (library.root / '_retail_/Wow.exe').read_bytes()
+    with library.locked(), pytest.raises(UpdateError):
+        library.uninstall('wowf')
+    assert (library.root / '_retail_/Wow.exe').read_bytes() == other
+    assert (outside / 'keep').read_bytes() == b'outside user file'
+    assert library.state('wowf') and not library.uninstall_record.exists()
+
+
+@pytest.mark.parametrize('point', ['rename', 'backup', 'build_info', 'state_delete', 'trash_delete', 'cleanup'])
+def test_uninstall_interruption_recovers_on_next_start(uninstall_pair, monkeypatch, point):
+    import waystone.library as module
+    library, _, _ = uninstall_pair
+    original_rename, original_rmtree = module.os.rename, module.shutil.rmtree
+    def rename(source, destination):
+        if point == 'rename' or (point == 'backup' and Path(source).name.casefold() == 'wtf'):
+            raise OSError('simulated crash')
+        original_rename(source, destination)
+    def rmtree(path, *args, **kwargs):
+        if ((point == 'state_delete' and Path(path).name == 'wowf') or
+                (point == 'trash_delete' and Path(path).name.startswith('.waystone-trash-'))):
+            # A real interruption after a partial deletion, not just before it.
+            next(p for p in Path(path).rglob('*') if p.is_file()).unlink()
+            raise OSError('simulated crash')
+        original_rmtree(path, *args, **kwargs)
+    def fail(*args, **kwargs):
+        raise OSError('simulated crash')
+    with monkeypatch.context() as patch:
+        patch.setattr(module.os, 'rename', rename)
+        patch.setattr(module.shutil, 'rmtree', rmtree)
+        if point in {'build_info', 'cleanup'}:
+            patch.setattr(library, 'write_build_info' if point == 'build_info' else 'cleanup', fail)
+        with library.locked(), pytest.raises(OSError, match='simulated crash'):
+            library.uninstall('wowf')
+    restarted = Library(library.root)
+    assert restarted.state('wowf') is None and restarted.installed() == ['wow']
+    assert restarted.uninstall_record.is_file()
+    with restarted.locked():
+        pass
+    assert not restarted.uninstall_record.exists()
+    assert not restarted.client_dir('wowf').exists()
+    assert not (library.root / '_forever_').exists()
+    assert not list(library.root.glob('.waystone-trash-*'))
+    backups = list(library.root.glob('Waystone-backup-wowf-*'))
+    assert len(backups) == 1 and (backups[0] / 'WTF/Config.wtf').is_file()
+    assert (library.root / '_retail_/Wow.exe').is_file()
+    assert [row['Product'] for row in parse_psv((library.root / '.build.info').read_bytes())] == ['wow']
+
+
+def test_uninstall_defers_cleanup_while_another_client_runs(uninstall_pair, monkeypatch):
+    library, forever, _ = uninstall_pair
+    monkeypatch.setattr(library, 'running', lambda code: code == 'wow')
+    with library.locked():
+        result = library.uninstall('wowf')
+    assert 'Close' in result['cleanup']['deferred']
+    assert not library.state('wowf') and library.state('wow')
+    with CascStore(library.root) as store:
+        assert store.has(forever.changed.ekey)
+    monkeypatch.setattr(library, 'running', lambda code: False)
+    with library.locked():
+        library.cleanup(threshold=0.0)
+    with CascStore(library.root) as store:
+        assert not store.has(forever.changed.ekey)
+
+
+def test_uninstall_restart_worker_finishes_journal_even_without_auto_resume(uninstall_pair, monkeypatch):
+    from waystone.downloads import DONE, FAILED, DownloadManager
+    from waystone.settings import Settings
+    library, _, _ = uninstall_pair
+    def crash():
+        raise OSError('crash')
+    with monkeypatch.context() as patch:
+        patch.setattr(library, 'write_build_info', crash)
+        with library.locked(), pytest.raises(OSError, match='crash'):
+            library.uninstall('wowf')
+    # A restored journal runs even though ordinary downloads default to paused.
+    manager = DownloadManager(Settings(root=str(library.root), resume_downloads=False), Library(library.root))
+    try:
+        manager._worker.join(0.01)
+        import time
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            job = manager.job('wowf')
+            if job and job.status in {DONE, FAILED}:
+                break
+            time.sleep(0.01)
+        assert job is not None and job.kind == 'uninstall' and job.status == DONE
+        assert job.result['uninstalled'] == 'wowf'
+        assert not library.uninstall_record.exists()
+        assert not library.client_dir('wowf').exists()
+    finally:
+        manager.shutdown()
+        manager._worker.join(5)
+
+
+def test_uninstall_recovery_refuses_a_game_started_after_the_crash(uninstall_pair, monkeypatch):
+    import waystone.library as module
+    library, _, _ = uninstall_pair
+    def crash(*args):
+        raise OSError('crash')
+    with monkeypatch.context() as patch:
+        patch.setattr(module.os, 'rename', crash)
+        with library.locked(), pytest.raises(OSError, match='crash'):
+            library.uninstall('wowf')
+    restarted = Library(library.root)
+    monkeypatch.setattr(module.system, 'running_executables', lambda: [
+        (123, str(library.root / '_forever_/Wow.exe'), str(library.root / '_forever_'))])
+    with pytest.raises(UpdateError, match='Close the client'):
+        with restarted.locked():
+            pass
+    assert (library.root / '_forever_/Wow.exe').is_file()
+    assert library.uninstall_record.exists()

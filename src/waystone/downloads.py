@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
+import sqlite3
 import threading
 from typing import Callable
 
@@ -22,7 +23,7 @@ QUEUED, RUNNING, PAUSED, FAILED, DONE = 'queued', 'running', 'paused', 'failed',
 @dataclass
 class Job:
     client: str
-    kind: str                     # install, update or verify
+    kind: str                     # install, update, verify, repair or uninstall
     status: str = QUEUED
     stage: str = ''
     done_bytes: int = 0
@@ -32,6 +33,7 @@ class Job:
     result: dict = field(default_factory=dict)
     cancel_requested: bool = False
     held: bool = False            # paused by Waystone while a game runs, not by the user
+    keep_settings: bool = True
 
     @property
     def fraction(self) -> float:
@@ -54,7 +56,13 @@ class DownloadManager:
         self._overrides: set[str] = set()     # resumed by the user while a game runs
         self._resume_requested: set[str] = set()
         self._stopping = False
+        library.has_download_job = self._has_download_job
         self._restore()
+        # Unstarted uninstall requests are deliberately not restored. A committed
+        # journal must finish, even when automatic download resume is disabled.
+        if (code := library.uninstalling()):
+            self.jobs = [j for j in self.jobs if j.client != code]
+            self.jobs.insert(0, Job(code, 'uninstall'))
         self._worker = threading.Thread(target=self._run, name='waystone-downloads', daemon=True)
         self._worker.start()
 
@@ -123,12 +131,20 @@ class DownloadManager:
         else:
             job.status, job.speed = QUEUED, 0.0
 
-    def enqueue(self, client: str, kind: str) -> Job:
+    def _has_download_job(self, code: str) -> bool:
+        job = self.job(code)
+        return bool(job and job.status != DONE and not (job is self._current and job.kind == 'uninstall'))
+
+    def enqueue(self, client: str, kind: str, *, keep_settings: bool = True) -> Job:
         catalog.get(client)
-        if kind not in {'install', 'update', 'verify', 'repair'}:
+        if kind not in {'install', 'update', 'verify', 'repair', 'uninstall'}:
             raise ValueError(f'Unknown job kind {kind!r}')
         with self._lock:
             existing = self.job(client)
+            if kind == 'uninstall' and existing and existing.status != DONE and existing.kind != 'uninstall':
+                raise LibraryError('Remove the download job before uninstalling')
+            if existing and existing.kind == 'uninstall' and existing.status != DONE and kind != 'uninstall':
+                raise LibraryError('Finish uninstalling this client first')
             if existing and existing.status in {QUEUED, RUNNING}:
                 if existing is self._current and self._pause.is_set():
                     self._resume(existing, override=True)
@@ -140,7 +156,9 @@ class DownloadManager:
             else:
                 if existing:
                     self.jobs.remove(existing)
-                job = Job(client, kind, status=PAUSED)
+                job = Job(client, kind, status=PAUSED, keep_settings=keep_settings)
+                if existing and existing.kind == 'uninstall':
+                    job.keep_settings = existing.keep_settings
                 self.jobs.append(job)
             self._resume(job, override=override)
             self._save()
@@ -154,6 +172,8 @@ class DownloadManager:
             self._resume_requested.discard(client)
             job = self.job(client)
             if job is None:
+                return
+            if job is self._current and job.kind == 'uninstall':
                 return
             if job.status == QUEUED:
                 job.status = PAUSED
@@ -243,6 +263,8 @@ class DownloadManager:
             job = self.job(client)
             if job is None:
                 return
+            if job.kind == 'uninstall' and (job is self._current or self.library.uninstalling() == client):
+                return
             self._game_paused.discard(client)
             self._resume_requested.discard(client)
             if job is self._current:
@@ -303,7 +325,7 @@ class DownloadManager:
                 job.result = self._execute(job)
             except Cancelled:
                 status = PAUSED
-            except (LibraryError, OSError, ValueError, RuntimeError) as failure:
+            except (LibraryError, OSError, ValueError, RuntimeError, sqlite3.Error) as failure:
                 status, error = FAILED, str(failure)
             with self._lock:
                 job.status, job.error, job.speed = status, error, 0.0
@@ -317,6 +339,18 @@ class DownloadManager:
             self._notify(job)
 
     def _execute(self, job: Job) -> dict:
+        if job.kind == 'uninstall':
+            job.stage = 'uninstalling'
+            self._notify(job)
+            recovering = self.library.uninstalling() == job.client
+            def uninstall_progress(event):
+                job.stage = event['stage']
+                self._notify(job)
+            with self.library.locked():
+                if recovering:
+                    return self.library.recovered_uninstall
+                return self.library.uninstall(job.client, keep_settings=job.keep_settings,
+                                              progress=uninstall_progress)
         state = self.library.state(job.client) or {}
         region = state.get('region') or self.settings.region
         locale = state.get('locale') or self.settings.locale
