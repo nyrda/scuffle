@@ -601,6 +601,9 @@ class SettingsPage(Page):
             box.toggled.connect(self.apply)
         self.limit.valueChanged.connect(self.apply)
         self.workers.valueChanged.connect(self.apply)
+        for box in (self.limit, self.workers):
+            box.setFixedWidth(160)          # a number, not a line of text
+            box.parentWidget().layout().addStretch(1)
 
         # Launch
         launch = self.section_layouts['launch']
