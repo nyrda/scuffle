@@ -1366,3 +1366,12 @@ def test_every_page_starts_at_the_same_height_on_a_tall_window(qt, window):
         widget = title()
         titles[name] = widget.mapTo(window, widget.rect().topLeft()).y()
     assert max(titles.values()) - min(titles.values()) <= 3, titles
+
+
+def test_the_downloads_page_and_settings_share_one_free_speed_limit(qt, window):
+    from waystone.settings import MEGABYTE, Settings
+    window.open_queue()
+    window.queue_page.limit.setValue(37)
+    assert Settings.load().bandwidth_limit == 37 * MEGABYTE
+    window.open_settings('downloads')
+    assert window.settings_page.limit.value() == 37 and window.settings_page.limit.text() == '37 MB/s'

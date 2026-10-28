@@ -169,7 +169,7 @@ QLabel#problem {{ color: #f19a9a; font-size: 9.5pt; }}
 QLabel#caution {{ color: #f0c27a; font-size: 9.5pt; }}
 QLineEdit:read-only {{ background: transparent; border-color: #262a33; color: #c9ced6; }}
 QLineEdit[locked="true"] {{ color: {FAINT}; }}
-QSpinBox {{ padding-left: 19px; padding-right: 26px; }}   /* text where a dropdown's starts */
+QSpinBox {{ padding-right: 26px; }}
 QSpinBox::up-button, QSpinBox::down-button {{ width: 24px; border: none; background: transparent; }}
 QSpinBox::up-button {{ subcontrol-origin: border; subcontrol-position: top right; }}
 QSpinBox::down-button {{ subcontrol-origin: border; subcontrol-position: bottom right; }}

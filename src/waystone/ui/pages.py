@@ -159,6 +159,23 @@ PRIMARY_HEIGHT = 40  # a primary button's height, for the buttons in a row besid
 TOP_INSET = 140      # the most spare height that goes above a page's content
 
 
+def speed_limit_box() -> QSpinBox:
+    """Any whole MB/s, with 0 as no limit. Settings and the Downloads page share it."""
+    box = fixed(QSpinBox())
+    box.setRange(0, 10_000)
+    box.setSuffix(' MB/s')
+    box.setSpecialValueText('No limit')
+    box.setKeyboardTracking(False)        # typing 25 is one change, not 2 then 25
+    box.setFixedWidth(160)
+    number_margins(box)
+    return box
+
+
+def number_margins(box: QSpinBox) -> None:
+    # The stylesheet's padding does not reach a spin box's text, so it starts where a dropdown's does.
+    box.lineEdit().setTextMargins(8, 0, 0, 0)
+
+
 def top_inset(outer: QVBoxLayout) -> QWidget:
     """A gap above the content on tall windows, up to TOP_INSET. Page.resizeEvent sizes it."""
     gap = QWidget()
@@ -582,17 +599,14 @@ class SettingsPage(Page):
             self.category_grids[category] = grid
 
         # Downloads
-        self.limit = fixed(QSpinBox())
-        self.limit.setRange(0, 10_000)
-        self.limit.setSuffix(' MB/s')
-        self.limit.setSpecialValueText('No limit')
-        self.limit.setKeyboardTracking(False)
+        self.limit = speed_limit_box()
         self.downloads_grid = self.card(self.section_layouts['downloads'], 'Downloads',
                                         'Downloads run one at a time. A paused one keeps what it stored.')
         self.row(self.downloads_grid, 'Speed limit', self.limit)
         self.download_fields: list[QWidget] = []
         self.workers = fixed(QSpinBox())
         self.workers.setRange(1, 64)
+        number_margins(self.workers)
         self.workers.setKeyboardTracking(False)
         self.add_download_row('Connections', self.workers)
         self.downloads_grid.addWidget(label('Applies from the next download.', 'small', wrap=True),
@@ -1186,10 +1200,7 @@ class QueuePage(Page):
 
     def set_limit(self, megabytes: int) -> None:
         self.limit.blockSignals(True)
-        self.limit.clear()
-        for value in sorted(set([0, 1, 2, 5, 10, 25, 50, 100, megabytes])):
-            self.limit.addItem('No limit' if value == 0 else f'{value} MB/s', value)
-        self.limit.setCurrentIndex(self.limit.findData(megabytes))
+        self.limit.setValue(megabytes)
         self.limit.blockSignals(False)
 
     def __init__(self):
@@ -1218,8 +1229,8 @@ class QueuePage(Page):
         controls.addWidget(self.resume_all_button)
         controls.addStretch()
         controls.addWidget(label('Speed limit', 'key'))
-        self.limit = fixed(QComboBox(), 116)
-        self.limit.activated.connect(lambda _: self.limit_changed.emit(int(self.limit.currentData())))
+        self.limit = speed_limit_box()          # the same control as in Settings
+        self.limit.valueChanged.connect(self.limit_changed.emit)
         controls.addWidget(self.limit)
         content.addSpacing(10)
         content.addLayout(controls)
