@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
+import re
 import shutil
 import sqlite3
 import tempfile
@@ -27,6 +28,9 @@ BUILD_INFO_COLUMNS = [
     'Branch!STRING:0', 'Active!DEC:1', 'Build Key!HEX:16', 'CDN Key!HEX:16', 'Install Key!HEX:16',
     'IM Size!DEC:4', 'CDN Path!STRING:0', 'CDN Hosts!STRING:0', 'CDN Servers!STRING:0', 'Tags!STRING:0',
     'Armadillo!STRING:0', 'Last Activated!STRING:0', 'Version!STRING:0', 'KeyRing!HEX:16', 'Product!STRING:0']
+
+
+GAME_EXECUTABLE = re.compile(r'Wow[A-Za-z]*\.exe')
 
 
 class LibraryError(RuntimeError):
@@ -160,8 +164,9 @@ class Library:
     def installed(self) -> list[str]:
         if not self.clients_dir.is_dir():
             return []
+        # Any product code, since the catalog grows with what Blizzard publishes.
         return sorted(p.name for p in self.clients_dir.iterdir()
-                      if p.name in catalog.BY_CODE and (p / 'state.json').is_file())
+                      if catalog.is_product(p.name) and (p / 'state.json').is_file())
 
     def pending(self, code: str) -> dict | None:
         try:
@@ -174,17 +179,23 @@ class Library:
         return self.root / state['folder'] if state else None
 
     def executable(self, code: str) -> Path | None:
-        folder = self.game_dir(code)
-        return folder / 'Wow.exe' if folder else None
+        state = self.state(code)
+        if not state:
+            return None
+        # Test and other builds name it differently, such as WowT.exe, WowB.exe or WowClassicT.exe.
+        names = sorted(name for name in state.get('managed_files', []) if GAME_EXECUTABLE.fullmatch(name))
+        name = 'Wow.exe' if 'Wow.exe' in names or not names else names[0]
+        return self.root / state['folder'] / name
 
     def running(self, code: str) -> bool:
-        folder = self.game_dir(code)
-        if folder is None:
+        path = self.executable(code)
+        if path is None:
             return False
-        executable = str(folder / 'Wow.exe').lower()
+        folder, name = path.parent, path.name.lower()
+        executable = str(path).lower()
         for _, command, cwd in system.running_executables():
             text = command.lower()
-            if 'wow.exe' not in text:
+            if name not in text:
                 continue
             if executable in text or executable.replace('/', '\\') in text:
                 return True
@@ -429,6 +440,15 @@ class Updater:
         folder = config.get('shared_container_default_subfolder', '')
         if not folder or managed_path(folder) != folder or '/' in folder:
             raise LibraryError(f'{self.entry.label} publishes an unusable folder name')
+        # Products come from what Blizzard publishes now, so one could name a folder another
+        # client already uses. Installing over it would mix two games' files.
+        for other in self.library.clients_dir.iterdir():
+            if other.name == self.code or not catalog.is_product(other.name):
+                continue
+            used = (self.library.state(other.name) or self.library.pending(other.name) or {}).get('folder', '')
+            if used.lower() == folder.lower():
+                raise LibraryError(f'{self.entry.label} would install into {folder}, '
+                                   f'which {catalog.get(other.name).label} already uses')
         if self.locale not in config.get('supported_locales', []):
             raise LibraryError(f'{self.entry.label} does not support the locale {self.locale}')
         self.snapshot.update(folder=folder, launch_arguments=list(config.get('launch_arguments') or []))

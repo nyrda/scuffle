@@ -15,7 +15,7 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QApplication, QFrame, QGraphicsOpacityEffect, QHBoxLayout, QMainWindow, QPushButton, QStackedWidget,
                                QStyleFactory, QVBoxLayout, QWidget)
 
-from .. import catalog
+from .. import catalog, discovery
 from ..downloads import DONE, FAILED, PAUSED, QUEUED, RUNNING, DownloadManager, Job
 from ..launch import Launcher, LaunchError
 from ..library import Library, update_available
@@ -35,6 +35,7 @@ class Bus(QObject):
     task_finished = Signal(str, str)     # client or '' for sign-in, error text or ''
     update_needed = Signal(str)
     storage_ready = Signal(dict)
+    catalog_checked = Signal(str, object)   # region, what discovery found or None
 
 
 class MainWindow(QMainWindow):
@@ -55,7 +56,14 @@ class MainWindow(QMainWindow):
         self.bus.task_finished.connect(self.on_task_finished)
         self.bus.update_needed.connect(self.on_update_needed)
         self.bus.storage_ready.connect(self.on_storage)
+        self.bus.catalog_checked.connect(self.on_catalog)
         self.storage: dict = {}
+        # The last list from the version service, so the window starts without waiting for it.
+        catalog.apply((discovery.load(cache_dir(), self.settings.region) or {}).get('products'))
+        self.catalog_state = 'ready' if catalog.checked() else 'checking'
+        self._discovering: set[str] = set()     # regions being checked
+        self._catalog_region = self.settings.region
+        self._listed: list = []
         self.open_library()
 
         self.setWindowTitle('Waystone')
@@ -77,6 +85,7 @@ class MainWindow(QMainWindow):
         self.client_page.verify_clicked.connect(self.verify)
         self.client_page.open_folder_clicked.connect(self.open_folder)
         self.client_page.mode_changed.connect(self.remember_mode)
+        self.client_page.hide_clicked.connect(self.hide_client)
         self.settings_page = SettingsPage()
         self.settings_page.saved.connect(self.on_settings_saved)
         self.settings_page.closed.connect(self.show_client_page)
@@ -114,6 +123,7 @@ class MainWindow(QMainWindow):
         self.populate()
         self.refresh()
         self.check_updates()
+        self.discover()
         self.measure_storage()
         if not self.library:
             self.notify('Choose an installation folder before installing a client.', 'info',
@@ -124,6 +134,7 @@ class MainWindow(QMainWindow):
         timer.start(1000)
         update_timer = QTimer(self)
         update_timer.timeout.connect(self.check_updates)
+        update_timer.timeout.connect(self.discover)
         update_timer.start(30 * 60 * 1000)
 
 
@@ -148,6 +159,7 @@ class MainWindow(QMainWindow):
         side.addWidget(brand)
         self.client_list = ClientList()
         self.client_list.selected.connect(lambda _: self.show_client_page())
+        self.client_list.open_settings.connect(lambda: self.open_settings('clients'))
         side.addWidget(self.client_list, 1)
         separator = QFrame()
         separator.setObjectName('separator')
@@ -170,20 +182,39 @@ class MainWindow(QMainWindow):
         side.addLayout(account)
         return sidebar
 
-    def kept(self) -> list[str]:
-        """Clients that stay in the list whatever is chosen: installed, or with a download."""
-        installed = self.library.installed() if self.library else []
-        return installed + [job.client for job in (self.downloads.jobs if self.downloads else [])]
-
     def kept_split(self) -> tuple[list[str], dict[str, str]]:
-        """Installed clients, and clients with a download job by the state shown for it."""
+        """Installed clients, and clients with a download job by the state shown for it.
+
+        A finished job stays in the download manager until the client's next one, but it
+        no longer keeps the client listed.
+        """
         installed = self.library.installed() if self.library else []
         names = {RUNNING: 'Downloading', QUEUED: 'Queued', PAUSED: 'Paused', FAILED: 'Install failed'}
         return installed, {job.client: names.get(job.status, 'Downloading')
-                           for job in (self.downloads.jobs if self.downloads else [])}
+                           for job in (self.downloads.jobs if self.downloads else []) if job.status != DONE}
+
+    def offered(self) -> list[catalog.Client]:
+        """The clients Settings has a row for. Installed or downloading clients the catalog does not
+        offer now, such as a product Blizzard stopped publishing, get one too, so they can be shown again."""
+        clients = catalog.clients(self.settings.locale)
+        codes = {c.code for c in clients}
+        installed, downloading = self.kept_split()
+        return clients + [catalog.get(code) for code in sorted(set(installed) | set(downloading))
+                          if code not in codes and catalog.is_product(code)]
+
+    def listed(self) -> list[catalog.Client]:
+        """The clients the list shows, by the settings and what is installed or downloading."""
+        installed, downloading = self.kept_split()
+        s = self.settings
+        return catalog.visible(catalog.clients(s.locale), extra=s.extra_clients, hidden=s.hidden_clients,
+                               installed=installed, downloading=downloading, show_other=s.show_other_clients)
 
     def populate(self):
-        clients = catalog.visible(self.settings.extra_clients, self.kept())
+        clients = self.listed()
+        key = [(c.code, c.label) for c in clients]
+        if key == self._listed and len(key) == len(self.client_list.rows):
+            return              # the same rows, so the list keeps its scroll position and focus
+        self._listed = key
         self.client_list.populate(clients, self.client_list.current() or self.settings.selected)
 
     # State
@@ -253,7 +284,9 @@ class MainWindow(QMainWindow):
             size = 'Not known yet'
         else:
             size = 'Not known yet'
-        return [('Region', region), ('Language', language), ('Download size', size)]
+        published = catalog.release(code)
+        version = [('Version', published.version)] if published else []
+        return version + [('Region', region), ('Language', language), ('Download size', size)]
 
     def refresh(self):
         for code, row in self.client_list.rows.items():
@@ -277,6 +310,8 @@ class MainWindow(QMainWindow):
         self.refresh_downloads()
         code = self.selected()
         if code is None:
+            self.client_page.show_empty()
+            self.update_tab_order()
             return
         self.refresh_client(code)
         self.update_tab_order()
@@ -284,7 +319,8 @@ class MainWindow(QMainWindow):
     def update_tab_order(self):
         """Tab follows the reading order: the list, the page, the sidebar footer, then the bar."""
         page = self.stack.currentWidget()
-        chain = [self.client_list, *(page.focus_chain() if hasattr(page, 'focus_chain') else []),
+        chain = [self.client_list, self.client_list.empty_button,
+                 *(page.focus_chain() if hasattr(page, 'focus_chain') else []),
                  self.settings_button, self.account_button, self.download_bar.title,
                  self.download_bar.toggle, self.download_bar.cancel, self.download_bar.queue]
         key = tuple(id(widget) for widget in chain)
@@ -345,9 +381,14 @@ class MainWindow(QMainWindow):
             hint = 'Content the installed clients already have is not downloaded again.'
         if client.test:
             hint = (hint + ' Test clients connect to Blizzard\'s test realms, which need account access.').strip()
+        elif client.optional:
+            hint = (hint + ' Other public clients are builds Blizzard publishes openly. '
+                    'Many are old and may not connect.').strip()
+        if catalog.stale(code):
+            hint = (hint + f' This build is older than the live {catalog.get(client.parent).label} build.').strip()
         if self.library:
             clients = [(catalog.get(c), size) for c, size in self.storage.get('clients', {}).items()
-                       if c in catalog.BY_CODE]
+                       if catalog.is_product(c)]
             self.client_page.storage.show_storage(str(self.library.root), self.storage.get('stored', 0),
                                                   clients, self.free_space(),
                                                   measuring=not self.storage and bool(self.library.installed()))
@@ -362,7 +403,7 @@ class MainWindow(QMainWindow):
             busy_launch=launching, queued=bool(job and job.status == QUEUED),
             progress_text=progress_text, cancellable=downloading, paused=bool(job and job.status == PAUSED),
             modes=[(m.id, m.label) for m in client.modes], mode=self.settings.modes.get(code),
-            facts=self.facts(code), hint=hint)
+            facts=self.facts(code), hint=hint, hideable=code not in self.kept_split()[1])
         # Pause is a secondary action. Only starting something gets the accent color.
         secondary = primary in {'Pause', 'Queued'} or launching
         button = self.client_page.primary
@@ -469,11 +510,15 @@ class MainWindow(QMainWindow):
         else:
             self.open_settings()
 
-    def open_settings(self):
+    def open_settings(self, section: str = ''):
         if self.stack.currentWidget() is self.sign_in_page:
             self.settings_button.setChecked(False)
             return
+        self.settings_page.set_clients(self.offered())
+        self.settings_page.show_catalog_state(self.catalog_state)
         self.settings_page.load(self.settings, *self.kept_split())
+        if section:
+            self.settings_page.show_section(section)
         self.settings_page.lock_folder(self.folder_lock())
         self.stack.setCurrentWidget(self.settings_page)
         self.settings_page.close_button.setFocus()  # so Esc closes it at once
@@ -539,6 +584,27 @@ class MainWindow(QMainWindow):
         folder = self.library.game_dir(self.selected())
         if folder:
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+
+    def hide_client(self):
+        code = self.selected()
+        # A download keeps its client listed, so there is nothing to hide until it is gone.
+        if not code or code in self.kept_split()[1]:
+            return
+        self.settings.unlisted(code)
+        self.settings.save()
+        self.populate()
+        name = catalog.get(code).label
+
+        def undo():
+            self.settings.listed(code)
+            self.settings.save()
+            self.populate()
+            self.open_client(code)
+
+        if self.selected():
+            self.notify(f'{name} is hidden from the list. Settings can show it again.', 'info', 'Undo', undo,
+                        client=self.selected())
+        self.refresh()
 
     def remember_mode(self, mode: str):
         code = self.selected()
@@ -689,13 +755,13 @@ class MainWindow(QMainWindow):
 
     def on_job(self, job: Job):
         self.settings_page.lock_folder(self.folder_lock())
+        self.settings_page.set_clients(self.offered())
         self.settings_page.lock_clients(*self.kept_split())
         if job.status == DONE:
             self.clear_notice(job.client)      # an "update needed" notice is answered now
-        # A new job can bring a hidden test client into the list. A finished or removed one can
+        # A new job can bring a hidden client into the list. A finished or removed one can
         # take it out again.
-        if set(self.client_list.rows) != {c.code for c in catalog.visible(self.settings.extra_clients, self.kept())}:
-            self.populate()
+        self.populate()
         if job.status == DONE and job.kind in {'install', 'update'}:
             self.updates[job.client] = False
             self.measure_storage()
@@ -729,6 +795,41 @@ class MainWindow(QMainWindow):
         self.updates.update(found)
         self.refresh()
 
+    def discover(self):
+        """Ask the version service for the current clients, when the cached answer is old."""
+        region = self.settings.region
+        snapshot = discovery.load(cache_dir(), region)
+        if region in self._discovering or discovery.fresh(snapshot):
+            return
+        self._discovering.add(region)
+        cache = cache_dir()
+
+        def work():
+            try:
+                result = discovery.refresh(region, cache, snapshot)
+                discovery.save(cache, result)
+            except Exception:       # offline, or the service changed. The last list stays.
+                result = None
+            self.bus.catalog_checked.emit(region, result)
+
+        threading.Thread(target=work, name='waystone-catalog', daemon=True).start()
+
+    def on_catalog(self, region: str, snapshot):
+        self._discovering.discard(region)
+        if region != self.settings.region:
+            self.discover()         # the region changed while this one was checked
+            return
+        if snapshot:
+            catalog.apply(snapshot['products'])
+        self.catalog_state = 'ready' if catalog.checked() else 'offline'
+        self.show_catalog()
+
+    def show_catalog(self):
+        self.settings_page.set_clients(self.offered())
+        self.settings_page.show_catalog_state(self.catalog_state)
+        self.populate()
+        self.refresh()
+
     def on_settings_saved(self):
         if self.downloads:
             self.downloads.set_bandwidth_limit(self.settings.bandwidth_limit)
@@ -739,8 +840,13 @@ class MainWindow(QMainWindow):
             self.open_library()
             self.measure_storage()
             self.clear_notice('')
-        self.populate()
-        self.refresh()
+        if self.settings.region != self._catalog_region:
+            # Versions differ by region. The cached list for it shows until it is checked.
+            self._catalog_region = self.settings.region
+            catalog.apply((discovery.load(cache_dir(), self.settings.region) or {}).get('products'))
+            self.catalog_state = 'ready' if catalog.checked() else 'checking'
+            self.discover()
+        self.show_catalog()
         self.check_updates()
 
     def closeEvent(self, event):

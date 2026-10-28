@@ -7,7 +7,8 @@ that a Windows build needs only a different runtime layer.
 ## Goals
 
 - One installation folder holds every installed client and shares their content.
-- A slim selector lists the public clients. Each test client can be shown on its own.
+- A slim selector lists the public clients. Every client can be hidden, and each test or
+  other public client can be shown on its own.
 - One Battle.net sign-in through the user's own browser, renewed automatically.
 - A download manager with a queue, pause and resume, a bandwidth limit, and
   cleanup of content no installed client needs.
@@ -19,21 +20,62 @@ reports account problems itself after login.
 
 ## Clients
 
-| Shown as | NGDP product | Launch `-uid` | Visible |
-| --- | --- | --- | --- |
-| World of Warcraft | `wow` | `wow` | yes |
-| Mists of Pandaria Classic | `wow_classic` | `wow_classic` | yes |
-| Burning Crusade Anniversary | `wow_anniversary` | `wow_classic_anniversary` | yes |
-| Classic Era, with Era, Hardcore and Season of Discovery modes | `wow_classic_era` | `wow_classic_era` | yes |
-| Forever | `wowf`, until the release channel exists | `wowf` | yes |
-| Retail PTR, second PTR, Classic PTR, Era PTR | `wowt`, `wowxptr`, `wow_classic_ptr`, `wow_classic_era_ptr` | install UID | when chosen in the settings |
-| Midnight beta, Forever Beta | `wow_beta`, `wow_classic_beta` | install UID | when chosen in the settings |
+Clients come in three categories.
 
-Titan Reforged is China only and is not listed. Each client's folder name comes
-from its public product configuration (`shared_container_default_subfolder`).
-Its `.flavor.info` holds the NGDP product code. Every client launches with
-`-launcherlogin -uid <install UID>`. Classic Era modes add
-`-initialgamemode=cera`, `chc` or `csod`.
+| Category | Shown as | NGDP product | Launch `-uid` | Listed |
+| --- | --- | --- | --- | --- |
+| Live | World of Warcraft | `wow` | `wow` | unless hidden |
+| Live | Mists of Pandaria Classic | `wow_classic` | `wow_classic` | unless hidden |
+| Live | Burning Crusade Anniversary | `wow_anniversary` | `wow_classic_anniversary` | unless hidden |
+| Live | Classic Era, with Era, Hardcore and Season of Discovery modes | `wow_classic_era` | `wow_classic_era` | unless hidden |
+| Live | Forever, until the release channel exists | `wowf` | `wowf` | unless hidden |
+| Test | Retail PTR, Retail PTR 2, MoP Classic PTR, Classic Era PTR | `wowt`, `wowxptr`, `wow_classic_ptr`, `wow_classic_era_ptr` | install UID | when chosen or installed |
+| Test | Retail Beta, Forever Beta | `wow_beta`, `wow_classic_beta` | install UID | when chosen or installed |
+| Other | Dark Realm Test, Retail Event, Classic Submission, Forever China Beta | `wowlivetest`, `wowe1`, `wowz`, `wow_cn_beta`, found by discovery | install UID | when shown, and chosen or installed |
+| Other | any other public product | found by discovery | the product code | when shown, and chosen or installed |
+
+The live and test clients are built in. Their labels, install UIDs and modes come
+from Battle.net's public catalog (the `catalogs` product on the CDN). Its
+`world_of_warcraft` fragment has an `installs` table that names each install
+UID's product, such as `wow_ptr` for `wowt`, `wow_classic_anniversary` for
+`wow_anniversary` and `wow_dark` for `wowlivetest`. The other clients Waystone
+has a name for take their UIDs from the same table. Each client's folder name comes from its public
+product configuration (`shared_container_default_subfolder`). Its `.flavor.info`
+holds the NGDP product code. Every client launches its own executable, such as
+`Wow.exe`, `WowT.exe` or `WowB.exe`, with `-launcherlogin -uid <install UID>`.
+Classic Era modes add `-initialgamemode=cera`, `chc` or `csod`.
+
+### Discovery
+
+`discovery` reads the version service's summary at
+`us.version.battle.net/v2/summary` and the versions table of every World of
+Warcraft product for the chosen region. The selector shows each client's
+published version and marks a test or other build whose patch is behind its
+live client as older than live, or as an old build.
+
+A product without a built-in entry is offered only when it is public. Waystone
+reads it as an install would: the product configuration, the build
+configuration and the install manifest must download and decode without a
+decryption key, and the manifest must hold a game executable. The vendor,
+development and NEV products (`wowv*`, `wowdev*`, `wownev*`) and
+`wowlivetest2` fail this check. `wow_cn_beta` passes it but supports only
+Simplified Chinese, so it is offered only when the language is Chinese.
+`wow_classic_titan` publishes only a Chinese build and is not listed. Unknown
+public products get a label from their version line, version and code, such as
+`Classic 3.4.1 (wowq)`. The catalog has no UID for them, so they launch with
+their code as the install UID.
+
+A failed check is kept as a verdict only when it would fail again, such as a
+configuration that needs a key. A timeout, a connection error or a server error
+gives no verdict. The product is checked again on the next refresh, and one that
+was public before stays offered until then. Each client must install into a
+folder of its own, so an install whose published folder another client already
+uses is refused.
+
+The result is cached per region in the cache folder for six hours. The window
+starts with the cached list, or with the built-in clients when there is none,
+and refreshes it on a worker thread. A product whose build did not change is
+not checked again.
 
 ## Installation folder
 
@@ -108,4 +150,15 @@ client's container.
 Settings live in the platform's configuration directory. Credentials live in
 the platform's data directory with owner-only permissions and DPAPI protection.
 Settings include the installation folder, region, locale, bandwidth limit,
-the test clients shown and, on Linux, the Proton build.
+the clients listed and, on Linux, the Proton build. `extra_clients` holds the
+test and other clients chosen for the list, `hidden_clients` the clients left
+out of it, live ones too, and `show_other_clients` whether other public clients
+appear at all. A client with a download stays listed until the download is
+gone. Client codes the catalog does not know are kept, since discovery can find
+them again. An installed client the catalog does not offer now still gets a row
+in Settings, so it can be shown again after it was hidden. Entries that cannot be a product code are dropped when loading.
+
+The settings page has four sections: General for the folder, region and
+language, Clients for the three categories, Downloads for the speed limit, and
+Launch for the Proton build. `SettingsPage.add_launch_widget` and
+`add_download_row` add further settings to those sections.

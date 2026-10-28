@@ -52,7 +52,9 @@ class Settings:
     root: str = ''
     region: str = 'eu'
     locale: str = 'enUS'
-    extra_clients: list[str] = field(default_factory=list)   # test clients shown in the list
+    extra_clients: list[str] = field(default_factory=list)   # test and other clients shown in the list
+    hidden_clients: list[str] = field(default_factory=list)  # clients left out of the list, live ones too
+    show_other_clients: bool = False  # other public clients, beyond the live and test ones
     bandwidth_limit: int = 0          # bytes per second, 0 means unlimited
     workers: int = 16
     proton: str = ''                  # Linux only, empty means the newest found
@@ -70,15 +72,21 @@ class Settings:
 
     @classmethod
     def load(cls) -> 'Settings':
+        from . import catalog
         try:
             data = json.loads(cls.path().read_text())
         except FileNotFoundError:
             return cls()
         if 'show_test_clients' in data and 'extra_clients' not in data:
             # Earlier versions had one switch for every test client.
-            from . import catalog
             data['extra_clients'] = [c.code for c in catalog.CLIENTS if c.test] if data['show_test_clients'] else []
         known = {k: v for k, v in data.items() if k in cls.__dataclass_fields__}
+        for name in ['extra_clients', 'hidden_clients']:
+            # The catalog changes with what Blizzard publishes, so a code it does not know
+            # now is kept for later. Only entries that cannot be a product are dropped.
+            value = known.get(name, [])
+            known[name] = sorted({code for code in value if catalog.is_product(code)}) if isinstance(value, list) else []
+        known['show_other_clients'] = known.get('show_other_clients') is True
         settings = cls(**known)
         settings.validate()
         return settings
@@ -91,9 +99,22 @@ class Settings:
         if self.bandwidth_limit < 0 or not 1 <= self.workers <= 64:
             raise ValueError('Bandwidth limit and worker count are out of range')
         from . import catalog
-        unknown = [code for code in self.extra_clients if code not in catalog.BY_CODE]
-        if unknown:
-            raise ValueError(f'Unknown clients in settings: {", ".join(unknown)}')
+        malformed = [code for code in self.extra_clients + self.hidden_clients if not catalog.is_product(code)]
+        if malformed:
+            raise ValueError(f'Not a client code: {", ".join(map(repr, malformed))}')
+
+    def listed(self, code: str) -> None:
+        """Show a client in the list again."""
+        from . import catalog
+        self.hidden_clients = [c for c in self.hidden_clients if c != code]
+        if catalog.get(code).optional and code not in self.extra_clients:
+            self.extra_clients = sorted(self.extra_clients + [code])
+
+    def unlisted(self, code: str) -> None:
+        """Leave a client out of the list, installed or not."""
+        self.extra_clients = [c for c in self.extra_clients if c != code]
+        if code not in self.hidden_clients:
+            self.hidden_clients = sorted(self.hidden_clients + [code])
 
     def save(self) -> None:
         self.validate()

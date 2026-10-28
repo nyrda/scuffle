@@ -1,0 +1,209 @@
+{
+ "checked_at": 1793207164,
+ "format": 1,
+ "products": {
+  "wow": {
+   "build_config": "d718abcc42604d8efbd35aecfa5bb75b",
+   "version": "12.1.5.70575"
+  },
+  "wow_anniversary": {
+   "build_config": "68581f70e323e88b2c44c928ffce7cd8",
+   "version": "2.5.6.70577"
+  },
+  "wow_beta": {
+   "build_config": "32ea3fef678b46188674f7222c654819",
+   "version": "12.0.1.66220"
+  },
+  "wow_classic": {
+   "build_config": "91b4109f7697d6c0e7e41d14bc10f907",
+   "version": "5.5.4.70631"
+  },
+  "wow_classic_beta": {
+   "build_config": "ad1802f4455e427ed8b7769aab25b0c0",
+   "version": "1.60.1.70532"
+  },
+  "wow_classic_era": {
+   "build_config": "5604ce35a8644bdcf0e26c1daf979c15",
+   "version": "1.15.9.70576"
+  },
+  "wow_classic_era_ptr": {
+   "build_config": "aedfea3d99ab76b4ba2a07cc0951b5b6",
+   "version": "2.5.6.70006"
+  },
+  "wow_classic_ptr": {
+   "build_config": "04020a1762c81a0bf3d9d3aa6c5342fe",
+   "version": "5.5.4.67849"
+  },
+  "wow_cn_beta": {
+   "build_config": "daa197ac05e274358ba22d28983bad7b",
+   "locales": [
+    "zhCN"
+   ],
+   "public": true,
+   "version": "1.60.1.70450"
+  },
+  "wowdev": {
+   "build_config": "0c06f5e50d97941e4173e1518a891ca0",
+   "public": false,
+   "reason": "IntegrityError",
+   "version": "12.1.5.69594"
+  },
+  "wowdev2": {
+   "build_config": "ece8f8ec88a553053033307c3f8cd6ae",
+   "public": false,
+   "reason": "IntegrityError",
+   "version": "1.60.1.70603"
+  },
+  "wowdev3": {
+   "build_config": "82c2b575e4084832b731dd5d3ddb5899",
+   "public": false,
+   "reason": "IntegrityError",
+   "version": "12.1.7.70614"
+  },
+  "wowdev5": {
+   "build_config": "bb7448d66356ac9e4c3494b973653a23",
+   "public": false,
+   "reason": "IntegrityError",
+   "version": "1.60.1.69963"
+  },
+  "wowe1": {
+   "build_config": "43a001a23efd4193a96266be43fe67d8",
+   "locales": [
+    "enUS",
+    "esMX",
+    "ptBR",
+    "frFR",
+    "deDE",
+    "esES",
+    "itIT",
+    "ruRU",
+    "koKR",
+    "zhTW",
+    "zhCN"
+   ],
+   "public": true,
+   "version": "9.0.1.35078"
+  },
+  "wowf": {
+   "build_config": "165410aca770316ea0f88100bb4830c2",
+   "version": "1.60.1.70658"
+  },
+  "wowlivetest": {
+   "build_config": "f8aab46e89f968d6414dd42e4a97a431",
+   "locales": [
+    "enUS",
+    "esMX",
+    "ptBR",
+    "frFR",
+    "deDE",
+    "esES",
+    "itIT",
+    "ruRU",
+    "koKR",
+    "zhTW",
+    "zhCN"
+   ],
+   "public": true,
+   "version": "10.2.5.52646"
+  },
+  "wowlivetest2": {
+   "build_config": "df1ef929d4ead61216d1e94251c8e75b",
+   "public": false,
+   "reason": "IntegrityError",
+   "version": "12.1.5.70117"
+  },
+  "wownev1": {
+   "build_config": "0fbb147e58fba8c3e51c61ad4f5ca8cb",
+   "public": false,
+   "reason": "IntegrityError",
+   "version": "12.1.0.69814"
+  },
+  "wowt": {
+   "build_config": "fc3eaa61ff0ade6bf35dbab9727bc161",
+   "version": "12.1.7.70493"
+  },
+  "wowv": {
+   "build_config": "30f3c59838fa51f4de3278e0588ebc53",
+   "public": false,
+   "reason": "IntegrityError",
+   "version": "5.5.4.67732"
+  },
+  "wowv10": {
+   "build_config": "d6a94129c204ffa3b18507b60c554ed0",
+   "public": false,
+   "reason": "IntegrityError",
+   "version": "12.0.5.67088"
+  },
+  "wowv2": {
+   "build_config": "5f0b6130d37c6cca2ff766fbaef441fc",
+   "public": false,
+   "reason": "IntegrityError",
+   "version": "12.1.7.70614"
+  },
+  "wowv3": {
+   "build_config": "0e74dc8eeb50c39fb6b1d773e65c2399",
+   "public": false,
+   "reason": "IntegrityError",
+   "version": "12.1.7.70614"
+  },
+  "wowv4": {
+   "build_config": "7fca40bf7b14c3c63fa38348b29dcbef",
+   "public": false,
+   "reason": "IntegrityError",
+   "version": "1.15.9.68185"
+  },
+  "wowv5": {
+   "build_config": "c7e0772214a96ae5d8af672c2199a98a",
+   "public": false,
+   "reason": "IntegrityError",
+   "version": "2.5.6.68184"
+  },
+  "wowv6": {
+   "build_config": "64aa0620cdffead6c7eb674804dec441",
+   "public": false,
+   "reason": "IntegrityError",
+   "version": "1.60.1.70630"
+  },
+  "wowv7": {
+   "build_config": "1835d02f70516eaf78e9f663b9572bee",
+   "public": false,
+   "reason": "IntegrityError",
+   "version": "5.5.3.66839"
+  },
+  "wowv8": {
+   "build_config": "c3bbbd594ea1c8671527194bff0cb8ee",
+   "public": false,
+   "reason": "IntegrityError",
+   "version": "12.0.1.64889"
+  },
+  "wowv9": {
+   "build_config": "bd218661be87a8fbae491d133f882bc4",
+   "public": false,
+   "reason": "IntegrityError",
+   "version": "3.80.1.66343"
+  },
+  "wowxptr": {
+   "build_config": "d29f3a7796f46ad29526f03d6ff4b82c",
+   "version": "12.1.5.70340"
+  },
+  "wowz": {
+   "build_config": "536c37f506588da0efde20c37782de47",
+   "locales": [
+    "enUS",
+    "esMX",
+    "ptBR",
+    "frFR",
+    "deDE",
+    "esES",
+    "itIT",
+    "ruRU",
+    "koKR",
+    "zhTW",
+    "zhCN"
+   ],
+   "public": true,
+   "version": "1.14.4.50753"
+  }
+ },
+ "region": "us"
+}

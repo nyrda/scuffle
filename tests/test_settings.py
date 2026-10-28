@@ -22,10 +22,32 @@ def test_the_old_test_client_switch_becomes_a_per_client_choice(config, switch, 
     assert sorted(Settings.load().extra_clients) == expected
 
 
-def test_settings_reject_an_unknown_client(config):
-    config.write_text(json.dumps({'extra_clients': ['wow_not_a_client']}))
-    with pytest.raises(ValueError, match='Unknown clients'):
-        Settings.load()
+def test_settings_from_before_hidden_clients_still_load(config):
+    config.write_text(json.dumps({'root': '/games', 'region': 'us', 'extra_clients': ['wowt'], 'selected': 'wowt'}))
+    loaded = Settings.load()
+    assert loaded.extra_clients == ['wowt'] and loaded.hidden_clients == [] and not loaded.show_other_clients
+
+
+def test_client_codes_the_catalog_does_not_know_are_kept_and_broken_entries_dropped(config):
+    # The catalog follows what Blizzard publishes, so a code unknown today may return.
+    config.write_text(json.dumps({'extra_clients': ['wow_future_ptr', 42, '../escape'], 'hidden_clients': 'wow',
+                                  'show_other_clients': 'yes'}))
+    loaded = Settings.load()
+    assert loaded.extra_clients == ['wow_future_ptr'] and loaded.hidden_clients == []
+    assert loaded.show_other_clients is False
+    loaded.save()
+    assert Settings.load().extra_clients == ['wow_future_ptr']
+
+
+def test_hiding_and_showing_a_client_again():
+    settings = Settings(extra_clients=['wowt'])
+    settings.unlisted('wowt')
+    settings.unlisted('wow')
+    assert settings.extra_clients == [] and settings.hidden_clients == ['wow', 'wowt']
+    settings.listed('wowt')
+    settings.listed('wow')
+    # A test client is shown by choice. A live one only needs to stop being hidden.
+    assert settings.extra_clients == ['wowt'] and settings.hidden_clients == []
 
 
 def test_the_list_shows_public_clients_chosen_test_clients_and_installed_ones():
@@ -33,3 +55,21 @@ def test_the_list_shows_public_clients_chosen_test_clients_and_installed_ones():
     assert 'wow_classic_era_ptr' in shown and 'wowt' in shown
     assert 'wow_beta' not in shown
     assert all(code in shown for code in [c.code for c in catalog.CLIENTS if not c.test])
+
+
+def test_hidden_clients_leave_the_list_unless_they_have_a_download():
+    shown = [c.code for c in catalog.visible(hidden=['wow', 'wowt', 'wowf'], installed=['wowt'],
+                                             downloading=['wowf'])]
+    assert 'wow' not in shown and 'wowt' not in shown       # installed, and still hidden
+    assert 'wowf' in shown                                  # its download keeps it
+
+
+def test_other_clients_appear_only_while_they_are_shown():
+    catalog.apply({'wowe1': {'version': '9.0.1.35078', 'public': True, 'locales': ['enUS']}})
+    try:
+        chosen = {'extra': ['wowe1'], 'installed': []}
+        assert 'wowe1' not in [c.code for c in catalog.visible(**chosen)]
+        assert 'wowe1' in [c.code for c in catalog.visible(**chosen, show_other=True)]
+        assert 'wowe1' in [c.code for c in catalog.visible(downloading=['wowe1'])]
+    finally:
+        catalog.apply(None)

@@ -74,8 +74,12 @@ def test_mode_buttons_are_replaced_not_added_when_switching_clients(qt):
 @pytest.fixture
 def window(qt, tmp_path, monkeypatch):
     """A window with empty settings, so the user's real configuration is never read or written."""
-    from waystone import settings as settings_module
+    from waystone import discovery, settings as settings_module
     from waystone.ui import app as ui
+
+    def offline(url, *args, **kwargs):
+        raise OSError('Tests never reach the version service')
+    monkeypatch.setattr(discovery, 'fetch', offline)
     for name in ['config_dir', 'data_dir', 'cache_dir']:
         monkeypatch.setattr(settings_module, name, lambda name=name: tmp_path / name)
         monkeypatch.setattr(ui, name, lambda name=name: tmp_path / name, raising=False)
@@ -153,14 +157,23 @@ def styled(qt, monkeypatch, tmp_path):
 
 
 def test_settings_never_scroll_sideways_at_the_minimum_size(qt, styled, window):
+    import json
+    from pathlib import Path
     from PySide6.QtWidgets import QScrollArea
     from waystone import catalog
+    snapshot = json.loads((Path(__file__).parent / 'fixtures/catalog-us.json').read_text())
+    window.on_catalog(window.settings.region, snapshot)
+    window.settings.show_other_clients = True
     window.open_settings()
-    window.settings_page.load(window.settings, [c.code for c in catalog.CLIENTS if c.test])
-    window.resize(900, 560)
-    for _ in range(3):
-        qt.processEvents()
-    assert window.settings_page.findChild(QScrollArea).horizontalScrollBar().maximum() == 0
+    window.settings_page.load(window.settings, [c.code for c in catalog.CLIENTS if c.test],
+                              {'wowlivetest': 'Install failed'})
+    window.resize(960, 650)
+    for section, _ in window.settings_page.SECTIONS:
+        window.settings_page.show_section(section)
+        for _ in range(3):
+            qt.processEvents()
+        assert window.settings_page.findChild(QScrollArea).horizontalScrollBar().maximum() == 0, section
+    catalog.apply(None)
 
 
 def test_the_folder_picker_reveals_the_current_folder_once_it_has_loaded(qt, tmp_path):
@@ -235,7 +248,7 @@ def test_first_run_settings_save_before_a_folder_is_chosen(qt, window):
     window.open_settings()
     page = window.settings_page
     page.region.setCurrentIndex(page.region.findData('us'))
-    page.extras['wowt'].setChecked(True)
+    page.choices['wowt']['box'].setChecked(True)
     saved = Settings.load()
     assert saved.root == '' and saved.region == 'us' and saved.extra_clients == ['wowt']
 
@@ -300,7 +313,7 @@ def test_a_downloading_test_client_stays_listed_after_unchecking_it(qt, window, 
     window.on_job(job)
     assert 'wowt' in window.client_list.rows
     window.open_settings()
-    assert not window.settings_page.extras['wowt'].isEnabled()
+    assert not window.settings_page.choices['wowt']['box'].isEnabled()
     window.downloads.jobs.clear()
 
 
@@ -353,7 +366,7 @@ def test_a_cancelled_test_client_download_unlocks_its_checkbox(qt, window, tmp_p
     job = Job('wowt', 'install', status=QUEUED)
     window.downloads.jobs.append(job)
     window.open_settings()
-    box = window.settings_page.extras['wowt']
+    box = window.settings_page.choices['wowt']['box']
     assert not box.isEnabled() and 'Queued' in box.toolTip()
     window.downloads.jobs.clear()
     window.on_job(job)
@@ -408,13 +421,13 @@ def test_a_locked_test_client_keeps_its_own_choice_through_other_changes(qt, win
     page = window.settings_page
     page.limit.setCurrentIndex(page.limit.findData(5))
     assert window.settings.extra_clients == ['wow_classic_era_ptr']
-    assert page.extra_notes['wow_classic_era_ptr'].text() == 'Paused'
+    assert page.choices['wow_classic_era_ptr']['note'].text() == 'Paused'
     paused.status = FAILED
     window.on_job(paused)
-    assert page.extra_notes['wow_classic_era_ptr'].text() == 'Install failed'
+    assert page.choices['wow_classic_era_ptr']['note'].text() == 'Install failed'
     window.downloads.jobs.clear()
     window.on_job(paused)
-    assert page.extras['wow_classic_era_ptr'].isChecked()
+    assert page.choices['wow_classic_era_ptr']['box'].isChecked()
     assert 'wow_classic_era_ptr' in window.client_list.rows
 
 
@@ -459,11 +472,23 @@ def test_a_queued_client_does_not_name_a_paused_job_as_ahead(qt, window, tmp_pat
     window.downloads.jobs.clear()
 
 
-def test_settings_tab_reaches_proton_right_after_the_speed_limit(qt, window):
+def test_settings_tab_goes_from_the_sections_into_the_one_shown(qt, window):
+    from PySide6.QtWidgets import QComboBox
     page = window.settings_page
+    window.open_settings()
+    sections = page.sections.group.buttons()
     chain = page.focus_chain()
+    assert chain[:1 + len(sections)] == [page.close_button, *sections]
+    assert chain[len(sections) + 1] is page.browse and page.limit not in chain
+    page.show_section('launch')
+    extra = QComboBox()
+    page.add_launch_widget(extra)       # how launch options built elsewhere join the page
+    qt.processEvents()
+    chain = page.focus_chain()
+    assert chain[-1] is extra and page.browse not in chain
     if page.proton is not None:
-        assert chain.index(page.proton) == chain.index(page.limit) + 1
+        assert chain.index(page.proton) == len(sections) + 1
+    assert extra.isVisibleTo(page) and page.section_widgets['launch'].isAncestorOf(extra)
 
 
 def test_correcting_the_folder_path_clears_the_old_complaint(qt, tmp_path):
@@ -490,3 +515,242 @@ def test_ctrl_c_in_the_terminal_closes_the_window(qt, window):
     finally:
         for number, handler in previous.items():
             signal.signal(number, handler)
+
+
+def installed(window, monkeypatch, codes):
+    """Pretend these clients are installed, without a real installation or update check."""
+    monkeypatch.setattr(window, 'check_updates', lambda: None)
+    monkeypatch.setattr(window.library, 'installed', lambda: list(codes))
+    monkeypatch.setattr(window.library, 'state', lambda code: {
+        'version': '12.1.5.70575', 'region': 'eu', 'locale': 'enUS', 'folder': '_retail_'} if code in codes else None)
+
+
+def test_an_installed_client_can_be_hidden_from_its_menu_and_brought_back(qt, window, tmp_path, monkeypatch):
+    from waystone.settings import Settings
+    window.settings.root = str(tmp_path / 'games')
+    window.open_library()
+    installed(window, monkeypatch, ['wow'])
+    window.populate()
+    window.client_list.select('wow')
+    window.refresh()
+    page = window.client_page
+    assert page.more.isVisibleTo(page) and page.hide_action.isEnabled()
+    page.hide_action.trigger()
+    assert 'wow' not in window.client_list.rows and window.selected() != 'wow'
+    assert Settings.load().hidden_clients == ['wow']
+    assert 'hidden' in page.banner.text.text()
+    page.banner.action.click()          # Undo
+    assert 'wow' in window.client_list.rows and window.selected() == 'wow'
+    assert Settings.load().hidden_clients == []
+
+
+def test_a_client_with_a_download_cannot_be_hidden(qt, window, tmp_path):
+    from waystone.downloads import FAILED, Job
+    window.settings.root = str(tmp_path / 'games')
+    window.open_library()
+    failed = Job('wowf', 'install', status=FAILED, error='The servers did not answer.')
+    window.downloads.jobs.append(failed)
+    window.on_job(failed)
+    window.client_list.select('wowf')
+    window.refresh()
+    assert not window.client_page.hide_action.isEnabled()
+    window.hide_client()
+    assert window.settings.hidden_clients == []
+    # Hidden in the settings, it still stays until its download is gone.
+    window.settings.hidden_clients = ['wowf']
+    window.populate()
+    assert 'wowf' in window.client_list.rows
+    window.downloads.jobs.clear()
+    window.on_job(failed)
+    assert 'wowf' not in window.client_list.rows
+
+
+def test_with_every_client_hidden_the_list_points_to_the_settings(qt, window):
+    from waystone import catalog
+    window.settings.hidden_clients = [c.code for c in catalog.clients()]
+    window.populate()
+    window.refresh()
+    assert window.client_list.rows == {} and window.client_list.empty.isVisibleTo(window)
+    assert window.client_page.empty.isVisibleTo(window.client_page)
+    window.client_list.empty_button.click()
+    assert window.stack.currentWidget() is window.settings_page and window.settings_page.section == 'clients'
+    window.settings_page.choices['wow']['box'].setChecked(True)
+    assert list(window.client_list.rows) == ['wow'] and not window.client_list.empty.isVisibleTo(window)
+
+
+def test_other_public_clients_stay_collapsed_until_they_are_shown(qt, window):
+    import json
+    from pathlib import Path
+    from waystone import catalog
+    snapshot = json.loads((Path(__file__).parent / 'fixtures/catalog-us.json').read_text())
+    window.on_catalog(window.settings.region, snapshot)
+    window.open_settings('clients')
+    page = window.settings_page
+    other = page.choices['wowlivetest']
+    assert other['category'] == catalog.OTHER and not other['box'].isVisibleTo(page)
+    assert page.choices['wow_beta']['note'].text() == 'Older than live'
+    assert page.choices['wowlivetest']['note'].text() == 'Old build'
+    other['box'].setChecked(True)       # a choice made earlier, kept while the box is off
+    assert 'wowlivetest' not in window.client_list.rows
+    page.show_other.setChecked(True)
+    assert other['box'].isVisibleTo(page) and 'wowlivetest' in window.client_list.rows
+    assert window.settings.show_other_clients and window.settings.extra_clients == ['wowlivetest']
+    assert other['box'] in page.focus_chain()
+    page.show_other.setChecked(False)
+    assert 'wowlivetest' not in window.client_list.rows and window.settings.extra_clients == ['wowlivetest']
+    catalog.apply(None)
+
+
+def test_without_the_version_service_the_other_clients_say_so(qt, window):
+    window.on_catalog(window.settings.region, None)
+    window.open_settings('clients')
+    page = window.settings_page
+    page.show_other.setChecked(True)
+    assert 'could not be reached' in page.other_status.text() and page.other_status.isVisibleTo(page)
+    assert not any(c['category'] == 'other' for c in page.choices.values())
+
+
+def test_unticking_a_live_or_installed_client_hides_it_and_a_download_locks_it_on(qt, window, tmp_path, monkeypatch):
+    from waystone.downloads import QUEUED, Job
+    window.settings.root = str(tmp_path / 'games')
+    window.open_library()
+    installed(window, monkeypatch, ['wowt'])
+    window.populate()
+    window.open_settings('clients')
+    page = window.settings_page
+    assert page.choices['wowt']['box'].isChecked() and page.choices['wowt']['box'].isEnabled()
+    assert page.choices['wowt']['note'].text() == 'Installed'
+    page.choices['wowt']['box'].setChecked(False)
+    page.choices['wow_classic']['box'].setChecked(False)
+    assert window.settings.hidden_clients == ['wow_classic', 'wowt']
+    assert 'wowt' not in window.client_list.rows and 'wow_classic' not in window.client_list.rows
+    job = Job('wow_classic', 'install', status=QUEUED)
+    window.downloads.jobs.append(job)
+    window.on_job(job)
+    box = page.choices['wow_classic']['box']
+    assert box.isChecked() and not box.isEnabled() and 'wow_classic' in window.client_list.rows
+    page.limit.setCurrentIndex(page.limit.findData(5))      # another change keeps the user's own choice
+    assert 'wow_classic' in window.settings.hidden_clients
+    window.downloads.jobs.clear()
+
+
+def test_the_window_opens_before_the_version_service_answers_and_uses_the_answer(qt, tmp_path, monkeypatch):
+    import json
+    import threading
+    import time
+    from pathlib import Path
+    from waystone import catalog, discovery, settings as settings_module
+    from waystone.ui import app as ui
+    for name in ['config_dir', 'data_dir', 'cache_dir']:
+        monkeypatch.setattr(settings_module, name, lambda name=name: tmp_path / name)
+        monkeypatch.setattr(ui, name, lambda name=name: tmp_path / name, raising=False)
+    snapshot = json.loads((Path(__file__).parent / 'fixtures/catalog-us.json').read_text())
+    answer = threading.Event()
+
+    def slow(region, cache, previous=None):
+        if not answer.wait(timeout=3):
+            raise OSError('nobody answered')
+        return snapshot | {'region': region}
+    monkeypatch.setattr(discovery, 'refresh', slow)
+    started = time.monotonic()
+    window = ui.MainWindow()
+    try:
+        assert time.monotonic() - started < 2 and window.catalog_state == 'checking'
+        assert 'wowlivetest' not in window.settings_page.choices
+        answer.set()
+        deadline = time.monotonic() + 3
+        while window.catalog_state == 'checking' and time.monotonic() < deadline:
+            qt.processEvents()
+            time.sleep(0.01)
+        assert 'wowlivetest' in window.settings_page.choices
+        assert discovery.load(tmp_path / 'cache_dir', window.settings.region) is not None
+    finally:
+        # Closed and deleted while the folders are still the test's own, since closing saves.
+        from PySide6.QtCore import QCoreApplication, QEvent
+        window.close()
+        window.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        catalog.apply(None)
+
+
+def test_choosing_another_region_switches_to_that_regions_clients(qt, window, tmp_path):
+    import json
+    from pathlib import Path
+    from waystone import catalog, discovery
+    snapshot = json.loads((Path(__file__).parent / 'fixtures/catalog-us.json').read_text())
+    discovery.save(tmp_path / 'cache_dir', snapshot)
+    window.open_settings()
+    page = window.settings_page
+    assert window.settings.region == 'eu' and 'wowlivetest' not in page.choices
+    page.region.setCurrentIndex(page.region.findData('us'))
+    assert 'wowlivetest' in page.choices and catalog.release('wow').version == '12.1.5.70575'
+    catalog.apply(None)
+
+
+def test_a_finished_job_no_longer_keeps_its_client_listed_or_locked(qt, window, tmp_path, monkeypatch):
+    from waystone.downloads import DONE, Job
+    window.settings.root = str(tmp_path / 'games')
+    window.open_library()
+    installed(window, monkeypatch, ['wow'])
+    done = Job('wow', 'verify', status=DONE)
+    window.downloads.jobs.append(done)        # the manager keeps a finished job until the next one
+    window.on_job(done)
+    window.client_list.select('wow')
+    window.refresh()
+    assert window.client_page.hide_action.isEnabled()
+    window.open_settings('clients')
+    choice = window.settings_page.choices['wow']
+    assert choice['box'].isEnabled() and choice['note'].text() == 'Installed'
+    window.show_client_page()
+    window.hide_client()
+    assert window.settings.hidden_clients == ['wow'] and 'wow' not in window.client_list.rows
+    window.downloads.jobs.clear()
+
+
+def test_a_hidden_client_the_catalog_no_longer_offers_can_be_shown_again(qt, window, tmp_path, monkeypatch):
+    from waystone import catalog
+    window.settings.root = str(tmp_path / 'games')
+    window.settings.show_other_clients = True
+    window.open_library()
+    installed(window, monkeypatch, ['wowe1'])     # installed earlier, not found by discovery now
+    window.populate()
+    assert 'wowe1' in window.client_list.rows and 'wowe1' not in [c.code for c in catalog.clients()]
+    window.client_list.select('wowe1')
+    window.refresh()
+    window.hide_client()
+    assert 'wowe1' not in window.client_list.rows
+    window.open_settings('clients')
+    box = window.settings_page.choices['wowe1']['box']
+    assert box.isVisibleTo(window.settings_page) and not box.isChecked()
+    box.setChecked(True)
+    assert window.settings.hidden_clients == [] and 'wowe1' in window.client_list.rows
+
+
+def test_open_settings_rows_follow_a_new_build_with_the_same_clients(qt, window):
+    import json
+    from pathlib import Path
+    from waystone import catalog
+    snapshot = json.loads((Path(__file__).parent / 'fixtures/catalog-us.json').read_text())
+    window.on_catalog(window.settings.region, snapshot)
+    window.open_settings('clients')
+    row = window.settings_page.choices['wow_beta']
+    assert row['version'].text() == '12.0.1.66220' and row['note'].text() == 'Older than live'
+    snapshot['products']['wow_beta']['version'] = '12.1.9.71000'        # a new beta, the same products
+    window.on_catalog(window.settings.region, snapshot)
+    assert row is window.settings_page.choices['wow_beta']
+    assert row['version'].text() == '12.1.9.71000' and row['note'].text() == ''
+    catalog.apply(None)
+
+
+def test_a_short_fact_fills_the_free_cell_instead_of_a_row_of_its_own(qt):
+    from waystone.ui.widgets import FactsCard
+    card = FactsCard()
+    card.set_facts([('Version', '1.15.9.70576'), ('Region', 'Europe'), ('Language', 'English (US)'),
+                    ('Download size', 'Not known yet')])
+    position = {key.text(): card.grid.getItemPosition(card.grid.indexOf(key))[:2] for key, _ in card.cells}
+    assert position == {'Version': (0, 0), 'Region': (0, 2), 'Language': (1, 0), 'Download size': (1, 2)}
+    # A path keeps its full row.
+    card.set_facts([('Version', '1.15.9.70576'), ('Region', 'Europe'), ('Language', 'English (US)'),
+                    ('Folder', '/games/_classic_era_')])
+    key, value = card.cells[-1]
+    assert key.text() == 'Folder' and card.grid.getItemPosition(card.grid.indexOf(value)) == (2, 1, 1, 3)

@@ -22,6 +22,7 @@ from .widgets import (Banner, ElidedLabel, FactsCard, Segmented, StorageCard, du
 PAGE_MARGINS = (32, 28, 32, 24)
 COLUMN_WIDTH = 780
 FIELD_WIDTH = 480
+ROW_WIDTH = 96 + 16 + FIELD_WIDTH      # a settings row: its name, the spacing and the capped field
 
 
 class Tinted(QWidget):
@@ -194,6 +195,7 @@ class ClientPage(Page):
     cancel_clicked = Signal()
     verify_clicked = Signal()
     open_folder_clicked = Signal()
+    hide_clicked = Signal()
     mode_changed = Signal(str)
 
     def __init__(self):
@@ -271,6 +273,8 @@ class ClientPage(Page):
         menu = QMenu(self.more)
         self.verify_action = menu.addAction('Verify files', self.verify_clicked.emit)
         self.folder_action = menu.addAction('Open folder', self.open_folder_clicked.emit)
+        self.menu_separator = menu.addSeparator()
+        self.hide_action = menu.addAction('Hide from list', self.hide_clicked.emit)
         self.more.setMenu(menu)
         actions.addWidget(self.primary)
         actions.addWidget(self.cancel)
@@ -305,6 +309,16 @@ class ClientPage(Page):
         self.hint.setContentsMargins(2, 10, 0, 0)
         main.addWidget(self.hint)
         self.grid.addWidget(self.main, 0, 0)
+        # In place of a client when every one is hidden. The list beside it offers the way back.
+        self.empty = QWidget()
+        empty = QVBoxLayout(self.empty)
+        empty.setContentsMargins(0, 0, 0, 0)
+        empty.setSpacing(6)
+        empty.addWidget(label('No clients listed', 'pagetitle'))
+        empty.addWidget(label('Every client is hidden from the list. Settings can show them again.', 'muted',
+                              wrap=True))
+        self.empty.hide()
+        self.grid.addWidget(self.empty, 1, 0)
         self.storage_gap = QWidget()
         self.storage_gap.setFixedHeight(14)
         self.main_layout.insertWidget(self.main_layout.indexOf(self.hint), self.storage_gap)
@@ -358,16 +372,26 @@ class ClientPage(Page):
                    self.primary, self.cancel, self.more]
         return widgets
 
+    def show_empty(self) -> None:
+        self._client = None
+        self.body.set_color(None)
+        self.main.hide()
+        self.storage.hide()
+        self.empty.show()
+
     def show_client(self, client: catalog.Client, *, status: str, tone_name: str, primary: str,
                     primary_enabled: bool, installed: bool, busy: bool, progress: float | None,
                     primary_tip: str = '', busy_launch: bool = False, paused: bool = False, queued: bool = False,
                     progress_text, cancellable: bool, modes: list, mode: str | None,
-                    facts: list, hint: str) -> None:
+                    facts: list, hint: str, hideable: bool = True) -> None:
+        self.main.show()
+        self.empty.hide()
         self._client = client
         self.icon.setPixmap(tile(client.short, client_color(client), self.icon.width()))
         self.body.set_color(client_color(client))
         self.title.setText(client.label)
-        self.family.setText(FAMILY_NAMES[client.family] + (' · test client' if client.test else ''))
+        self.family.setText(FAMILY_NAMES[client.family] + (' · test client' if client.test else
+                                                            ' · other public client' if client.optional else ''))
         self.blurb.setText(client.blurb)
         self.chip.setText(status)
         tone(self.chip, tone_name)
@@ -388,9 +412,13 @@ class ClientPage(Page):
         self.cancel.setVisible(cancellable)
         self.cancel.setToolTip('Take it out of the queue' if queued else
                                'Stop this download. What is already stored stays for later.')
-        self.more.setVisible(installed and not cancellable)
+        self.more.setVisible(not cancellable)
+        for action in (self.verify_action, self.folder_action, self.menu_separator):
+            action.setVisible(installed)
         # Checking files while the game runs or starts would read files it has open.
         self.verify_action.setEnabled(installed and not busy and not busy_launch and progress is None)
+        # A client with a download stays listed while the download exists.
+        self.hide_action.setEnabled(hideable)
         # A launch shows an indeterminate bar with its phase. A download shows its own progress.
         self.progress_row.setVisible(busy or progress is not None or queued)
         self.busy.setVisible(not queued)
@@ -410,6 +438,20 @@ class ClientPage(Page):
 
 
 class SettingsPage(Page):
+    """The settings, in sections chosen at the top. Every choice saves at once."""
+
+    SECTIONS = [('general', 'General'), ('clients', 'Clients'), ('downloads', 'Downloads'), ('launch', 'Launch')]
+    CATEGORIES = [(catalog.LIVE, 'Live clients', 'Untick a client to leave it out of the list. '
+                   'Hiding a client keeps it installed.'),
+                  (catalog.TEST, 'Test clients', 'PTRs and betas. Showing one does not install it. '
+                   'They connect to test realms, which need account access.'),
+                  (catalog.OTHER, '', 'Other builds Blizzard publishes openly, such as event and submission '
+                   'builds. Many are old and may not connect.')]
+
+    # Every note a client row can show, for the width of their column.
+    NOTES = ['Installed', 'Downloading', 'Queued', 'Paused', 'Install failed', 'Not in this region',
+             'Older than live', 'Old build']
+
     saved = Signal()
     closed = Signal()
     choose_folder = Signal(str)
@@ -417,8 +459,11 @@ class SettingsPage(Page):
     def __init__(self):
         super().__init__()
         self.settings: Settings | None = None
+        self.installed: set[str] = set()
+        self.downloading: dict[str, str] = {}
         body_layout = scrolling(self, margins=(PAGE_MARGINS[0], 4, PAGE_MARGINS[2], PAGE_MARGINS[3]))
-        # The title, the autosave note and Close stay above the scrolling cards.
+        self.scroll = self.findChild(QScrollArea)
+        # The title, the autosave note, Close and the sections stay above the scrolling cards.
         header = QWidget()
         header_layout = QVBoxLayout(header)
         header_layout.setContentsMargins(PAGE_MARGINS[0], PAGE_MARGINS[1], PAGE_MARGINS[2] + GUTTER, 10)
@@ -438,9 +483,26 @@ class SettingsPage(Page):
         close.setToolTip('Close the settings (Esc)')
         close.clicked.connect(self.closed.emit)
         title_row.addWidget(close)
-        self.centre(column(header_layout)).addLayout(title_row)
+        header_column = self.centre(column(header_layout))
+        header_column.addLayout(title_row)
+        header_column.addSpacing(14)
+        self.sections = Segmented()
+        self.sections.set_options(self.SECTIONS, 'general')
+        self.sections.changed.connect(self.show_section)
+        header_column.addWidget(self.sections, 0, Qt.AlignLeft)
         self.on_escape(self.closed.emit)
+        self.section_layouts: dict[str, QVBoxLayout] = {}
+        self.section_widgets: dict[str, QWidget] = {}
+        for name, _ in self.SECTIONS:
+            widget = QWidget()
+            layout = QVBoxLayout(widget)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(0)
+            content.addWidget(widget)
+            self.section_widgets[name], self.section_layouts[name] = widget, layout
 
+        # General
+        general = self.section_layouts['general']
         self.root = fixed(FolderField())
         # Changed only through Choose…, so a half-typed path never becomes the folder.
         self.root.setReadOnly(True)
@@ -457,87 +519,73 @@ class SettingsPage(Page):
         folder.addWidget(self.root, 1)
         folder.addWidget(self.browse)
         self.free = label('', 'small', wrap=True)
-        grid = self.card(content, 'Installation folder',
+        grid = self.card(general, 'Installation folder',
                          'All clients share this folder. Battle.net must not manage it.')
         self.row(grid, 'Folder', folder)
         grid.addWidget(self.free, grid.rowCount(), 1)
-
         self.region = fixed(QComboBox())
         for code, name in REGIONS.items():
             self.region.addItem(name, code)
         self.locale = fixed(QComboBox())
         for code, name in LOCALE_NAMES.items():
             self.locale.addItem(name, code)
+        grid = self.card(general, 'Region and language',
+                         'They apply to new installs. Installed clients keep their own.')
+        self.row(grid, 'Region', self.region)
+        self.row(grid, 'Language', self.locale)
+
+        # Clients
+        clients = self.section_layouts['clients']
+        self.choices: dict[str, dict] = {}
+        self.category_grids: dict[str, QGridLayout] = {}
+        for category, title, note in self.CATEGORIES:
+            if category == catalog.OTHER:
+                # Off by default. The card is only its switch until it is turned on.
+                self.show_other = QCheckBox('Show other public clients')
+                self.show_other.setObjectName('cardtitle')
+                self.show_other.toggled.connect(self.apply)
+                self.show_other.toggled.connect(lambda _: self.update_other())
+                grid = self.card(clients, self.show_other, width=ROW_WIDTH)
+                card_layout = self.show_other.parentWidget().layout()
+                self.other_note = label(note, 'small', wrap=True)
+                card_layout.insertWidget(1, self.other_note)
+                self.other_status = label('', 'small', wrap=True)
+                card_layout.addWidget(self.other_status)
+            else:
+                grid = self.card(clients, title, note, width=ROW_WIDTH)
+            grid.setVerticalSpacing(6)
+            grid.setColumnStretch(0, 1)
+            self.category_grids[category] = grid
+
+        # Downloads
         self.limit = fixed(QComboBox())
-        grid = self.card(content, 'Game and downloads',
-                         'Region and language apply to new installs. Installed clients keep their own.')
-        pair = QHBoxLayout()
-        pair.setSpacing(16)
-        pair.addWidget(self.region, 2)
-        pair.addWidget(label('Language', 'key'))
-        pair.addWidget(self.locale, 3)       # language names run longer than regions
-        self.row(grid, 'Region', pair)
-        # The same split as the row above, so Speed limit is as wide as Region.
-        single = QHBoxLayout()
-        single.setSpacing(16)
-        single.addWidget(self.limit, 1)
-        ghost = label('Language', 'key')
-        policy = ghost.sizePolicy()
-        policy.setRetainSizeWhenHidden(True)
-        ghost.setSizePolicy(policy)
-        ghost.hide()
-        single.addWidget(ghost)
-        spacer = QWidget()
-        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        single.addWidget(spacer, 1)
-        self.row(grid, 'Speed limit', single)
-        # On Linux the game runs in Proton. One row here instead of a card of its own.
+        self.downloads_grid = self.card(self.section_layouts['downloads'], 'Downloads',
+                                        'Downloads run one at a time. A paused one keeps what it stored.')
+        self.row(self.downloads_grid, 'Speed limit', self.limit)
+        self.download_fields: list[QWidget] = []
+
+        # Launch
+        launch = self.section_layouts['launch']
+        self.launch_widgets: list[QWidget] = []
+        # On Linux the game runs in Proton.
         self.proton = None
         if sys.platform != 'win32':
             self.proton = fixed(QComboBox())
             self.proton.setToolTip('Runs the game through umu-run. Builds from Steam and ProtonUp '
                                    'are found automatically.')
-            self.row(grid, 'Proton', self.proton)
+            grid = self.card(launch, 'Proton', 'The Windows compatibility layer the game runs in on Linux.')
+            self.row(grid, 'Build', self.proton)
+        self.launch_empty = label('The game starts directly on Windows. There is nothing to set here yet.', 'muted',
+                                  wrap=True)
+        self.launch_empty.setVisible(self.proton is None)
+        launch.addWidget(self.launch_empty)
 
-        tests = [c for c in catalog.CLIENTS if c.test]
-        grid = self.card(content, 'Test clients',
-                         'Choose which appear in the list. Showing one does not install it. '
-                         'Installed or downloading ones always appear.')
-        self.extras: dict[str, QCheckBox] = {}
-        self.extra_notes: dict[str, QLabel] = {}
-        families = [f for f in FAMILY_NAMES if any(c.family == f for c in tests)]
-        # One column per game, each with its own rows, so a note under one box never
-        # spaces out the others.
-        columns = QHBoxLayout()
-        columns.setSpacing(16)
-        grid.addLayout(columns, 0, 0)
-        grid.setColumnStretch(0, 1)
-        for family in families:
-            family_column = QVBoxLayout()
-            family_column.setSpacing(8)
-            family_column.addWidget(label(FAMILY_NAMES[family].upper(), 'group'))
-            columns.addLayout(family_column, 1)
-            for client in [c for c in tests if c.family == family]:
-                box = QCheckBox(client.label.replace('World of Warcraft', 'Retail'))
-                box.toggled.connect(self.apply)
-                self.extras[client.code] = box
-                # Why a box is locked, on a line of its own so the columns stay narrow.
-                note = label('', 'small')
-                note.setContentsMargins(26, 0, 0, 2)
-                note.hide()
-                self.extra_notes[client.code] = note
-                cell = QVBoxLayout()
-                cell.setSpacing(0)
-                cell.addWidget(box)
-                cell.addWidget(note)
-                family_column.addLayout(cell)
-            family_column.addStretch()
-
-
+        for layout in self.section_layouts.values():
+            layout.addStretch()
         body_layout.addStretch()
+        self.section = ''
+        self.show_section('general')
 
-        # Every choice applies at once. The folder applies when its field is left,
-        # since a half-typed path is not a folder.
         self._loading = False
         for widget in [self.region, self.locale, self.limit] + ([self.proton] if self.proton else []):
             # Long entries such as Proton build names must not widen the page past a small window.
@@ -545,22 +593,57 @@ class SettingsPage(Page):
             widget.setMinimumContentsLength(5)
             widget.currentIndexChanged.connect(self.apply)
         self.root.textChanged.connect(self.update_free)
+        self.set_clients(catalog.clients())
+
+    # Sections
+
+    def show_section(self, name: str) -> None:
+        if name == self.section:
+            return
+        self.section = name
+        self.sections.set_options(self.SECTIONS, name)
+        for key, widget in self.section_widgets.items():
+            widget.setVisible(key == name)
+        self.scroll.verticalScrollBar().setValue(0)
+        window = self.window()
+        if hasattr(window, 'update_tab_order'):
+            window.update_tab_order()
+
+    def add_launch_widget(self, widget: QWidget) -> None:
+        """The hook for launch options built elsewhere. They appear below the Proton card."""
+        layout = self.section_layouts['launch']
+        layout.insertWidget(layout.count() - 1, widget)
+        self.launch_widgets.append(widget)
+        self.launch_empty.hide()
+
+    def add_download_row(self, name: str, field: QWidget) -> None:
+        """A further download setting, such as the number of connections."""
+        self.row(self.downloads_grid, name, field)
+        self.download_fields.append(field)
 
     @staticmethod
-    def card(parent: QVBoxLayout, title: str, note: str = '') -> QGridLayout:
+    def card(parent: QVBoxLayout, title: str | QWidget, note: str = '', *, width: int = 0) -> QGridLayout:
         frame = QFrame()
         frame.setObjectName('card')
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(18, 12, 18, 14)
         layout.setSpacing(4)
-        layout.addWidget(label(title, 'cardtitle'))
+        layout.addWidget(title if isinstance(title, QWidget) else label(title, 'cardtitle'))
         if note:
             layout.addWidget(label(note, 'small', wrap=True))
         layout.addSpacing(4)
         grid = QGridLayout()
         grid.setHorizontalSpacing(16)
         grid.setVerticalSpacing(8)
-        layout.addLayout(grid)
+        if width:
+            # Rows end at this width in a wide window, so a version stays near its name.
+            holder = QWidget()
+            holder.setMaximumWidth(width)
+            holder.setLayout(grid)
+            grid.setContentsMargins(0, 0, 0, 0)
+            layout.addWidget(holder)
+        else:
+            layout.addLayout(grid)
         parent.addWidget(frame)
         parent.addSpacing(8)
         return grid
@@ -588,31 +671,115 @@ class SettingsPage(Page):
 
     def focus_chain(self) -> list[QWidget]:
         """The page's controls in reading order, for the window's tab order."""
-        return [self.close_button, self.browse, self.region, self.locale, self.limit,
-                *([self.proton] if self.proton else []), *self.extras.values()]
+        chain = [self.close_button, *self.sections.group.buttons()]
+        if self.section == 'general':
+            chain += [self.browse, self.region, self.locale]
+        elif self.section == 'clients':
+            for category, _, _ in self.CATEGORIES:
+                if category == catalog.OTHER:
+                    chain.append(self.show_other)
+                    if not self.show_other.isChecked():
+                        break
+                chain += [c['box'] for c in self.choices.values() if c['category'] == category]
+        elif self.section == 'downloads':
+            chain += [self.limit, *self.download_fields]
+        else:
+            chain += [self.proton] if self.proton else []
+            for widget in self.launch_widgets:
+                chain += widget.focus_chain() if hasattr(widget, 'focus_chain') else [widget]
+        return chain
+
+    # Clients
+
+    def set_clients(self, clients: list[catalog.Client]) -> None:
+        """Rows for these clients, one per client. Rows of clients still offered are kept."""
+        codes = [c.code for c in clients]
+        if codes == list(self.choices):
+            # The same rows, with versions and notes that can still have changed.
+            self.lock_clients(self.installed, self.downloading)
+            return
+        for code in [c for c in self.choices if c not in codes]:
+            for widget in self.choices.pop(code)['widgets']:
+                widget.hide()
+                widget.setParent(None)
+                widget.deleteLater()
+        for client in clients:
+            if client.code not in self.choices:
+                box = QCheckBox(client.label)
+                box.toggled.connect(self.apply)
+                version, note = label('', 'small'), label('', 'small')
+                # Fixed columns, so versions and notes line up from card to card.
+                version.ensurePolished()
+                metrics = version.fontMetrics()
+                version.setFixedWidth(metrics.horizontalAdvance('12.12.12.888888'))
+                note.setFixedWidth(max(metrics.horizontalAdvance(text) for text in self.NOTES))
+                self.choices[client.code] = {'box': box, 'version': version, 'note': note,
+                                             'category': client.category, 'widgets': [box, version, note]}
+        # Laid out again in catalog order, so a new row lands where it belongs.
+        for category, grid in self.category_grids.items():
+            rows = [self.choices[c] for c in codes if self.choices[c]['category'] == category]
+            for row, choice in enumerate(rows):
+                for column, widget in enumerate(choice['widgets']):
+                    grid.removeWidget(widget)
+                    grid.addWidget(widget, row, column)
+        self.choices = {code: self.choices[code] for code in codes}
+        self.lock_clients(self.installed, self.downloading)
+        self.update_other()
+
+    def update_other(self) -> None:
+        others = [c for c in self.choices.values() if c['category'] == catalog.OTHER]
+        shown = self.show_other.isChecked()
+        # Collapsed while off. Its choices stay for when it is turned on again.
+        for choice in others:
+            for widget in choice['widgets']:
+                widget.setVisible(shown)
+        self.other_note.setVisible(shown)
+        self.other_status.setVisible(shown and bool(self.other_status.text()))
+        window = self.window()
+        if hasattr(window, 'update_tab_order'):
+            window.update_tab_order()
+
+    def show_catalog_state(self, state: str) -> None:
+        """What the version service said: checking, offline, or ready."""
+        others = any(c['category'] == catalog.OTHER for c in self.choices.values())
+        self.other_status.setText('' if others else {
+            'checking': 'Looking for other public clients…',
+            'offline': 'Blizzard\'s version service could not be reached, so only the built-in clients are offered.',
+        }.get(state, 'Blizzard publishes no other public client right now.'))
+        self.update_other()
+
+    def listed(self, code: str) -> bool:
+        """Whether a client is in the list by the user's own choice."""
+        s = self.settings
+        if s is None or code in s.hidden_clients:
+            return False
+        return not catalog.get(code).optional or code in s.extra_clients or code in self.installed
+
+    def lock_clients(self, installed, downloading=None) -> None:
+        """A client with a download stays in the list, so its box is locked on."""
+        self.installed, self.downloading = set(installed), dict(downloading or {})
+        self._loading, was_loading = True, self._loading
+        for code, choice in self.choices.items():
+            box, kept = choice['box'], code in self.downloading
+            box.setChecked(kept or self.listed(code))
+            box.setEnabled(not kept)
+            box.setToolTip(f'{self.downloading[code]}, so it stays in the list.' if kept else '')
+            release = catalog.release(code)
+            choice['version'].setText(release.version if release else '')
+            client = catalog.get(code)
+            note = (('Installed' if code in self.installed else '') or self.downloading.get(code, '')
+                    or ('Not in this region' if catalog.checked() and not release else '')
+                    or (('Older than live' if client.test else 'Old build') if catalog.stale(code) else ''))
+            choice['note'].setText(note)
+        self._loading = was_loading
+
+    # Values
 
     def values(self) -> dict:
         return {'root': self.root.text().strip(), 'region': self.region.currentData(),
                 'locale': self.locale.currentData(), 'limit': self.limit.currentData(),
                 'proton': self.proton.currentData() if self.proton else '',
-                'extra': sorted(code for code, box in self.extras.items() if box.isChecked())}
-
-    def lock_clients(self, installed, downloading=None) -> None:
-        """Installed or downloading test clients stay in the list, so their boxes are locked on."""
-        settings = self.settings
-        self._loading, was_loading = True, self._loading
-        downloading = downloading or {}
-        for code, box in self.extras.items():
-            kept = code in installed or code in downloading
-            box.setChecked(kept or bool(settings and code in settings.extra_clients))
-            box.setEnabled(not kept)
-            # Kept out of the label, so the three columns fit a narrow window.
-            box.setToolTip('Installed, so it always appears in the list.' if code in installed else
-                           f'{downloading[code]}, so it stays in the list.' if code in downloading else '')
-            note = 'Installed' if code in installed else downloading.get(code, '')
-            self.extra_notes[code].setText(note)
-            self.extra_notes[code].setVisible(bool(note))
-        self._loading = was_loading
+                'show_other': self.show_other.isChecked()}
 
     def load(self, settings: Settings, installed: list[str], downloading=None) -> None:
         self._loading = True
@@ -621,6 +788,7 @@ class SettingsPage(Page):
         self.root.setCursorPosition(0)
         self.region.setCurrentIndex(max(0, self.region.findData(settings.region)))
         self.locale.setCurrentIndex(max(0, self.locale.findData(settings.locale)))
+        self.show_other.setChecked(settings.show_other_clients)
         self.lock_clients(installed, downloading)
         current = settings.bandwidth_limit // MEGABYTE
         self.limit.clear()
@@ -639,6 +807,7 @@ class SettingsPage(Page):
             self.proton.setCurrentIndex(max(index, 0))
         self._loading = False
         self.update_free()
+        self.update_other()
 
     def lock_folder(self, reason: str) -> None:
         """Downloads write into the current folder, so it stays until they are done."""
@@ -679,10 +848,13 @@ class SettingsPage(Page):
         s.region, s.locale = values['region'], values['locale']
         s.bandwidth_limit = int(values['limit']) * MEGABYTE
         s.proton = values['proton']
-        # A locked box shows the client for another reason. The user's own choice for it stays.
-        locked = {code for code, box in self.extras.items() if not box.isEnabled()}
-        s.extra_clients = sorted({code for code in values['extra'] if code not in locked}
-                                 | {code for code in s.extra_clients if code in locked})
+        s.show_other_clients = values['show_other']
+        # Only a box the user changed counts. A locked box shows the client for its download,
+        # and the user's own choice for it stays.
+        for code, choice in self.choices.items():
+            wanted = choice['box'].isChecked()
+            if choice['box'].isEnabled() and wanted != self.listed(code):
+                (s.listed if wanted else s.unlisted)(code)
         s.save()
         self.saved_note.setText('Saved.')
         QTimer.singleShot(1600, lambda: self.saved_note.setText('Changes save automatically.'))

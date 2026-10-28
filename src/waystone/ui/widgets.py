@@ -133,8 +133,8 @@ class ClientRow(QWidget):
         name = ElidedLabel(client.label)
         name.setStyleSheet('font-weight: 600;')
         top.addWidget(name, 1)
-        if client.test:
-            top.addWidget(label('TEST', 'tag'))
+        if client.optional:
+            top.addWidget(label('TEST' if client.test else 'OTHER', 'tag'))
         self.status = ElidedLabel('', 'small')
         text.addLayout(top)
         text.addWidget(self.status)
@@ -143,9 +143,10 @@ class ClientRow(QWidget):
 
 
 class ClientList(QListWidget):
-    """Clients grouped by game, with test clients under their game."""
+    """Clients grouped by game, with test and other clients under their game."""
 
     selected = Signal(str)
+    open_settings = Signal()
 
     def __init__(self):
         super().__init__()
@@ -155,6 +156,17 @@ class ClientList(QListWidget):
         self.currentItemChanged.connect(self._changed)
         self.itemClicked.connect(lambda item: self._changed(item, None))
         self.itemActivated.connect(lambda item: self._changed(item, None))
+        # Shown in place of the rows when every client is hidden.
+        self.empty = QWidget(self)
+        hint = QVBoxLayout(self.empty)
+        hint.setContentsMargins(SPACING + 2, 14, SPACING, 0)
+        hint.setSpacing(SPACING)
+        hint.addWidget(label('Every client is hidden from the list.', 'small', wrap=True))
+        self.empty_button = fixed(QPushButton('Choose clients'))
+        self.empty_button.clicked.connect(self.open_settings.emit)
+        hint.addWidget(self.empty_button, 0, Qt.AlignLeft)
+        hint.addStretch()
+        self.empty.hide()
 
     # Row and heading heights, from roomy to compact. The roomiest that fits is used.
     DENSITIES = [(54, 32, 12), (50, 30, 10), (44, 28, 8), (40, 24, 4)]
@@ -174,10 +186,10 @@ class ClientList(QListWidget):
             heading = label(FAMILY_NAMES[family].upper(), 'group')
             self.setItemWidget(header, heading)
             self.headings.append((header, heading))
-            public = [c for c in members if not c.test]
+            public = [c for c in members if not c.optional]
             nested = []
             for game in public:
-                nested += [game] + [c for c in members if c.test and c.parent == game.code]
+                nested += [game] + [c for c in members if c.optional and c.parent == game.code]
             nested += [c for c in members if c not in nested]
             for client in nested:
                 item = QListWidgetItem()
@@ -189,6 +201,8 @@ class ClientList(QListWidget):
                     self.setCurrentItem(item)
         if self.currentItem() is None and self.rows:
             self.select(next(iter(self.rows)))
+        self.empty.setGeometry(self.viewport().geometry())
+        self.empty.setVisible(not self.rows)
         self._density = None
         self.fit_rows()
         self.blockSignals(False)
@@ -229,6 +243,7 @@ class ClientList(QListWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self.empty.setGeometry(self.viewport().geometry())
         self.fit_rows()
         if self.currentItem():
             self.scrollToItem(self.currentItem())
@@ -340,6 +355,7 @@ class FactsCard(QFrame):
         self.texts: list[str] = []
 
     WIDE = {'Folder', 'Installs into', 'Download size'}
+    PATHS = {'Folder', 'Installs into'}
     PLACEHOLDERS = {'Never', 'Not known yet', 'Being calculated'}
 
     def set_facts(self, facts: list[tuple[str, str]]) -> None:
@@ -366,6 +382,8 @@ class FactsCard(QFrame):
         self.cells, self.names = [], names
         narrow = [f for f in facts if f[0] not in self.WIDE]
         wide = [f for f in facts if f[0] in self.WIDE]
+        if len(narrow) % 2 and wide and wide[0][0] not in self.PATHS:
+            narrow.append(wide.pop(0))      # a short value fills the gap instead of a row of its own
         for index, (name, text) in enumerate(narrow):
             row, column = divmod(index, 2)
             self._add(name, text, row, column * 2, 1)

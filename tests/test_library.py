@@ -883,3 +883,41 @@ def test_progress_counts_only_stored_objects_while_arriving_bytes_drive_the_rate
     downloading = [event for event in events if event["stage"] == "downloading"]
     assert downloading and all(event["bytes"] == downloading[0]["bytes"] for event in downloading)
     assert max(event.get("received", 0) for event in downloading) == downloading[0]["total_bytes"]
+
+
+def test_a_test_build_starts_and_is_found_running_by_its_own_executable(tmp_path, monkeypatch):
+    # PTRs ship WowT.exe and betas WowB.exe. Neither has a Wow.exe to start.
+    from waystone import system
+    root = tmp_path / "install"
+    run_build(root, FixtureCDN(SyntheticBuild(executable_path="WowT.exe"), tmp_path / "cache"))
+    library = Library(root)
+    assert library.executable("wowf") == library.root / "_forever_/WowT.exe"
+    assert library.executable("wowf").is_file()
+    # The process list as Wine shows it, so the check does not depend on what /proc exposes here.
+    game = [(4242, f"C:\\windows\\system32\\start.exe {library.root / '_forever_/WowT.exe'}", str(tmp_path))]
+    monkeypatch.setattr(system, "running_executables", lambda: game)
+    assert library.running("wowf") is True
+    monkeypatch.setattr(system, "running_executables", lambda: [(4243, "python3 -c pass", str(tmp_path))])
+    assert library.running("wowf") is False
+
+
+def test_a_product_naming_another_clients_folder_is_not_installed_over_it(tmp_path):
+    root = tmp_path / "install"
+    forever = SyntheticBuild(changed=b"forever content")
+    run_build(root, FixtureCDN(forever, tmp_path / "forever-cache"))
+    event = SyntheticBuild("0.0.2.2", changed=b"event content", product="wowe1", folder="_forever_")
+    with pytest.raises(UpdateError, match="_forever_, which Forever already uses"):
+        run_build(root, FixtureCDN(event, tmp_path / "event-cache"), product="wowe1")
+    assert (root / "_forever_/Wow.exe").read_bytes() == forever.wow.decoded
+    assert Library(root).installed() == ["wowf"]
+
+
+def test_a_client_installed_from_discovery_is_listed_by_the_library(tmp_path):
+    root = tmp_path / "install"
+    run_build(root, FixtureCDN(SyntheticBuild(), tmp_path / "cache"))
+    clients = root / ".waystone/clients"
+    (clients / "wowe1").mkdir()
+    (clients / "wowe1/state.json").write_text((clients / "wowf/state.json").read_text())
+    (clients / "not-a-product").mkdir()
+    (clients / "not-a-product/state.json").write_text("{}")
+    assert Library(root).installed() == ["wowe1", "wowf"]

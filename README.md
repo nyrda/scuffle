@@ -13,9 +13,21 @@ Windows yet. See [DESIGN.md](DESIGN.md) for the architecture.
 
 ## Clients
 
-World of Warcraft, Mists of Pandaria Classic, Burning Crusade Anniversary,
-Classic Era with its Era, Hardcore and Season of Discovery modes, and Forever.
-PTRs and betas appear after enabling **Show test clients** in the settings.
+The list shows the live clients: World of Warcraft, Mists of Pandaria Classic,
+Burning Crusade Anniversary, Classic Era with its Era, Hardcore and Season of
+Discovery modes, and Forever. **Settings › Clients** chooses what else appears.
+
+- **Test clients**: the PTRs and betas, each with its own checkbox.
+- **Other public clients**: older builds Blizzard still publishes openly, such
+  as the Dark Realm Test, a retail event build and a Classic submission build.
+  Turn on **Show other public clients** to choose from them. Turned off, none of
+  them is listed, installed ones included. Many are old and may not connect.
+
+Each row shows the version Blizzard publishes for your region, and whether the
+client is installed, downloading or older than its live game. Any client,
+installed or not, can be hidden from the list there or with **Hide from list**
+in its **⋯** menu. Waystone looks up the current clients on Blizzard's version
+service in the background and keeps the last answer for when it is offline.
 
 ## Run
 
