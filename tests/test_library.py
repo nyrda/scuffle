@@ -185,7 +185,7 @@ class FixtureCDN:
         if progress:
             progress(0, 0)
 
-    def fetch_many(self, entries, *, as_bytes=False):
+    def fetch_many(self, entries, *, as_bytes=False, **kwargs):
         for entry in entries:
             if self.interrupt_after is not None and len(self.fetched_keys) == self.interrupt_after:
                 raise KeyboardInterrupt
@@ -785,8 +785,8 @@ def test_download_manager_pauses_and_resumes_without_fetching_twice(tmp_path):
     manager = None
 
     class PausingCDN(FixtureCDN):
-        def fetch_many(self, entries, *, as_bytes=False):
-            for entry, payload in super().fetch_many(entries, as_bytes=as_bytes):
+        def fetch_many(self, entries, *, as_bytes=False, **kwargs):
+            for entry, payload in super().fetch_many(entries, as_bytes=as_bytes, **kwargs):
                 fetched.append(entry.ekey)
                 if len(fetched) == 1:
                     manager.pause("wowf")   # what the Pause button does
@@ -843,8 +843,8 @@ def test_pausing_everything_never_starts_a_waiting_download(tmp_path):
     started, release = [], threading.Event()
 
     class SlowCDN(FixtureCDN):
-        def fetch_many(self, entries, *, as_bytes=False):
-            for item in super().fetch_many(entries, as_bytes=as_bytes):
+        def fetch_many(self, entries, *, as_bytes=False, **kwargs):
+            for item in super().fetch_many(entries, as_bytes=as_bytes, **kwargs):
                 release.wait(5)
                 yield item
 

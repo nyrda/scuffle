@@ -7,13 +7,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import threading
-import time
 from typing import Callable
 
 from . import catalog
 from .library import Cancelled, Library, LibraryError, Updater
 from .ngdp.cdn import CDNClient, Throttle
 from .settings import Settings, cache_dir
+from .rates import RateSmoother
 
 QUEUED, RUNNING, PAUSED, FAILED, DONE = 'queued', 'running', 'paused', 'failed', 'done'
 
@@ -26,7 +26,7 @@ class Job:
     stage: str = ''
     done_bytes: int = 0
     total_bytes: int = 0
-    speed: float = 0.0            # bytes per second over the last few seconds
+    speed: float = 0.0            # smoothed useful bytes per second
     error: str = ''
     result: dict = field(default_factory=dict)
     cancel_requested: bool = False
@@ -168,6 +168,7 @@ class DownloadManager:
             except (LibraryError, OSError, ValueError, RuntimeError) as error:
                 job.status, job.error = FAILED, str(error)
             finally:
+                job.speed = 0.0
                 self._current = None
             self._notify(job)
 
@@ -175,19 +176,20 @@ class DownloadManager:
         state = self.library.state(job.client) or {}
         region = state.get('region') or self.settings.region
         locale = state.get('locale') or self.settings.locale
-        samples: list[tuple[float, int]] = []
+        rate = RateSmoother()
+        job.speed = 0.0
 
         def progress(event: dict) -> None:
-            job.stage = event['stage']
+            nonlocal rate
+            stage = event['stage']
+            if stage != job.stage:
+                rate = RateSmoother()
+                job.speed = 0.0
+            job.stage = stage
             if 'total_bytes' in event:
                 job.done_bytes, job.total_bytes = event['bytes'], event['total_bytes']
-                now = time.monotonic()
-                samples.append((now, job.done_bytes))
-                while samples and now - samples[0][0] > 5:
-                    samples.pop(0)
-                if len(samples) > 1 and samples[-1][0] > samples[0][0]:
-                    job.speed = (samples[-1][1] - samples[0][1]) / (samples[-1][0] - samples[0][0])
-            elif event['stage'] == 'planned':
+                job.speed = rate.update(job.done_bytes) if stage == 'downloading' else 0.0
+            elif stage == 'planned':
                 job.total_bytes = event['encoded_bytes']
                 job.done_bytes = event['encoded_bytes'] - event['missing_bytes']
             self._notify(job)

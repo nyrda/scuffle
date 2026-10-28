@@ -1,0 +1,1941 @@
+{
+  "baseline_commit": "a08f761",
+  "branch": "downloads-engine",
+  "product": "wow_classic_era",
+  "region": "eu",
+  "version": "1.15.9.70576",
+  "workers": 16,
+  "objects_per_run": 8829,
+  "useful_bytes_per_run": 536870872,
+  "method": "The same objects from four advertised archives, each fetched to an empty CASC store. CDN indexes were cached. Displayed speed sampled every second, CV excludes the first five seconds. Decimal MB/s. No full client installation.",
+  "selection": "before and before-repeat use the original engine. after is an intermediate round-robin candidate. after-weighted and after-final use the final host scheduling and rate estimator.",
+  "wire_bytes_total": 2714173711,
+  "metadata_wire_bytes": 473026,
+  "additional_host_probe_bytes": 16777216,
+  "before_aggregate_MBps": 24.796468507715325,
+  "after_aggregate_MBps": 24.707195309869693,
+  "findings": [
+    "Progress was emitted only after verified objects were stored. The rate window began at the first completion, omitted initial transfer time, and retained stale speed during silence.",
+    "The original engine already consumed groups in completion order. It did wait for the caller to finish storing a group before scheduling its replacement.",
+    "CASC writes were already off the network threads. Store time was about 4.2 seconds per 537 MB, so no storage-lock redesign was justified.",
+    "Only the first HTTPS mirror was used. The additional advertised hostname supported verified HTTPS but was about ten times slower in a single-range probe and sometimes disconnected.",
+    "The old throttle allowed a full read to overdraw its bucket. This was especially bursty at low limits.",
+    "Repeated live tests show no consistent throughput gain. The revised display tracks actual transfer throughput much more closely and is substantially steadier."
+  ],
+  "changes": [
+    "Count socket bytes as they arrive, excluding gaps and duplicate retry progress. Emit progress during network silence.",
+    "Use an eight-second time-weighted window with a two-second warm-up. Clear rates across stages and on stop. Existing shared UI formatting derives ETA from this rate.",
+    "Choose verified HTTPS hosts by observed rate and current load. Probe unknown alternates and cool down failed hosts for 30 seconds.",
+    "Bound socket inactivity to five seconds and retry trickling responses on another host, excluding intentional throttle waits.",
+    "Schedule a replacement group before the consumer stores its predecessor, retaining bounded completion-order consumption.",
+    "Reserve bandwidth tokens before reads with a 100 ms burst allowance capped at 64 KiB. Check cancellation during reads, throttling and retry backoff.",
+    "Retain BLTE, object-size, range and index integrity checks. Checkpoint completed objects on cancellation and close CDN pools with the updater."
+  ],
+  "host_probe_seconds": {
+    "level3.blizzard.com": 6.74594,
+    "level3.ssl.blizzard.com": 0.67038
+  },
+  "runs": {
+    "before": {
+      "label": "before",
+      "seconds": 19.380010627006413,
+      "stored_bytes": 536870872,
+      "wire_bytes": 536870872,
+      "MBps": 27.702300186144388,
+      "shown_mean_MBps": 35.75185382072545,
+      "shown_cv": 0.3170062631869335,
+      "write_seconds": 4.174595347198192,
+      "requests": {
+        "level3.ssl.blizzard.com": 67
+      },
+      "request_max_seconds": 8.734779877006076,
+      "samples": [
+        {
+          "seconds": 1.0001547949941596,
+          "speed": 0,
+          "wire": 20971520,
+          "stored": 0
+        },
+        {
+          "seconds": 2.000242287002038,
+          "speed": 0,
+          "wire": 48234496,
+          "stored": 0
+        },
+        {
+          "seconds": 3.0003160490014125,
+          "speed": 0,
+          "wire": 78381056,
+          "stored": 0
+        },
+        {
+          "seconds": 4.000385799998185,
+          "speed": 0,
+          "wire": 107308752,
+          "stored": 3768240
+        },
+        {
+          "seconds": 5.000469182006782,
+          "speed": 47834200.67725593,
+          "wire": 136077111,
+          "stored": 49305202
+        },
+        {
+          "seconds": 6.000541693007108,
+          "speed": 61359501.40481619,
+          "wire": 161505079,
+          "stored": 130834231
+        },
+        {
+          "seconds": 7.000612724004895,
+          "speed": 61359501.40481619,
+          "wire": 191127351,
+          "stored": 130834231
+        },
+        {
+          "seconds": 8.0007134960033,
+          "speed": 32832281.602426004,
+          "wire": 219599254,
+          "stored": 134361288
+        },
+        {
+          "seconds": 9.000788677003584,
+          "speed": 33036132.623267833,
+          "wire": 247610065,
+          "stored": 169305671
+        },
+        {
+          "seconds": 10.00086625800759,
+          "speed": 30608908.516033664,
+          "wire": 276445731,
+          "stored": 232941154
+        },
+        {
+          "seconds": 11.00095448999491,
+          "speed": 33261774.166918285,
+          "wire": 304402327,
+          "stored": 261672855
+        },
+        {
+          "seconds": 12.00102508100099,
+          "speed": 34077826.98745159,
+          "wire": 332253145,
+          "stored": 276098897
+        },
+        {
+          "seconds": 13.001096300999052,
+          "speed": 34856775.49805408,
+          "wire": 357755569,
+          "stored": 309521073
+        },
+        {
+          "seconds": 14.001166702000774,
+          "speed": 31221306.66622682,
+          "wire": 387094768,
+          "stored": 333617392
+        },
+        {
+          "seconds": 15.001208971996675,
+          "speed": 24139916.068132333,
+          "wire": 414457752,
+          "stored": 367009688
+        },
+        {
+          "seconds": 16.001280252006836,
+          "speed": 25098603.789088674,
+          "wire": 441898171,
+          "stored": 391042235
+        },
+        {
+          "seconds": 17.00135566300014,
+          "speed": 28578461.829583503,
+          "wire": 470192913,
+          "stored": 407278353
+        },
+        {
+          "seconds": 18.001428023999324,
+          "speed": 27305138.077020466,
+          "wire": 500304680,
+          "stored": 447089448
+        },
+        {
+          "seconds": 19.00149626399798,
+          "speed": 30707477.999790154,
+          "wire": 529011666,
+          "stored": 494790633
+        }
+      ],
+      "version": "1.15.9.70576"
+    },
+    "after": {
+      "label": "after",
+      "seconds": 20.86448678500892,
+      "stored_bytes": 536870872,
+      "wire_bytes": 543394795,
+      "MBps": 25.73132411700346,
+      "shown_mean_MBps": 26.595847009618428,
+      "shown_cv": 0.02208073435691189,
+      "write_seconds": 4.452965795309865,
+      "requests": {
+        "level3.ssl.blizzard.com": 60,
+        "level3.blizzard.com": 9
+      },
+      "request_max_seconds": 10.119978089991491,
+      "samples": [
+        {
+          "seconds": 1.0001526709966129,
+          "speed": 0.0,
+          "wire": 21387803,
+          "stored": 0
+        },
+        {
+          "seconds": 2.000229990007938,
+          "speed": 0.0,
+          "wire": 48708287,
+          "stored": 0
+        },
+        {
+          "seconds": 3.000302118001855,
+          "speed": 25621018.86538554,
+          "wire": 78560362,
+          "stored": 16547216
+        },
+        {
+          "seconds": 4.0003757670056075,
+          "speed": 25694554.969902284,
+          "wire": 105254903,
+          "stored": 66337140
+        },
+        {
+          "seconds": 5.000451754996902,
+          "speed": 26107050.117442254,
+          "wire": 134212855,
+          "stored": 66337140
+        },
+        {
+          "seconds": 6.000532293997821,
+          "speed": 26563626.832335573,
+          "wire": 162543659,
+          "stored": 99061735
+        },
+        {
+          "seconds": 7.000603891996434,
+          "speed": 26676370.246273458,
+          "wire": 190300145,
+          "stored": 129400073
+        },
+        {
+          "seconds": 8.000676869996823,
+          "speed": 26895788.688983064,
+          "wire": 218231838,
+          "stored": 165394897
+        },
+        {
+          "seconds": 9.00074910800322,
+          "speed": 27593717.263482038,
+          "wire": 245376021,
+          "stored": 165394897
+        },
+        {
+          "seconds": 10.00082060600107,
+          "speed": 27529912.696346812,
+          "wire": 274274603,
+          "stored": 173129069
+        },
+        {
+          "seconds": 11.000893374002771,
+          "speed": 26939164.00584673,
+          "wire": 300062116,
+          "stored": 250818404
+        },
+        {
+          "seconds": 12.000973921996774,
+          "speed": 27178789.604916684,
+          "wire": 327113309,
+          "stored": 268393350
+        },
+        {
+          "seconds": 13.001052460007486,
+          "speed": 27023675.365691125,
+          "wire": 353096712,
+          "stored": 284644730
+        },
+        {
+          "seconds": 14.001141179003753,
+          "speed": 26706812.844853614,
+          "wire": 379998592,
+          "stored": 300306114
+        },
+        {
+          "seconds": 15.00121033700998,
+          "speed": 26596657.302949145,
+          "wire": 406005424,
+          "stored": 316116274
+        },
+        {
+          "seconds": 16.001281195000047,
+          "speed": 26291551.090063162,
+          "wire": 431809529,
+          "stored": 374279013
+        },
+        {
+          "seconds": 17.00135421300365,
+          "speed": 26205830.7071922,
+          "wire": 457937886,
+          "stored": 388817467
+        },
+        {
+          "seconds": 18.001428750008927,
+          "speed": 25932797.644075442,
+          "wire": 482773048,
+          "stored": 413825308
+        },
+        {
+          "seconds": 19.001502758008428,
+          "speed": 25938402.074025057,
+          "wire": 505937081,
+          "stored": 432175043
+        },
+        {
+          "seconds": 20.001627667996217,
+          "speed": 25353405.669418484,
+          "wire": 529088356,
+          "stored": 438301553
+        }
+      ],
+      "version": "1.15.9.70576"
+    },
+    "after-weighted": {
+      "label": "after-weighted",
+      "seconds": 22.004393432012876,
+      "stored_bytes": 536870872,
+      "wire_bytes": 538178372,
+      "MBps": 24.39834906873364,
+      "shown_mean_MBps": 24.88875977212031,
+      "shown_cv": 0.012553345794093486,
+      "write_seconds": 4.343764113364159,
+      "requests": {
+        "level3.ssl.blizzard.com": 66,
+        "level3.blizzard.com": 3
+      },
+      "request_max_seconds": 5.462292550000711,
+      "request_details": [
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.600229286996182,
+          "error": null
+        },
+        {
+          "host": "level3.blizzard.com",
+          "seconds": 4.71204343700083,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.710986699006753,
+          "error": null
+        },
+        {
+          "host": "level3.blizzard.com",
+          "seconds": 0.10934910099604167,
+          "error": "RemoteDisconnected"
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.948347578989342,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.0132194700127,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.11234713900194,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.206235017001745,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.180343923988403,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.230817482006387,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.250100244011264,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.272529081004905,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.312985182987177,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.280908425003872,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.311055432001012,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.323220056001446,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.356317350000609,
+          "error": null
+        },
+        {
+          "host": "level3.blizzard.com",
+          "seconds": 0.7121669949992793,
+          "error": "IncompleteRead"
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.639491825990262,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.72255186100665,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.696693249992677,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.670412532999762,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.618281515999115,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.798863881005673,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.903567043002113,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.922043215992744,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.768292111009941,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.080079460996785,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.993349614000181,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.836846186997718,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.2306153519894,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.830194064998068,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.166089054007898,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.192850788997021,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.1929170549992705,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.645583420002367,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.181390398007352,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.398929657007102,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.181253682996612,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.968688615001156,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.237232653002138,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.8700730069977,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.0533788000029745,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.4481351529975655,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.594567548003397,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.189520518993959,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.142012529002386,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.026236475008773,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.395330081999418,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.26612927899987,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.438784826998017,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.413305786001729,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.241490100001101,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.2451537730084965,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.462292550000711,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.199187719990732,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.394200229988201,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.201046939997468,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.187082301999908,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.0246713679953245,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.365708366007311,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.713288350001676,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.013511591998395,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.662494542004424,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.857151108997641,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.941244410991203,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 0.8760677429963835,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 2.7730389420030406,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 1.725476145002176,
+          "error": null
+        }
+      ],
+      "samples": [
+        {
+          "seconds": 1.0001427130046068,
+          "speed": 0.0,
+          "wire": 18240839,
+          "stored": 0
+        },
+        {
+          "seconds": 2.000234545004787,
+          "speed": 0.0,
+          "wire": 45537313,
+          "stored": 0
+        },
+        {
+          "seconds": 3.000332759009325,
+          "speed": 23785069.47120767,
+          "wire": 72711988,
+          "stored": 0
+        },
+        {
+          "seconds": 4.000413202011259,
+          "speed": 24856047.895880394,
+          "wire": 99426406,
+          "stored": 0
+        },
+        {
+          "seconds": 5.0004831260012,
+          "speed": 24900986.399101242,
+          "wire": 124434960,
+          "stored": 23361461
+        },
+        {
+          "seconds": 6.00055966200307,
+          "speed": 24607675.271589626,
+          "wire": 146549059,
+          "stored": 89427731
+        },
+        {
+          "seconds": 7.00059810600942,
+          "speed": 24334168.68946276,
+          "wire": 172281385,
+          "stored": 130834231
+        },
+        {
+          "seconds": 8.000668713008054,
+          "speed": 24528615.21438368,
+          "wire": 197828755,
+          "stored": 130834231
+        },
+        {
+          "seconds": 9.000793763014372,
+          "speed": 25444146.873952966,
+          "wire": 222742756,
+          "stored": 130834231
+        },
+        {
+          "seconds": 10.00087078200886,
+          "speed": 25260925.93718461,
+          "wire": 248201963,
+          "stored": 155960331
+        },
+        {
+          "seconds": 11.000942982005654,
+          "speed": 24834325.52098708,
+          "wire": 272717456,
+          "stored": 221672792
+        },
+        {
+          "seconds": 12.001033203006955,
+          "speed": 24638666.642135523,
+          "wire": 298165242,
+          "stored": 261672855
+        },
+        {
+          "seconds": 13.001125205002609,
+          "speed": 24659583.066413887,
+          "wire": 323265873,
+          "stored": 261672855
+        },
+        {
+          "seconds": 14.00121018801292,
+          "speed": 24867851.107005775,
+          "wire": 348415484,
+          "stored": 268435419
+        },
+        {
+          "seconds": 15.001285761012696,
+          "speed": 25234255.297199834,
+          "wire": 373622792,
+          "stored": 275809988
+        },
+        {
+          "seconds": 16.001352085004328,
+          "speed": 25066174.32469884,
+          "wire": 397774944,
+          "stored": 331987523
+        },
+        {
+          "seconds": 17.001422129003913,
+          "speed": 25034981.557572655,
+          "wire": 423605538,
+          "stored": 388817467
+        },
+        {
+          "seconds": 18.001495915013948,
+          "speed": 25011952.08072682,
+          "wire": 448545954,
+          "stored": 388817467
+        },
+        {
+          "seconds": 19.001565221013152,
+          "speed": 25176655.786188833,
+          "wire": 473517248,
+          "stored": 388817467
+        },
+        {
+          "seconds": 20.001633659005165,
+          "speed": 25094175.696858108,
+          "wire": 498672075,
+          "stored": 397147935
+        },
+        {
+          "seconds": 21.00166811600502,
+          "speed": 25004791.189577423,
+          "wire": 523013040,
+          "stored": 454132518
+        },
+        {
+          "seconds": 22.00174581600004,
+          "speed": 24297745.243125893,
+          "wire": 538178372,
+          "stored": 536870872
+        }
+      ],
+      "version": "1.15.9.70576"
+    },
+    "before-repeat": {
+      "label": "before-repeat",
+      "seconds": 23.922193623002386,
+      "stored_bytes": 536870872,
+      "wire_bytes": 541608558,
+      "MBps": 22.44237633307055,
+      "shown_mean_MBps": 33.801669942539206,
+      "shown_cv": 0.4116080601105111,
+      "write_seconds": 4.174306237502606,
+      "requests": {
+        "level3.ssl.blizzard.com": 74
+      },
+      "request_max_seconds": 11.054372928003431,
+      "request_details": [
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 0.1035606520017609,
+          "error": "RemoteDisconnected"
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 0.13181502500083297,
+          "error": "IncompleteRead"
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 0.22853362699970603,
+          "error": "IncompleteRead"
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 0.35582385600719135,
+          "error": "IncompleteRead"
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 0.5101644940004917,
+          "error": "IncompleteRead"
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 0.7841435209993506,
+          "error": "IncompleteRead"
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 0.9902429590001702,
+          "error": "IncompleteRead"
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.184879688997171,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.551660006007296,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.534097335010301,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.559785393008497,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.660870456005796,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.802639584013377,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.768076391002978,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.846247346999007,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.668562507999013,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.557985389008536,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.709084987989627,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.694539788004477,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.420833185999072,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.693025501997909,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.587241668996285,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.583724891999736,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.139097278006375,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.036026004003361,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.173333330007154,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.137505331993452,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.068795942002907,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.392805088005844,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.152396536999731,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.134631367996917,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.137466340995161,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.052662354006316,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 3.7180948029999854,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 3.5654505170095945,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 3.699642159001087,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.226047408999875,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 1.590657338994788,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.2221962259936845,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 2.886915556009626,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 2.9720430669985944,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 3.0119865360029507,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 3.832203740006662,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 7.7674820860120235,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 3.7549186870019184,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 3.776043969002785,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 8.22139041000628,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 6.297847254012595,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.860951706999913,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 8.66645716399944,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.897580350007047,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 9.76043504300469,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.944327481003711,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 10.401153560000239,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 10.307898154991562,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 10.196816619994934,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 11.054372928003431,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 7.306548930995632,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 7.482866024001851,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 6.756600691005588,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 7.369171530997846,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 7.7231376729905605,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 7.555044713008101,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 1.150957773992559,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.204641703996458,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 3.404979523998918,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 3.9777578210050706,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.44245038999361,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 3.4815056399966124,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 3.5087841370113892,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 3.5795830940041924,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.459890887999791,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 3.3051693180022994,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 3.382510563998949,
+          "error": null
+        }
+      ],
+      "samples": [
+        {
+          "seconds": 1.0001513609895483,
+          "speed": 0,
+          "wire": 19442602,
+          "stored": 0
+        },
+        {
+          "seconds": 2.0002412399917375,
+          "speed": 0,
+          "wire": 46680726,
+          "stored": 0
+        },
+        {
+          "seconds": 3.0003129089891445,
+          "speed": 0,
+          "wire": 73419414,
+          "stored": 0
+        },
+        {
+          "seconds": 4.000390579996747,
+          "speed": 0,
+          "wire": 99633814,
+          "stored": 0
+        },
+        {
+          "seconds": 5.000460390001535,
+          "speed": 31894396.78174856,
+          "wire": 127248216,
+          "stored": 28853355
+        },
+        {
+          "seconds": 6.000533671001904,
+          "speed": 59342274.70161797,
+          "wire": 152349133,
+          "stored": 107801561
+        },
+        {
+          "seconds": 7.000615593991824,
+          "speed": 59342274.70161797,
+          "wire": 178301389,
+          "stored": 130834231
+        },
+        {
+          "seconds": 8.000687355990522,
+          "speed": 59342274.70161797,
+          "wire": 205302221,
+          "stored": 130834231
+        },
+        {
+          "seconds": 9.000757368994527,
+          "speed": 31180975.131335232,
+          "wire": 230869385,
+          "stored": 147488499
+        },
+        {
+          "seconds": 10.000829122989671,
+          "speed": 33283644.056499276,
+          "wire": 256171936,
+          "stored": 200345805
+        },
+        {
+          "seconds": 11.000901257997612,
+          "speed": 33431416.69509013,
+          "wire": 271822146,
+          "stored": 252666540
+        },
+        {
+          "seconds": 12.000976732990239,
+          "speed": 33431416.69509013,
+          "wire": 295415106,
+          "stored": 252666540
+        },
+        {
+          "seconds": 13.001051029001246,
+          "speed": 33431416.69509013,
+          "wire": 319532354,
+          "stored": 252666540
+        },
+        {
+          "seconds": 14.00113730499288,
+          "speed": 34653159.31343242,
+          "wire": 340953715,
+          "stored": 318128093
+        },
+        {
+          "seconds": 15.001222872990184,
+          "speed": 34653159.31343242,
+          "wire": 346740412,
+          "stored": 325749798
+        },
+        {
+          "seconds": 16.001304641002207,
+          "speed": 34653159.31343242,
+          "wire": 357488316,
+          "stored": 325749798
+        },
+        {
+          "seconds": 17.00139150999894,
+          "speed": 21737016.822547868,
+          "wire": 381340320,
+          "stored": 334135306
+        },
+        {
+          "seconds": 18.00146624899935,
+          "speed": 21737016.822547868,
+          "wire": 406506144,
+          "stored": 334135306
+        },
+        {
+          "seconds": 19.001538047989015,
+          "speed": 6468292.452825101,
+          "wire": 431737334,
+          "stored": 342430114
+        },
+        {
+          "seconds": 20.00161291898985,
+          "speed": 12320577.798616523,
+          "wire": 456297589,
+          "stored": 390742495
+        },
+        {
+          "seconds": 21.001692289995844,
+          "speed": 22003895.59187592,
+          "wire": 478433738,
+          "stored": 435198395
+        },
+        {
+          "seconds": 22.00176208099583,
+          "speed": 39662680.659913525,
+          "wire": 502188293,
+          "stored": 465469039
+        },
+        {
+          "seconds": 23.00185441398935,
+          "speed": 39662680.659913525,
+          "wire": 523946245,
+          "stored": 465469039
+        }
+      ],
+      "version": "1.15.9.70576"
+    },
+    "after-final": {
+      "label": "after-final",
+      "seconds": 21.45427237499098,
+      "stored_bytes": 536870872,
+      "wire_bytes": 536870872,
+      "MBps": 25.023960851071546,
+      "shown_mean_MBps": 25.670707859897025,
+      "shown_cv": 0.014007696251318898,
+      "write_seconds": 4.19497269965359,
+      "requests": {
+        "level3.blizzard.com": 1,
+        "level3.ssl.blizzard.com": 67
+      },
+      "request_max_seconds": 5.455284908995964,
+      "request_details": [
+        {
+          "host": "level3.blizzard.com",
+          "seconds": 0.119128844991792,
+          "error": "RemoteDisconnected"
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.451851694990182,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.742303495993838,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.788467602993478,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.8796370569907594,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.893873356995755,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.905383167992113,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.993176648000372,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.011980226001469,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.078256339009386,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.06828206400678,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.0822408349922625,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.070221224988927,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.08281330599857,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.081836900004419,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.124583763012197,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.13184925900714,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 3.903520195002784,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.006385468004737,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.153212596997037,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.322550779994344,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.4997250879969215,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.4914958179870155,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.660154375000275,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.693577878992073,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.42300242499914,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.941393461005646,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.023515143999248,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.969578121992527,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.846875454997644,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.844461086991942,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.743076501006726,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.011882210004842,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 3.8595661469880724,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.8566137999878265,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.955879059998551,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.956688170001144,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.658953213001951,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.813319909007987,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.571056130997022,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.023928162001539,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.184917089994997,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.111351049999939,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.5659183759999,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.1664487259986345,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.0834091500000795,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.954040277996683,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.228710253009922,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.134639843003242,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.235748684994178,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.437140574998921,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.455284908995964,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.230514430004405,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.236750406998908,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.22647959299502,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.144210544996895,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.143472309006029,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.271248479999485,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 0.9424747699958971,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.898525980010163,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.450506996989134,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.445914628988248,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.773826471006032,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 5.150101042003371,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.688407248002477,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 4.8788110009918455,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 3.612220459996024,
+          "error": null
+        },
+        {
+          "host": "level3.ssl.blizzard.com",
+          "seconds": 2.0527244359982433,
+          "error": null
+        }
+      ],
+      "samples": [
+        {
+          "seconds": 1.000143297991599,
+          "speed": 0.0,
+          "wire": 20344543,
+          "stored": 0
+        },
+        {
+          "seconds": 2.000229823999689,
+          "speed": 0.0,
+          "wire": 48303007,
+          "stored": 0
+        },
+        {
+          "seconds": 3.000298209997709,
+          "speed": 24651881.43633415,
+          "wire": 74901789,
+          "stored": 0
+        },
+        {
+          "seconds": 4.00036599599116,
+          "speed": 25073871.889978442,
+          "wire": 101290927,
+          "stored": 0
+        },
+        {
+          "seconds": 5.00043250300223,
+          "speed": 25564598.162613213,
+          "wire": 128412606,
+          "stored": 20137847
+        },
+        {
+          "seconds": 6.00050972099416,
+          "speed": 25117428.363966867,
+          "wire": 149933375,
+          "stored": 90747735
+        },
+        {
+          "seconds": 7.000596819998464,
+          "speed": 25192034.154826727,
+          "wire": 176632442,
+          "stored": 130834231
+        },
+        {
+          "seconds": 8.000668499997118,
+          "speed": 25435186.809295285,
+          "wire": 203547934,
+          "stored": 130834231
+        },
+        {
+          "seconds": 9.012744927997119,
+          "speed": 26105632.027603146,
+          "wire": 230141053,
+          "stored": 146028373
+        },
+        {
+          "seconds": 10.01283100899309,
+          "speed": 26036564.680013143,
+          "wire": 256710132,
+          "stored": 179291073
+        },
+        {
+          "seconds": 11.012904949995573,
+          "speed": 25792332.91212284,
+          "wire": 281767675,
+          "stored": 238263871
+        },
+        {
+          "seconds": 12.01297311099188,
+          "speed": 25943559.414305344,
+          "wire": 309051483,
+          "stored": 261672855
+        },
+        {
+          "seconds": 13.013043753002421,
+          "speed": 25889605.01729086,
+          "wire": 335225374,
+          "stored": 268435419
+        },
+        {
+          "seconds": 14.013111034990288,
+          "speed": 26244016.171939448,
+          "wire": 360662221,
+          "stored": 285047259
+        },
+        {
+          "seconds": 15.013182167997002,
+          "speed": 26079537.685285326,
+          "wire": 385474389,
+          "stored": 308201022
+        },
+        {
+          "seconds": 16.013260881998576,
+          "speed": 25852019.75667384,
+          "wire": 410597714,
+          "stored": 356036577
+        },
+        {
+          "seconds": 17.01333315599186,
+          "speed": 25745865.627551157,
+          "wire": 435715299,
+          "stored": 388817467
+        },
+        {
+          "seconds": 18.01340487100242,
+          "speed": 25489754.365083415,
+          "wire": 461086627,
+          "stored": 397147935
+        },
+        {
+          "seconds": 19.013473136001267,
+          "speed": 25607225.95847092,
+          "wire": 486282834,
+          "stored": 397147935
+        },
+        {
+          "seconds": 20.01354309199087,
+          "speed": 25274873.96457798,
+          "wire": 511166944,
+          "stored": 435991154
+        },
+        {
+          "seconds": 21.013616457988974,
+          "speed": 25031798.5466299,
+          "wire": 531419573,
+          "stored": 520204191
+        }
+      ],
+      "version": "1.15.9.70576"
+    }
+  },
+  "regression_mutations": [
+    {
+      "mutation": "warmup",
+      "test": "test_rate_warmup_counts_from_transfer_start_and_resets_on_resume",
+      "exit_code": 1,
+      "detected": true
+    },
+    {
+      "mutation": "window",
+      "test": "test_rate_weights_elapsed_time_and_interpolates_window_boundary",
+      "exit_code": 1,
+      "detected": true
+    },
+    {
+      "mutation": "bounded_history",
+      "test": "test_rate_is_independent_of_callback_frequency",
+      "exit_code": 1,
+      "detected": true
+    },
+    {
+      "mutation": "prepaid_tokens",
+      "test": "test_throttle_pays_before_first_read_and_bounds_idle_burst",
+      "exit_code": 1,
+      "detected": true
+    },
+    {
+      "mutation": "short_read_refund",
+      "test": "test_throttle_shares_budget_refunds_short_reads_and_changes_limit",
+      "exit_code": 1,
+      "detected": true
+    },
+    {
+      "mutation": "interruptible_throttle",
+      "test": "test_throttle_cancel_interrupts_a_low_bandwidth_wait",
+      "exit_code": 1,
+      "detected": true
+    },
+    {
+      "mutation": "streaming_bytes",
+      "test": "test_progress_reports_partial_socket_reads_before_response_completes",
+      "exit_code": 1,
+      "detected": true
+    },
+    {
+      "mutation": "host_cooldown",
+      "test": "test_stalled_host_fails_over_and_cools_down[True]",
+      "exit_code": 1,
+      "detected": true
+    },
+    {
+      "mutation": "trickle_watchdog",
+      "test": "test_stalled_host_fails_over_and_cools_down[False]",
+      "exit_code": 1,
+      "detected": true
+    },
+    {
+      "mutation": "inactivity_timeout",
+      "test": "test_socket_inactivity_timeout_is_bounded",
+      "exit_code": 1,
+      "detected": true
+    },
+    {
+      "mutation": "exclude_throttling_from_watchdog",
+      "test": "test_throttle_time_is_not_mistaken_for_a_stalled_host",
+      "exit_code": 1,
+      "detected": true
+    },
+    {
+      "mutation": "mirror_rotation",
+      "test": "test_mirrors_rotate_and_hosts_use_verified_https",
+      "exit_code": 1,
+      "detected": true
+    },
+    {
+      "mutation": "gap_accounting",
+      "test": "test_group_progress_excludes_archive_gaps",
+      "exit_code": 1,
+      "detected": true
+    },
+    {
+      "mutation": "retry_accounting",
+      "test": "test_bulk_refills_before_storage_and_never_counts_retries_twice",
+      "exit_code": 1,
+      "detected": true
+    },
+    {
+      "mutation": "read_cancellation",
+      "test": "test_cancellation_stops_bulk_before_scheduling_and_during_read",
+      "exit_code": 1,
+      "detected": true
+    },
+    {
+      "mutation": "heartbeat",
+      "test": "test_bulk_heartbeat_reports_silence_and_consumes_ready_groups_first",
+      "exit_code": 1,
+      "detected": true
+    },
+    {
+      "mutation": "host_weighting",
+      "test": "test_host_scheduling_probes_once_then_weights_rate_by_load",
+      "exit_code": 1,
+      "detected": true
+    },
+    {
+      "mutation": "unframed_integrity",
+      "test": "test_unframed_response_still_rejects_bytes_past_expected_size",
+      "exit_code": 1,
+      "detected": true
+    },
+    {
+      "mutation": "prefetch_before_storage",
+      "test": "test_bulk_refills_before_storage_and_never_counts_retries_twice",
+      "exit_code": 1,
+      "detected": true
+    }
+  ],
+  "validation": {
+    "pytest": "226 passed, 19 subtests passed",
+    "nix_build": "passed",
+    "new_tests": 18,
+    "detected_regression_mutations": 19
+  }
+}

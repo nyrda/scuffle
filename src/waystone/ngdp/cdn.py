@@ -5,8 +5,9 @@ Battle.net profiles or use a cookie jar, proxy credentials, or authorization.
 """
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 from contextlib import contextmanager
+from bisect import bisect_right
 import hashlib
 import http.client
 import io
@@ -185,30 +186,55 @@ def parse_index(source: Path | bytes, key: str, *, archive: str | None = None,
 
 
 
+class TransferCancelled(RuntimeError):
+    """The caller stopped a bulk transfer."""
+
+
 class Throttle:
-    """A token bucket shared by every download worker. A limit of 0 is unlimited."""
+    """One small token bucket shared by all connections, including retries."""
 
-    def __init__(self, limit: int = 0):
-        self.limit = limit
+    def __init__(self, limit: int = 0, *, clock=time.monotonic, sleep=time.sleep):
+        self._clock, self._sleep = clock, sleep
         self._lock = threading.Lock()
+        self._limit = max(0, limit)
         self._available = 0.0
-        self._updated = time.monotonic()
+        self._updated = clock()
 
-    def consume(self, size: int) -> None:
-        while True:
-            limit = self.limit
-            if limit <= 0:
-                return
+    @property
+    def limit(self) -> int:
+        return self._limit
+
+    @limit.setter
+    def limit(self, value: int) -> None:
+        with self._lock:
+            self._limit = max(0, value)
+            self._available = 0.0
+            self._updated = self._clock()
+
+    def consume(self, size: int, check: Callable[[], None] = lambda: None) -> None:
+        while size > 1e-6:
+            check()
             with self._lock:
-                now = time.monotonic()
-                # Allow at most a quarter second of burst.
-                self._available = min(limit / 4, self._available + (now - self._updated) * limit)
-                self._updated = now
-                if self._available >= 0:
-                    self._available -= size
+                limit = self._limit
+                if limit <= 0:
                     return
-                wait = -self._available / limit
-            time.sleep(min(wait, 0.25))
+                now = self._clock()
+                capacity = max(1, min(64 * 1024, limit / 10))
+                self._available = min(capacity, self._available + (now - self._updated) * limit)
+                self._updated = now
+                taken = min(size, self._available)
+                size -= taken
+                self._available -= taken
+                delay = min(size, capacity) / limit
+            if size > 1e-6:
+                self._sleep(min(delay, 0.1))
+
+    def refund(self, size: int) -> None:
+        if not self._limit:
+            return
+        with self._lock:
+            self._available = min(max(1, min(64 * 1024, self._limit / 10)),
+                                  self._available + size)
 
 
 class CDNClient:
@@ -216,7 +242,8 @@ class CDNClient:
     def __init__(self, cache: Path, region: str, product: str,
                  workers: int = 8, *, allow_http: bool = False,
                  metadata_base: str | None = None, timeout: float = 30,
-                 retries: int = 3, backoff: float = 0.25, throttle: Throttle | None = None):
+                 retries: int = 3, backoff: float = 0.25, throttle: Throttle | None = None,
+                 stall_timeout: float = 5):
         if not re.fullmatch(r"[a-z0-9_-]+", region) or not re.fullmatch(r"[a-z0-9_-]+", product):
             raise ValueError("Invalid region or product")
         if not 1 <= workers <= 64 or not 1 <= retries <= 10:
@@ -226,7 +253,12 @@ class CDNClient:
         self.region, self.product = region, product
         self.workers, self.allow_http = workers, allow_http
         self.throttle = throttle or Throttle()
-        self.timeout, self.retries, self.backoff = timeout, retries, backoff
+        if timeout <= 0 or stall_timeout <= 0:
+            raise ValueError("Timeouts must be positive")
+        self.timeout, self.retries, self.backoff = min(timeout, stall_timeout), retries, backoff
+        self.stall_timeout = stall_timeout
+        self._transfer = threading.local()
+        self._mirror_turn = itertools.count()
         self.metadata_base = metadata_base or f"https://{region}.version.battle.net/v2/products/{product}"
         self.mirrors: list[str] = []
         self.config_mirrors: list[str] = []
@@ -236,6 +268,9 @@ class CDNClient:
         self._slots = threading.BoundedSemaphore(workers)
         self._pool_lock = threading.Lock()
         self._pool: dict[tuple, list[http.client.HTTPConnection]] = {}
+        self._cooldown: dict[str, float] = {}
+        self._host_rate: dict[str, float] = {}
+        self._host_active: dict[str, int] = {}
         self._locks = [threading.Lock() for _ in range(256)]
         self._index_lock = threading.RLock()
         self._cdn_lock = threading.RLock()
@@ -276,6 +311,7 @@ class CDNClient:
         origin = (parsed.scheme, parsed.hostname, parsed.port)
         with self._slots:
             with self._pool_lock:
+                self._host_active[parsed.netloc] = self._host_active.get(parsed.netloc, 0) + 1
                 idle = self._pool.setdefault(origin, [])
                 connection = idle.pop() if idle else None
             if connection is None:
@@ -295,16 +331,24 @@ class CDNClient:
                         self._pool[origin].append(connection)
                     else:
                         connection.close()
+            finally:
+                with self._pool_lock:
+                    self._host_active[parsed.netloc] -= 1
 
     def _read(self, url: str, stream: BinaryIO, limit: int, *,
               byte_range: tuple[int, int] | None = None,
-              allow_restart: bool = False, expected_total: int | None = None) -> int:
+              allow_restart: bool = False, expected_total: int | None = None,
+              progress: Callable[[int], None] | None = None) -> int:
         headers = {"User-Agent": "waystone/0.1", "Accept": "*/*", "Accept-Encoding": "identity"}
         if byte_range is not None:
             start, end = byte_range
             if start < 0 or end < start:
                 raise ValueError("Invalid HTTP range")
             headers["Range"] = f"bytes={start}-{end}"
+        self._check_transfer()
+        if progress:
+            progress(0)
+        request_started = time.monotonic()
         with self._connection(url) as (connection, target):
             connection.request("GET", target, headers=headers)
             response = connection.getresponse()
@@ -336,20 +380,68 @@ class CDNClient:
                 if length > limit or (expected_length is not None and length != expected_length):
                     raise IntegrityError("HTTP Content-Length exceeds the bound or expected size")
             total = 0
-            while True:
-                block = response.read(min(256 * 1024, limit - total + 1))
+            network_time = 0.0
+            network_bytes = 0
+            body_length = int(length_header) if length_header is not None else None
+            while body_length is None or total < body_length:
+                self._check_transfer()
+                amount = min(64 * 1024, limit - total + 1)
+                if self.throttle.limit:
+                    amount = min(amount, max(1, self.throttle.limit // 10))
+                if body_length is not None:
+                    amount = min(amount, body_length - total)
+                self.throttle.consume(amount, self._check_transfer)
+                started = time.monotonic()
+                block = response.read1(amount)
+                network_time += time.monotonic() - started
+                network_bytes += len(block)
+                self.throttle.refund(amount - len(block))
                 if not block:
                     break
                 total += len(block)
                 if total > limit:
                     raise IntegrityError("HTTP body exceeds its bounded size")
                 stream.write(block)
-                self.throttle.consume(len(block))
+                if progress:
+                    progress(total)
+                # Socket timeouts catch silence. This also catches a host that
+                # trickles bytes forever, excluding deliberate throttle waits.
+                if network_time >= self.stall_timeout:
+                    if network_bytes / network_time < 1024:
+                        raise TimeoutError("CDN response stalled")
+                    network_time = 0.0
+                    network_bytes = 0
             if expected_length is not None and total != expected_length:
                 raise http.client.IncompleteRead(b"", expected_length - total)
             if length_header is not None and total != int(length_header):
                 raise http.client.IncompleteRead(b"", int(length_header) - total)
+            if total and not self.throttle.limit:
+                rate = total / max(1e-6, time.monotonic() - request_started)
+                with self._pool_lock:
+                    host = urlsplit(url).netloc
+                    previous = self._host_rate.get(host, rate)
+                    self._host_rate[host] = previous * .75 + rate * .25
             return total
+
+    def _check_transfer(self) -> None:
+        check = getattr(self._transfer, "check", None)
+        if check:
+            check()
+
+    def _backoff(self, seconds: float) -> None:
+        end = time.monotonic() + seconds
+        while True:
+            self._check_transfer()
+            remaining = end - time.monotonic()
+            if remaining <= 0:
+                return
+            time.sleep(min(0.1, remaining))
+
+    def _failed_mirror(self, url: str, error: Exception) -> None:
+        if (isinstance(error, (OSError, http.client.HTTPException)) or
+            isinstance(error, HTTPStatusError) and error.status in {403, 429, 500, 502, 503, 504}):
+            with self._pool_lock:
+                self._cooldown[urlsplit(url).netloc] = time.monotonic() + 30
 
     def _bytes(self, urls: Iterable[str], limit: int, *, validator=None, **kwargs) -> bytes:
         last = None
@@ -368,12 +460,13 @@ class CDNClient:
                     return data
                 except (OSError, http.client.HTTPException, ValueError, CDNError) as error:
                     last = error
+                    self._failed_mirror(url, error)
                     if not isinstance(error, HTTPStatusError) or error.status != 404:
                         missing = False
             if missing:
                 break
             if attempt + 1 < self.retries:
-                time.sleep(self.backoff * 2 ** attempt)
+                self._backoff(self.backoff * 2 ** attempt)
         raise last
 
     def discover(self) -> tuple[dict[str, str], dict[str, str]]:
@@ -443,6 +536,15 @@ class CDNClient:
             self._url(root)
             if root not in roots:
                 roots.append(root)
+        # Hosts may only be advertised with HTTP URLs in Servers. Upgrade
+        # their origins to HTTPS, still requiring normal certificate validation.
+        for host in row.get("Hosts", "").split():
+            root = f"https://{host}"
+            parsed = self._url(root)
+            if parsed.path or parsed.query or parsed.port is not None:
+                raise IntegrityError("Invalid CDN hostname")
+            if root not in roots:
+                roots.append(root)
         if not roots:
             raise IntegrityError("No advertised verified HTTPS CDN")
         self.mirrors = [f"{root}/{path}" for root in roots]
@@ -456,7 +558,22 @@ class CDNClient:
 
     def _urls(self, key: str, kind: str = "data", suffix: str = "") -> list[str]:
         self._ensure_cdn()
-        return [f"{root}/{kind}/{key[:2]}/{key[2:4]}/{key}{suffix}" for root in self.mirrors]
+        start = next(self._mirror_turn) % len(self.mirrors)
+        mirrors = self.mirrors[start:] + self.mirrors[:start]
+        with self._pool_lock:
+            now = time.monotonic()
+            primary = urlsplit(self.mirrors[0]).netloc
+            def score(root):
+                host = urlsplit(root).netloc
+                active = self._host_active.get(host, 0)
+                rate = self._host_rate.get(host)
+                # Probe an unmeasured alternate once before sending it a wave
+                # of requests. Then share work by observed rate and load.
+                if rate is None:
+                    rate = 0 if active and host != primary else 16 * 1024 * 1024
+                return self._cooldown.get(host, 0) > now, -rate / (active + 1)
+            mirrors.sort(key=score)
+        return [f"{root}/{kind}/{key[:2]}/{key[2:4]}/{key}{suffix}" for root in mirrors]
 
     def _atomic(self, path: Path, data: bytes) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -470,7 +587,7 @@ class CDNClient:
 
     def _download(self, urls: Iterable[str], path: Path, *, limit: int,
                   expected_size: int | None = None, validator: Callable[[Path], None],
-                  resume: bool = False) -> Path:
+                  resume: bool = False, progress: Callable[[int], None] | None = None) -> Path:
         urls = tuple(urls)
         if not urls:
             raise CDNError("No CDN mirrors configured")
@@ -505,7 +622,8 @@ class CDNClient:
                             stream.seek(offset)
                             byte_range = (offset, expected_size - 1) if offset else None
                             self._read(url, stream, limit, byte_range=byte_range,
-                                       allow_restart=bool(offset), expected_total=expected_size)
+                                       allow_restart=bool(offset), expected_total=expected_size,
+                                       progress=progress)
                             stream.flush()
                             os.fsync(stream.fileno())
                         if expected_size is not None and part.stat().st_size != expected_size:
@@ -516,6 +634,7 @@ class CDNClient:
                         return path
                     except (OSError, http.client.HTTPException, ValueError, CDNError) as error:
                         last = error
+                        self._failed_mirror(url, error)
                         if not isinstance(error, HTTPStatusError) or error.status != 404:
                             missing = False
                         if isinstance(error, (ValueError, IntegrityError)):
@@ -523,7 +642,7 @@ class CDNClient:
                 if missing:
                     break
                 if attempt + 1 < self.retries:
-                    time.sleep(self.backoff * 2 ** attempt)
+                    self._backoff(self.backoff * 2 ** attempt)
             raise last
 
     def _config(self, key: str, product: bool) -> Path:
@@ -743,7 +862,8 @@ class CDNClient:
         return self.cache / "objects" / key[:2] / key
 
     def get_object(self, ekey: bytes, encoded_size: int | None = None,
-                   location: Location | None = None) -> Path:
+                   location: Location | None = None, *,
+                   progress: Callable[[int], None] | None = None) -> Path:
         from .formats import verify_blte
         key = _key(ekey)
         if encoded_size is not None and not 8 <= encoded_size <= 1 << 32:
@@ -765,7 +885,7 @@ class CDNClient:
         if location is not None and location.archive:
             if encoded_size is not None and encoded_size != location.size:
                 raise IntegrityError("Archive index and manifest disagree about encoded size")
-            data = self.get_range(location, validator=lambda data: verify_blte(data, ekey))
+            data = self.get_range(location, validator=lambda data: verify_blte(data, ekey), progress=progress)
             path = self._object_path(ekey)
             with self._locks[hash(path) % len(self._locks)]:
                 self._atomic(path, data)
@@ -773,25 +893,25 @@ class CDNClient:
         try:
             return self._download(self._urls(key), self._object_path(ekey),
                 limit=encoded_size or 256 * 1024 * 1024, expected_size=encoded_size,
-                validator=lambda path: verify_blte(path, ekey), resume=True)
+                validator=lambda path: verify_blte(path, ekey), resume=True, progress=progress)
         except HTTPStatusError as error:
             if error.status not in (403, 404) or self._db_path is None or self._prepared:
                 raise
             location = self.locate(ekey)
             if location is None or not location.archive:
                 raise
-            return self.get_object(ekey, encoded_size, location)
+            return self.get_object(ekey, encoded_size, location, progress=progress)
 
-    def get_range(self, location: Location, *, validator=None) -> bytes:
+    def get_range(self, location: Location, *, validator=None, progress=None) -> bytes:
         key = _key(location.archive)
         if location.offset < 0 or not 1 <= location.size <= 256 * 1024 * 1024:
             raise ValueError("Invalid or excessive archive range")
         return self._bytes(self._urls(key), location.size,
                            byte_range=(location.offset, location.offset + location.size - 1),
-                           validator=validator)
+                           validator=validator, progress=progress)
 
     def _fetch_group(self, entries: list[tuple[DownloadEntry, Location]],
-                     as_bytes: bool = False) -> list[tuple[DownloadEntry, Path | bytes]]:
+                     as_bytes: bool = False, progress=None) -> list[tuple[DownloadEntry, Path | bytes]]:
         from .formats import verify_blte
         result = []
         missing = []
@@ -812,26 +932,43 @@ class CDNClient:
                 except (ValueError, CDNError):
                     path.unlink(missing_ok=True)
             missing.append((entry, location))
+        cached = sum(entry.encoded_size for entry, _ in result)
+        if progress:
+            progress(cached)
         entries = missing
         if not entries:
             return result
         if not entries[0][1].archive:
             for entry, location in entries:
+                report = (lambda n: progress(cached + n)) if progress else None
                 if as_bytes:
                     data = self._bytes(self._urls(_key(entry.ekey)), entry.encoded_size,
                                        expected_total=entry.encoded_size,
-                                       validator=lambda data: verify_blte(data, entry.ekey))
+                                       validator=lambda data: verify_blte(data, entry.ekey), progress=report)
                     result.append((entry, data))
                 else:
-                    result.append((entry, self.get_object(entry.ekey, entry.encoded_size, location)))
+                    result.append((entry, self.get_object(entry.ekey, entry.encoded_size, location, progress=report)))
+                cached += entry.encoded_size
+                if progress:
+                    progress(cached)
             return result
         first, last = entries[0][1], entries[-1][1]
+        ends = [location.offset - first.offset + location.size for _, location in entries]
+        sizes = [0]
+        for entry, _ in entries:
+            sizes.append(sizes[-1] + entry.encoded_size)
+        def report(received):
+            if progress:
+                count = bisect_right(ends, received)
+                partial = (max(0, received - (entries[count][1].offset - first.offset))
+                           if count < len(entries) else 0)
+                progress(cached + sizes[count] + partial)
         def verify_group(data):
             for entry, location in entries:
                 begin = location.offset - first.offset
                 verify_blte(data[begin:begin + location.size], entry.ekey)
         data = self.get_range(Location(first.archive, first.offset, last.offset + last.size - first.offset),
-                              validator=verify_group)
+                              validator=verify_group, progress=report)
         for entry, location in entries:
             begin = location.offset - first.offset
             payload = data[begin:begin + location.size]
@@ -884,31 +1021,76 @@ class CDNClient:
                 yield group
 
     def fetch_many(self, entries: Iterable[DownloadEntry], *, block_size: int = 8 * 1024 * 1024,
-                   max_gap: int = 64 * 1024, as_bytes: bool = False
+                   max_gap: int = 64 * 1024, as_bytes: bool = False,
+                   progress: Callable[[int], None] | None = None,
+                   cancelled: Callable[[], bool] = lambda: False
                    ) -> Iterator[tuple[DownloadEntry, Path | bytes]]:
-        """Fetch a complete plan with bounded concurrent coalesced ranges.
+        """Yield verified objects in completion order with bounded read-ahead.
 
-        The requested entries and archive ordering use a temporary SQLite table,
-        so callers can pass a complete missing-entry iterator. Results arrive in
-        completion order. Use as_bytes=True to send verified payloads directly
-        to CASC without transient files. Otherwise unlink consumed object paths.
+        Progress counts unique object bytes received, excluding archive gaps and
+        repeated retry bytes. It runs on the consumer thread, including during
+        network silence. Only verified results may be written to CASC.
         """
         if not 1024 <= block_size <= 16 * 1024 * 1024 or max_gap < 0:
             raise ValueError("Invalid coalescing bounds")
         self.prepare_indexes()
         groups = self._planned_groups(entries, block_size, max_gap)
+        stopped = threading.Event()
+        lock = threading.Lock()
+        received = 0
+        def check():
+            if stopped.is_set() or cancelled():
+                raise TransferCancelled("Transfer stopped")
+        def fetch(items):
+            nonlocal received
+            high_water = 0
+            def report(amount):
+                nonlocal received, high_water
+                with lock:
+                    received += max(0, amount - high_water)
+                    high_water = max(high_water, amount)
+            self._transfer.check = check
+            try:
+                check()
+                result = self._fetch_group(items, as_bytes, report)
+                report(sum(entry.encoded_size for entry, _ in result))
+                return result
+            finally:
+                del self._transfer.check
+        def notify():
+            check()
+            if progress:
+                with lock:
+                    amount = received
+                progress(amount)
+        executor = ThreadPoolExecutor(max_workers=self.workers)
+        pending = set()
         try:
-            # Only workers groups may be in flight or waiting for consumption.
-            with ThreadPoolExecutor(max_workers=self.workers) as executor:
-                pending = {}
-                for items in itertools.islice(groups, self.workers):
-                    pending[executor.submit(self._fetch_group, items, as_bytes)] = None
-                while pending:
-                    future = next(as_completed(pending))
-                    del pending[future]
-                    yield from future.result()
-                    items = next(groups, None)
-                    if items is not None:
-                        pending[executor.submit(self._fetch_group, items, as_bytes)] = None
+            notify()
+            for items in itertools.islice(groups, self.workers):
+                pending.add(executor.submit(fetch, items))
+            while pending:
+                ready, _ = wait(pending, timeout=0.25, return_when=FIRST_COMPLETED)
+                notify()
+                if not ready:
+                    continue
+                future = next(iter(ready))
+                del ready
+                pending.remove(future)
+                result = future.result()
+                # Refill before storage consumes a group. Network threads
+                # stay busy while the caller verifies and appends to CASC.
+                items = next(groups, None)
+                if items is not None:
+                    pending.add(executor.submit(fetch, items))
+                for item in result:
+                    notify()
+                    yield item
+                del result, future
+            notify()
         finally:
+            stopped.set()
+            for future in pending:
+                future.cancel()
+            executor.shutdown(wait=True, cancel_futures=True)
             groups.close()

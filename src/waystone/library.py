@@ -17,7 +17,7 @@ import time
 from typing import Callable, Iterator
 
 from . import catalog, system
-from .ngdp.cdn import CDNClient
+from .ngdp.cdn import CDNClient, TransferCancelled
 from .ngdp.formats import EncodingTable, decode_blte, read_config, read_download, read_install
 from .ngdp.models import DownloadEntry
 from .ngdp.store import STATE_DIR, CascSource, CascStore, StoreError
@@ -353,6 +353,7 @@ class Updater:
         if self.source:
             self.source.close()
         self.store.close()
+        self.client.close()
 
     def emit(self, stage: str, *, force=False, **fields):
         now = time.monotonic()
@@ -516,14 +517,30 @@ class Updater:
         if missing:
             self.emit('cdn_indexes', force=True, missing_objects=missing)
             self.client.prepare_indexes(lambda done, count: self.emit('cdn_indexes', done=done, total=count))
-            with closing(self.client.fetch_many(self.plan.entries(missing=True), as_bytes=True)) as downloads:
-                for entry, payload in downloads:
-                    self.store.put(entry.ekey, payload)
-                    fetched += 1; completed += 1; done_bytes += entry.encoded_size
-                    if fetched % 256 == 0:
-                        self.store.checkpoint()
-                    self.check_cancelled()
-                    self.emit('downloading', done=completed, total=total, bytes=done_bytes, total_bytes=size)
+            base_bytes = received = done_bytes
+            def progress(amount):
+                nonlocal received
+                received = base_bytes + amount
+                self.emit('downloading', done=completed, total=total,
+                          bytes=max(received, done_bytes), total_bytes=size)
+            self.emit('downloading', force=True, done=completed, total=total,
+                      bytes=done_bytes, total_bytes=size)
+            try:
+                with closing(self.client.fetch_many(self.plan.entries(missing=True), as_bytes=True,
+                             progress=progress, cancelled=self.cancelled)) as downloads:
+                    for entry, payload in downloads:
+                        self.store.put(entry.ekey, payload)
+                        fetched += 1; completed += 1; done_bytes += entry.encoded_size
+                        if fetched % 256 == 0:
+                            self.store.checkpoint()
+                        self.check_cancelled()
+                        self.emit('downloading', done=completed, total=total,
+                                  bytes=max(received, done_bytes), total_bytes=size)
+            except TransferCancelled as error:
+                self.store.checkpoint()
+                raise Cancelled('Paused') from error
+            self.emit('downloading', force=True, done=completed, total=total,
+                      bytes=done_bytes, total_bytes=size)
         self.store.checkpoint()
         if self.plan.totals()[2]:
             raise LibraryError('Required content is still missing; the client was not activated')
