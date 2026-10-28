@@ -14,6 +14,7 @@ import re
 import shutil
 import sqlite3
 import stat
+import sys
 import tempfile
 import time
 import uuid
@@ -63,10 +64,13 @@ def atomic_json(path: Path, value) -> None:
 
 def mount_points() -> list[Path]:
     """Every mount point Linux knows of, including bind mounts. Empty elsewhere."""
+    if not sys.platform.startswith('linux'):
+        return []
     try:
         text = Path('/proc/self/mountinfo').read_text()
     except OSError:
-        return []
+        # Without it a bind mount of the same file system cannot be told apart, so nothing is deleted.
+        raise LibraryError('Linux mount information is unreadable, so nothing is deleted') from None
     unescape = lambda field: re.sub(r'\\([0-7]{3})', lambda m: chr(int(m.group(1), 8)), field)
     return [Path(unescape(line.split(' ')[4])) for line in text.splitlines() if len(line.split(' ')) > 4]
 
@@ -76,7 +80,10 @@ KEPT_FOLDERS = {'wtf', 'interface', 'screenshots'}     # the user's settings, ad
 
 def remove_tree(path: Path) -> bool:
     """Delete a folder, making read-only entries writable first. False when something stays."""
-    def retry(function, name, _error):
+    def retry(function, name, error):
+        # Only a refused delete is retried. Anything else, such as an unreadable folder, stays.
+        if function not in (os.unlink, os.rmdir, os.remove):
+            raise error
         for target in (os.path.dirname(name), name):
             try:
                 os.chmod(target, os.stat(target, follow_symlinks=False).st_mode | stat.S_IWRITE | stat.S_IEXEC)
@@ -87,7 +94,7 @@ def remove_tree(path: Path) -> bool:
         return True
     try:
         shutil.rmtree(path, onexc=retry)
-    except OSError:
+    except (OSError, TypeError):
         return False
     system.sync_directory(path.parent)
     return True
@@ -252,7 +259,10 @@ class Library:
         if path.exists() and foreign(path):
             raise LibraryError(f'Uninstall refuses another file system: {path.relative_to(self.root)}')
         if path.is_dir():
-            for directory, folders, files in os.walk(path, followlinks=False):
+            def unreadable(error):
+                # A folder that cannot be listed cannot be checked, so it is not deleted.
+                raise LibraryError(f'Uninstall cannot check {error.filename}') from error
+            for directory, folders, files in os.walk(path, followlinks=False, onerror=unreadable):
                 for name in folders + files:
                     child = Path(directory) / name
                     if child.is_symlink():

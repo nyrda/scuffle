@@ -1203,3 +1203,39 @@ def test_uninstall_recovery_refuses_a_game_started_after_the_crash(uninstall_pai
             pass
     assert (library.root / '_forever_/Wow.exe').is_file()
     assert library.uninstall_record.exists()
+
+
+def test_without_linux_mount_information_nothing_is_deleted(uninstall_pair, monkeypatch):
+    import pathlib
+    import waystone.library as module
+    library, _, _ = uninstall_pair
+    monkeypatch.setattr(module.sys, 'platform', 'linux')
+    original = pathlib.Path.read_text
+    def read_text(self, *args, **kwargs):
+        if str(self) == '/proc/self/mountinfo':
+            raise PermissionError('hidden by a sandbox')
+        return original(self, *args, **kwargs)
+    monkeypatch.setattr(pathlib.Path, 'read_text', read_text)
+    with library.locked(), pytest.raises(UpdateError, match='mount information'):
+        library.uninstall('wowf')
+    assert library.state('wowf') and (library.root / '_forever_').is_dir()
+
+
+def test_an_unreadable_folder_left_in_the_trash_never_blocks_the_library(uninstall_pair):
+    library, _, _ = uninstall_pair
+    trash = library.root / '.waystone-trash-0123456789abcdef0123456789abcdef'
+    locked_away = trash / 'Logs'
+    locked_away.mkdir(parents=True)
+    (locked_away / 'session.log').write_text('kept by the system')
+    locked_away.chmod(0)
+    try:
+        with library.locked():
+            pass                    # sweeping meets the folder and leaves it
+        with library.locked():
+            pass
+        assert trash.exists() and library.installed() == ['wow', 'wowf']
+        # Deleting it directly reports that something stayed, and does not raise.
+        from waystone.library import remove_tree
+        assert remove_tree(trash) is False and (locked_away.parent).exists()
+    finally:
+        locked_away.chmod(0o700)
