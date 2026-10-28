@@ -39,6 +39,7 @@ def main(output: Path) -> None:
     window = ui.MainWindow()
     window.check_updates = lambda: None
     fake_installed(window, 'wow')               # one installed client in a throwaway folder
+    window.clear_notice('')
     window.library.installed = lambda: ['wow']
     window.settings.region = 'us'               # the region the catalog fixture was captured for
     window.on_storage(window.library.storage() if window.library else {})
@@ -73,10 +74,13 @@ def main(output: Path) -> None:
     if window.downloads:
         job = Job('wow_classic_era', 'install', status=RUNNING, stage='downloading',
                   done_bytes=12_400_000_000, total_bytes=31_800_000_000, speed=48_000_000)
-        queued = Job('wow_classic', 'install', status=QUEUED)
+        queued = Job('wow_classic', 'install', status=QUEUED, total_bytes=8_000_000_000)
         window.downloads.jobs.extend([job, queued])
         window.downloads._current = job
         shot('03-downloading')
+        job.speed = 0
+        shot('03f-estimating')
+        job.speed = 48_000_000
         # Another client selected while Mists of Pandaria Classic downloads and Classic Era waits.
         job.client, queued.client = 'wow_classic', 'wow_classic_era'
         window.client_list.select('wow')
@@ -85,6 +89,7 @@ def main(output: Path) -> None:
         shot('03e-queued-client')
         job.client, queued.client = 'wow_classic_era', 'wow_classic'
         window.client_list.select('wow_classic_era')
+        window.downloads.jobs.append(Job('wowf', 'install', status=QUEUED, total_bytes=5_000_000_000))
         window.open_queue()
         shot('03b-queue')
         window.show_client_page()
@@ -96,6 +101,11 @@ def main(output: Path) -> None:
         window.downloads.jobs[:] = [job]
         window.downloads._current = None
         shot('04-paused')
+        window.downloads.jobs[:] = [job, Job('wow_classic', 'install', status=PAUSED)]
+        shot('04c-restored-client')
+        window.open_queue()
+        shot('04d-restored-queue')
+        window.show_client_page()
         window.downloads.jobs.clear()
         failed = Job('wow_classic_era', 'install', status=FAILED,
                      error='Blizzard\'s download servers did not answer. Check the connection and try again.')
@@ -146,6 +156,10 @@ def main(output: Path) -> None:
     shot('10d-settings-clients-other')
     shot('10e-settings-clients-other-end', lambda: window.settings_page.scroll.verticalScrollBar().setValue(10_000))
     window.settings_page.show_section('downloads')
+    window.settings_page.limit.setValue(37)
+    window.settings_page.workers.setValue(8)
+    window.settings_page.pause_while_playing.setChecked(True)
+    window.settings_page.resume_downloads.setChecked(True)
     shot('10f-settings-downloads')
     window.settings_page.show_section('launch')
     shot('10g-settings-launch')
@@ -155,7 +169,9 @@ def main(output: Path) -> None:
     window.populate()
     window.settings_page.lock_folder('')
     window.open_settings()
-    window.open_folder_picker('/mnt/games/Waystone')
+    folder = Path(_home) / 'games' / 'Waystone'
+    folder.mkdir(parents=True)
+    window.open_folder_picker(str(folder))
     # The folder tree loads in the background. Give it the time a person would see.
     deadline = time.monotonic() + 2
     while time.monotonic() < deadline:

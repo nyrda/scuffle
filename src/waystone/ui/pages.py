@@ -10,7 +10,7 @@ from PySide6.QtCore import QDir, QEvent, QTimer, Qt, Signal
 from PySide6.QtGui import QColor, QKeySequence, QLinearGradient, QPainter, QShortcut
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QFileSystemModel, QFrame, QGridLayout,
                                QHBoxLayout, QLabel, QLineEdit, QMenu, QProgressBar, QPushButton,
-                               QScrollArea, QSizePolicy, QSpacerItem, QToolButton, QTreeView, QVBoxLayout, QWidget)
+                               QScrollArea, QSizePolicy, QSpacerItem, QSpinBox, QToolButton, QTreeView, QVBoxLayout, QWidget)
 
 from .. import catalog
 from ..launch import looks_like_redirect, open_browser, parse_ticket
@@ -572,11 +572,29 @@ class SettingsPage(Page):
             self.category_grids[category] = grid
 
         # Downloads
-        self.limit = fixed(QComboBox())
+        self.limit = fixed(QSpinBox())
+        self.limit.setRange(0, 10_000)
+        self.limit.setSuffix(' MB/s')
+        self.limit.setSpecialValueText('No limit')
+        self.limit.setKeyboardTracking(False)
         self.downloads_grid = self.card(self.section_layouts['downloads'], 'Downloads',
                                         'Downloads run one at a time. A paused one keeps what it stored.')
         self.row(self.downloads_grid, 'Speed limit', self.limit)
         self.download_fields: list[QWidget] = []
+        self.workers = fixed(QSpinBox())
+        self.workers.setRange(1, 64)
+        self.workers.setKeyboardTracking(False)
+        self.add_download_row('Connections', self.workers)
+        self.downloads_grid.addWidget(label('Applies from the next download.', 'small', wrap=True),
+                                      self.downloads_grid.rowCount(), 1, 1, 2)
+        self.pause_while_playing = QCheckBox('Pause downloads while a game is running')
+        self.resume_downloads = QCheckBox('Resume unfinished downloads when Waystone starts')
+        for box in [self.pause_while_playing, self.resume_downloads]:
+            self.downloads_grid.addWidget(box, self.downloads_grid.rowCount(), 0, 1, 3)
+            self.download_fields.append(box)
+            box.toggled.connect(self.apply)
+        self.limit.valueChanged.connect(self.apply)
+        self.workers.valueChanged.connect(self.apply)
 
         # Launch
         launch = self.section_layouts['launch']
@@ -604,7 +622,7 @@ class SettingsPage(Page):
         self.show_section('general')
 
         self._loading = False
-        for widget in [self.region, self.locale, self.limit]:
+        for widget in [self.region, self.locale]:
             # Long entries such as Proton build names must not widen the page past a small window.
             widget.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
             widget.setMinimumContentsLength(5)
@@ -801,7 +819,7 @@ class SettingsPage(Page):
 
     def values(self) -> dict:
         return {'root': self.root.text().strip(), 'region': self.region.currentData(),
-                'locale': self.locale.currentData(), 'limit': self.limit.currentData(),
+                'locale': self.locale.currentData(), 'limit': self.limit.value(),
                 'show_other': self.show_other.isChecked()}
 
     def load(self, settings: Settings, installed: list[str], downloading=None) -> None:
@@ -813,11 +831,10 @@ class SettingsPage(Page):
         self.locale.setCurrentIndex(max(0, self.locale.findData(settings.locale)))
         self.show_other.setChecked(settings.show_other_clients)
         self.lock_clients(installed, downloading)
-        current = settings.bandwidth_limit // MEGABYTE
-        self.limit.clear()
-        for value in sorted(set([0, 1, 2, 5, 10, 25, 50, 100, current])):
-            self.limit.addItem('No limit' if value == 0 else f'{value} MB/s', value)
-        self.limit.setCurrentIndex(self.limit.findData(current))
+        self.limit.setValue(settings.bandwidth_limit // MEGABYTE)
+        self.workers.setValue(settings.workers)
+        self.pause_while_playing.setChecked(settings.pause_while_playing)
+        self.resume_downloads.setChecked(settings.resume_downloads)
         if self.launch is not None:
             self.launch.load(settings)
         self._loading = False
@@ -862,6 +879,9 @@ class SettingsPage(Page):
         s.root = values['root'] or s.root
         s.region, s.locale = values['region'], values['locale']
         s.bandwidth_limit = int(values['limit']) * MEGABYTE
+        s.workers = self.workers.value()
+        s.pause_while_playing = self.pause_while_playing.isChecked()
+        s.resume_downloads = self.resume_downloads.isChecked()
         if self.launch is not None:
             self.launch.apply(s)      # the Proton build and the Linux launch options
         s.show_other_clients = values['show_other']
@@ -1146,6 +1166,9 @@ class QueuePage(Page):
     resume = Signal(str)
     cancel = Signal(str)
     limit_changed = Signal(int)
+    move = Signal(str, int)
+    pause_all = Signal()
+    resume_all = Signal()
 
     def set_limit(self, megabytes: int) -> None:
         self.limit.blockSignals(True)
@@ -1165,16 +1188,26 @@ class QueuePage(Page):
         title_row.setSpacing(12)
         title_row.addWidget(label('Downloads', 'pagetitle'))
         title_row.addStretch()
-        title_row.addWidget(label('Speed limit', 'key'))
-        self.limit = fixed(QComboBox(), 140)
-        self.limit.activated.connect(lambda _: self.limit_changed.emit(int(self.limit.currentData())))
-        title_row.addWidget(self.limit)
-        title_row.addSpacing(8)
         self.close_button = close = fixed(QPushButton('Close'), 96)
         close.setToolTip('Close the downloads (Esc)')
         close.clicked.connect(self.closed.emit)
         title_row.addWidget(close)
         content.addLayout(title_row)
+        controls = QHBoxLayout()
+        controls.setSpacing(8)
+        self.pause_all_button = fixed(QPushButton('Pause all'))
+        self.resume_all_button = fixed(QPushButton('Resume all'))
+        self.pause_all_button.clicked.connect(self.pause_all.emit)
+        self.resume_all_button.clicked.connect(self.resume_all.emit)
+        controls.addWidget(self.pause_all_button)
+        controls.addWidget(self.resume_all_button)
+        controls.addStretch()
+        controls.addWidget(label('Speed limit', 'key'))
+        self.limit = fixed(QComboBox(), 116)
+        self.limit.activated.connect(lambda _: self.limit_changed.emit(int(self.limit.currentData())))
+        controls.addWidget(self.limit)
+        content.addSpacing(10)
+        content.addLayout(controls)
         content.addSpacing(10)
         self.rows = QVBoxLayout()
         self.rows.setSpacing(10)
@@ -1182,7 +1215,7 @@ class QueuePage(Page):
         self.empty = label('Nothing is queued.', 'muted')
         content.addWidget(self.empty)
         content.addSpacing(6)
-        self.summary = label('', 'small')
+        self.summary = label('', 'small', wrap=True)
         content.addWidget(self.summary)
         outer.addStretch(1)
         self.cards: dict[str, dict] = {}
@@ -1190,8 +1223,8 @@ class QueuePage(Page):
 
     def focus_chain(self) -> list[QWidget]:
         """The page's controls in reading order, for the window's tab order."""
-        buttons = [w for code in self.order for w in (self.cards[code]['toggle'], self.cards[code]['cancel'])]
-        return [self.limit, self.close_button, *buttons]
+        buttons = [self.cards[code][key] for code in self.order for key in ('up', 'down', 'toggle', 'cancel')]
+        return [self.close_button, self.pause_all_button, self.resume_all_button, self.limit, *buttons]
 
     def show_jobs(self, jobs: list, labels: dict) -> None:
         from ..downloads import FAILED, PAUSED, QUEUED, RUNNING
@@ -1218,6 +1251,7 @@ class QueuePage(Page):
             if lost_focus:
                 self.close_button.setFocus()
         waiting = 0
+        movable = [j for j in jobs if j.status in {QUEUED, PAUSED}]
         for job in jobs:
             card = self.cards[job.client]
             verb = {'install': 'Install', 'update': 'Update', 'verify': 'Verify', 'repair': 'Repair'}[job.kind]
@@ -1225,15 +1259,18 @@ class QueuePage(Page):
             if job.status == RUNNING:
                 state = 'Running'
             elif job.status == PAUSED:
-                state = 'Paused'
+                state = f'Paused at {job.fraction:.0%}' if job.total_bytes else 'Paused'
             elif job.status == FAILED:
                 state = f'Failed · {job.error}'
             else:
                 waiting += 1
                 state = f'Waiting, number {waiting} in line'
             details = [d for d in progress_variants(job) if d] if job.status in {RUNNING, PAUSED} else []
+            if job.status == PAUSED and job.total_bytes:
+                details = [d.split(' · ', 1)[1] for d in details if ' · ' in d]
             # The fullest line that fits: the state, then shorter and shorter details.
-            card['detail'].set_variants([f'{state} · {d}' for d in details] + details + [state])
+            card['detail'].set_variants([f'{state} · {d}' for d in details] +
+                                        ([] if job.status == PAUSED else details) + [state])
             # A running job without a known size gets the moving bar, as on the client page.
             card['bar'].setVisible(job.status == RUNNING or (bool(job.total_bytes) and job.status != FAILED))
             card['bar'].setRange(0, 0 if job.status == RUNNING and not job.total_bytes else 1000)
@@ -1246,6 +1283,11 @@ class QueuePage(Page):
             card['cancel'].setText('Remove' if job.status == FAILED else 'Cancel')
             # A waiting job has nothing to pause. Cancel takes it out of the queue.
             card['toggle'].setVisible(job.status != QUEUED)
+            for key, step in [('up', -1), ('down', 1)]:
+                card[key].setVisible(job in movable)
+                card[key].setEnabled(job in movable and 0 <= movable.index(job) + step < len(movable))
+        self.pause_all_button.setEnabled(any(j.status in {QUEUED, RUNNING, PAUSED} for j in jobs))
+        self.resume_all_button.setEnabled(any(j.status in {PAUSED, RUNNING} for j in jobs))
         self.empty.setVisible(not jobs)
         active = [j for j in jobs if j.status != FAILED]
         left = sum(j.total_bytes - j.done_bytes for j in active if j.total_bytes)
@@ -1256,8 +1298,10 @@ class QueuePage(Page):
             parts.append(f'{size_text(left)} to download')
             # A time only when every size is known, worked out like the card's own.
             if speed > 0 and not unsized:
-                parts.append(duration_text(left / speed))
-        if unsized and left:
+                parts.append(f'{duration_text(left / speed)} total' + (' if resumed' if any(j.status == PAUSED for j in active) else ''))
+        if active and (unsized or speed <= 0):
+            parts.append('Total time estimating…' if speed > 0 else 'Total time unknown')
+        if unsized:
             parts.append(f'{unsized} not sized yet')
         failed = len(jobs) - len(active)
         if failed:
@@ -1284,10 +1328,18 @@ class QueuePage(Page):
         text.addWidget(bar)
         text.addWidget(detail)
         layout.addLayout(text, 1)
+        up, down = fixed(QPushButton('↑')), fixed(QPushButton('↓'))
+        for button, step, name in [(up, -1, 'up'), (down, 1, 'down')]:
+            button.setFixedWidth(32)
+            button.setObjectName('reorder')
+            button.setToolTip(f'Move {catalog.get(code).label} {name}')
+            button.setAccessibleName(button.toolTip())
+            button.clicked.connect(lambda checked=False, offset=step: self.move.emit(code, offset))
+            layout.addWidget(button)
         toggle = fixed(QPushButton('Pause'), 84)
         cancel = fixed(QPushButton('Cancel'), 84)
         card = {'frame': frame, 'title': title, 'detail': detail, 'bar': bar, 'toggle': toggle, 'cancel': cancel,
-                'paused': False}
+                'paused': False, 'up': up, 'down': down}
         toggle.clicked.connect(lambda: (self.resume if card['paused'] else self.pause).emit(code))
         cancel.clicked.connect(lambda: self.cancel.emit(code))
         layout.addWidget(toggle)

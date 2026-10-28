@@ -174,6 +174,24 @@ class Library:
         except FileNotFoundError:
             return None
 
+    def download_progress(self, code: str) -> tuple[int, int]:
+        """Stored bytes in a completed pending plan, or an unknown size."""
+        try:
+            pending = self.pending(code)
+            if not isinstance(pending, dict) or pending.get('phase') not in ('downloading', 'activating'):
+                return 0, 0
+            plan = self.client_dir(code) / 'plan.sqlite'
+            inventory = self.state_dir / 'store.sqlite'
+            with closing(sqlite3.connect(plan.as_uri() + '?mode=ro', uri=True)) as db:
+                db.execute('ATTACH DATABASE ? AS owned', (inventory.as_uri() + '?mode=ro',))
+                total, stored = db.execute(
+                    'SELECT coalesce(sum(p.size),0), '
+                    'coalesce(sum(CASE WHEN o.ekey IS NOT NULL THEN p.size ELSE 0 END),0) '
+                    'FROM objects p LEFT JOIN owned.objects o ON o.ekey=p.ekey').fetchone()
+                return stored, total
+        except (OSError, ValueError, sqlite3.Error):
+            return 0, 0
+
     def game_dir(self, code: str) -> Path | None:
         state = self.state(code)
         return self.root / state['folder'] if state else None

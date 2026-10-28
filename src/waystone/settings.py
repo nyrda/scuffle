@@ -58,6 +58,8 @@ class Settings:
     show_other_clients: bool = False  # other public clients, beyond the live and test ones
     bandwidth_limit: int = 0          # bytes per second, 0 means unlimited
     workers: int = 16
+    pause_while_playing: bool = False
+    resume_downloads: bool = False
     proton: str = ''                  # Linux only, empty means the newest found
     selected: str = 'wow'
     modes: dict[str, str] = field(default_factory=dict)
@@ -122,8 +124,12 @@ class Settings:
             raise ValueError(f'Unknown region {self.region!r}')
         if self.locale not in LOCALES:
             raise ValueError(f'Unknown locale {self.locale!r}')
-        if self.bandwidth_limit < 0 or not 1 <= self.workers <= 64:
-            raise ValueError('Bandwidth limit and worker count are out of range')
+        for name, default, low, high in [('bandwidth_limit', 0, 0, 10_000 * MEGABYTE),
+                                          ('workers', 16, 1, 64)]:
+            value = getattr(self, name)
+            setattr(self, name, max(low, min(high, value)) if type(value) is int else default)
+        self.pause_while_playing = self.pause_while_playing is True
+        self.resume_downloads = self.resume_downloads is True
         from . import catalog
         malformed = [code for code in self.extra_clients + self.hidden_clients if not catalog.is_product(code)]
         if malformed:

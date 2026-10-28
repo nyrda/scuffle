@@ -208,7 +208,32 @@ again after it was hidden. Entries that cannot be a product code are dropped
 when loading.
 
 The settings page has four sections: General for the folder, region and
-language, Clients for the three categories, Downloads for the speed limit, and
+language, Clients for the three categories, Downloads for transfer controls, and
 Launch for the Proton build and the Linux launch options.
 `SettingsPage.add_launch_widget` and `add_download_row` add further settings to
 those sections.
+
+The download manager writes `downloads.json` atomically in the data directory.
+It records the installation root and each unfinished job's client, kind, status
+and error in queue order. Completed and cancelled jobs are omitted. A different
+installation root does not inherit the queue. On startup, unfinished jobs return
+paused unless `resume_downloads` is enabled. Failures remain visible. Progress
+is read from the pending plan and stored-object inventory, never from saved UI
+counters. Missing or unreadable plans leave progress unknown until resume.
+
+Waiting jobs can move up or down. Pause all and Resume all use the same queue
+lock as individual controls and worker transitions. A resume requested while a
+running transfer is stopping takes effect after it stops. `pause_while_playing`
+holds new downloads too, and remembers which jobs it paused. User pauses and
+cancellations remove that ownership. The last game's exit resumes only the
+remaining owned jobs. Closing the window stops the queue before waiting for
+its active transfer.
+
+Downloads settings accept a whole MB/s limit, with 0 for unlimited, and 1 to 64
+connections, applied when the next CDN client is created. Invalid numeric types
+fall back to defaults and out-of-range integers are clamped. Both automatic
+resume and pausing during games default to off. Running progress keeps the
+percentage, time, speed and size fields through warm-up and stalls, using
+"Estimating…" for unavailable time and speed. Rates of at least 10 MB/s use
+whole MB/s. The queue total uses all known remaining sizes and the current rate,
+with an explicit qualification when paused jobs need to resume.

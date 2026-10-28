@@ -425,7 +425,7 @@ def test_a_locked_test_client_keeps_its_own_choice_through_other_changes(qt, win
     window.downloads.jobs.append(paused)
     window.open_settings()
     page = window.settings_page
-    page.limit.setCurrentIndex(page.limit.findData(5))
+    page.limit.setValue(5)
     assert window.settings.extra_clients == ['wow_classic_era_ptr']
     assert page.choices['wow_classic_era_ptr']['note'].text() == 'Paused'
     paused.status = FAILED
@@ -635,7 +635,7 @@ def test_unticking_a_live_or_installed_client_hides_it_and_a_download_locks_it_o
     window.on_job(job)
     box = page.choices['wow_classic']['box']
     assert box.isChecked() and not box.isEnabled() and 'wow_classic' in window.client_list.rows
-    page.limit.setCurrentIndex(page.limit.findData(5))      # another change keeps the user's own choice
+    page.limit.setValue(5)      # another change keeps the user's own choice
     assert 'wow_classic' in window.settings.hidden_clients
     window.downloads.jobs.clear()
 
@@ -979,3 +979,170 @@ def test_reset_clears_a_variables_draft_that_was_never_saved(qt):
     assert page.reset_button.isEnabled()
     page.reset_button.click()
     assert page.environment.text.toPlainText() == '' and not page.reset_button.isEnabled()
+
+
+def test_transfer_details_keep_their_shape_during_warmup_and_stalls(qt):
+    from waystone.downloads import RUNNING, Job
+    from waystone.ui.widgets import progress_variants
+    job = Job('wow', 'install', status=RUNNING, stage='downloading',
+              done_bytes=12_400_000_000, total_bytes=31_800_000_000)
+    for speed in [0, 48_200_000, 48_400_000, 9_500_000, 0]:
+        job.speed = speed
+        variants = progress_variants(job)
+        assert [len(v.split(' · ')) for v in variants] == [4, 3, 2]
+        assert variants[0].startswith('39% · ') and variants[0].endswith('12.4 GB of 31.8 GB')
+        assert ('Estimating… · Estimating…' in variants[0]) == (speed == 0)
+        if speed >= 10_000_000:
+            assert '48 MB/s' in variants[0] and '48.' not in variants[0]
+        elif speed:
+            assert '9.5 MB/s' in variants[0]
+    job.stage = 'materializing'
+    assert progress_variants(job) == ['Writing game files…']
+
+
+def test_queue_reorder_and_bulk_actions_work_from_the_keyboard(qt, window, tmp_path, monkeypatch):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from waystone.downloads import DownloadManager, PAUSED, QUEUED
+    monkeypatch.setattr(DownloadManager, '_run', lambda self: None)
+    window.settings.root = str(tmp_path / 'games')
+    window.open_library()
+    manager = window.downloads
+    manager.enqueue('wow', 'install')
+    manager.enqueue('wowf', 'install')
+    window.open_queue()
+    page = window.queue_page
+    down = page.cards['wow']['down']
+    assert down in page.focus_chain() and down.accessibleName()
+    down.setFocus()
+    QTest.keyClick(down, Qt.Key_Space)
+    qt.processEvents()
+    assert page.order == ['wowf', 'wow']
+    assert page.cards['wow']['down'] is down
+    up = page.cards['wow']['up']
+    up.setFocus()
+    manager.job('wow').done_bytes = 3
+    window.refresh_downloads()
+    assert qt.focusWidget() is up
+    QTest.keyClick(page.pause_all_button, Qt.Key_Space)
+    assert all(j.status == PAUSED for j in manager.jobs)
+    QTest.keyClick(page.resume_all_button, Qt.Key_Space)
+    assert all(j.status == QUEUED for j in manager.jobs)
+
+
+@pytest.mark.parametrize('stored', [False, True])
+def test_reopened_library_shows_resume_with_honest_progress(qt, window, tmp_path, monkeypatch, stored):
+    from waystone.downloads import DownloadManager, PAUSED
+    from waystone.library import Library
+    monkeypatch.setattr(DownloadManager, '_run', lambda self: None)
+    monkeypatch.setattr(Library, 'download_progress', lambda self, code: (40, 100) if stored else (0, 0))
+    window.settings.root = str(tmp_path / 'games')
+    window.open_library()
+    window.downloads.enqueue('wow', 'install')
+    window.open_library()
+    window.client_list.select('wow')
+    window.refresh()
+    assert window.downloads.job('wow').status == PAUSED
+    assert window.client_page.primary.text() == 'Resume'
+    assert window.status('wow')[0] == ('Paused at 40%' if stored else 'Paused')
+    window.open_queue()
+    card = window.queue_page.cards['wow']
+    assert card['toggle'].text() == 'Resume'
+    assert card['detail'].text().startswith('Paused')
+    assert ('40%' in card['detail'].full) == stored
+    if not stored:
+        assert '%' not in card['detail'].full
+
+
+def test_game_pause_waits_for_last_game_and_respects_manual_pauses(qt, window, tmp_path, monkeypatch):
+    from waystone.downloads import DownloadManager, PAUSED, QUEUED
+    monkeypatch.setattr(DownloadManager, '_run', lambda self: None)
+    window.settings.root = str(tmp_path / 'games')
+    window.open_library()
+    manager = window.downloads
+    for code in ['wowf', 'wowt']:
+        manager.enqueue(code, 'install')
+    manager.pause('wowt')
+    window.settings.pause_while_playing = True
+    window.on_phase('wow', 'Starting')
+    assert manager.job('wowf').status == QUEUED
+    window.on_phase('wow', 'Running')
+    assert manager.job('wowf').status == PAUSED
+    window.on_phase('wow_classic', 'Running')
+    window.on_task_finished('wow', '')
+    assert manager.job('wowf').status == PAUSED
+    window.on_task_finished('wow_classic', '')
+    assert manager.job('wowf').status == QUEUED
+    assert manager.job('wowt').status == PAUSED
+
+
+def test_download_settings_save_custom_limit_connections_and_policy(qt, window, tmp_path, monkeypatch):
+    from waystone.downloads import DownloadManager, PAUSED, QUEUED
+    from waystone.settings import Settings
+    monkeypatch.setattr(DownloadManager, '_run', lambda self: None)
+    window.settings.root = str(tmp_path / 'games')
+    window.open_library()
+    manager = window.downloads
+    manager.enqueue('wowf', 'install')
+    window.on_phase('wow', 'Running')
+    window.open_settings('downloads')
+    page = window.settings_page
+    page.limit.setValue(37)
+    page.workers.setValue(7)
+    page.pause_while_playing.setChecked(True)
+    page.resume_downloads.setChecked(True)
+    loaded = Settings.load()
+    assert (loaded.bandwidth_limit, loaded.workers) == (37_000_000, 7)
+    assert loaded.pause_while_playing and loaded.resume_downloads
+    assert manager.throttle.limit == 37_000_000
+    with manager._client('wowf', 'eu') as client:
+        assert client.workers == 7
+    assert manager.job('wowf').status == PAUSED
+    page.pause_while_playing.setChecked(False)
+    assert manager.job('wowf').status == QUEUED
+    assert all(w in page.focus_chain() for w in [page.limit, page.workers,
+                                               page.pause_while_playing, page.resume_downloads])
+
+
+@pytest.mark.parametrize('size', [(900, 560), (960, 650), (1440, 900)])
+def test_download_controls_fit_supported_window_sizes(qt, styled, window, size):
+    from waystone.downloads import PAUSED, QUEUED, RUNNING, Job
+    page = window.queue_page
+    jobs = [Job('wow', 'install', status=RUNNING, total_bytes=100_000_000, speed=100_000),
+            Job('wowf', 'install', status=QUEUED, total_bytes=50_000_000),
+            Job('wowt', 'install', status=PAUSED, total_bytes=30_000_000)]
+    window.resize(*size)
+    window.stack.setCurrentWidget(page)
+    page.show_jobs(jobs, {j.client: j.client for j in jobs})
+    qt.processEvents()
+    assert (window.width(), window.height()) == size
+    assert page.findChild(QtWidgets.QScrollArea).horizontalScrollBar().maximum() == 0
+    for card in page.cards.values():
+        for key in ['up', 'down', 'toggle', 'cancel']:
+            button = card[key]
+            if button.isVisible():
+                assert card['frame'].rect().contains(button.geometry())
+    settings = window.settings_page
+    window.stack.setCurrentWidget(settings)
+    settings.show_section('downloads')
+    qt.processEvents()
+    assert settings.scroll.horizontalScrollBar().maximum() == 0
+    for box in [settings.pause_while_playing, settings.resume_downloads]:
+        assert box.width() >= box.sizeHint().width()
+        assert settings.scroll.viewport().rect().contains(box.mapTo(settings.scroll.viewport(), box.rect().bottomRight()))
+
+
+def test_queue_total_includes_waiting_sizes_and_qualifies_paused_jobs(qt):
+    from waystone.downloads import PAUSED, QUEUED, RUNNING, Job
+    queue = pages.QueuePage()
+    jobs = [Job('wow', 'install', status=RUNNING, total_bytes=100_000_000,
+                done_bytes=10_000_000, speed=100_000),
+            Job('wowf', 'install', status=QUEUED, total_bytes=50_000_000),
+            Job('wowt', 'install', status=PAUSED, total_bytes=40_000_000)]
+    labels = {j.client: j.client for j in jobs}
+    queue.show_jobs(jobs, labels)
+    assert '30 min left total if resumed' in queue.summary.text()
+    jobs[-1].total_bytes = 0
+    queue.show_jobs(jobs, labels)
+    assert 'min left' not in queue.summary.text()
+    assert '1 not sized yet' in queue.summary.text()

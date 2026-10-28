@@ -80,10 +80,23 @@ in.
 
 ## Downloads
 
-Downloads run one at a time and can be paused and resumed. A paused or
-interrupted download keeps everything it already stored. The settings have a
-download limit. After each install or update, Waystone removes content that no
-installed client needs anymore.
+Downloads run one at a time. The Downloads page lets you reorder waiting jobs,
+pause or resume the whole queue, and see its estimated total time. Unknown sizes
+and paused jobs are noted beside the estimate.
+
+The queue survives closing Waystone. Unfinished jobs return paused, in order,
+and Resume continues using stored content. Progress comes from the pending plan
+and stored objects. If it cannot be read, Waystone checks it on resume. Failed
+jobs keep their error until retried or removed.
+
+**Settings › Downloads** accepts a custom speed limit in MB/s, with 0 for no
+limit, and 1 to 64 connections. The connection count applies from the next
+download. You can also pause downloads while a game is running. After the last
+game exits, only downloads paused by that setting resume. Automatic resume on
+Waystone startup is a separate setting, off by default.
+
+After each install or update, Waystone removes content that no installed client
+needs anymore.
 
 Waystone checks for updates on start, every 30 minutes and before each launch.
 If a client is behind, **Play** starts its update instead.
