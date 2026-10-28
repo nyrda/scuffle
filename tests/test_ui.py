@@ -914,3 +914,68 @@ def test_dropped_launch_options_are_reported_before_the_folder_notice(qt, bad_la
     banner.close_button.click()
     assert 'Choose an installation folder' in banner.text.text() and banner.isVisible()
     assert banner.action.text() == 'Choose folder'
+
+
+def test_launch_options_stay_reachable_while_a_client_downloads(qt, window, tmp_path):
+    from waystone.downloads import RUNNING, Job
+    window.settings.root = str(tmp_path / 'games')
+    window.open_library()
+    job = Job('wowf', 'install', status=RUNNING, stage='downloading', done_bytes=1, total_bytes=10)
+    window.downloads.jobs.append(job)
+    window.downloads._current = job
+    window.client_list.select('wowf')
+    window.refresh()
+    page = window.client_page
+    assert page.cancel.isVisibleTo(page) and page.more.isVisibleTo(page)
+    assert page.launch_action.isEnabled() and not page.hide_action.isEnabled()
+    window.downloads._current = None
+    window.downloads.jobs.clear()
+
+
+def test_a_failed_catalog_check_says_the_list_is_old_and_can_check_again(qt, window, monkeypatch):
+    import json
+    from pathlib import Path
+    from waystone import catalog, discovery
+    snapshot = json.loads((Path(__file__).parent / 'fixtures/catalog-us.json').read_text())
+    window.on_catalog(window.settings.region, snapshot)
+    window.open_settings('clients')
+    page = window.settings_page
+    assert not page.catalog_row.isVisibleTo(page)
+    window.on_catalog(window.settings.region, None)          # the next check fails
+    assert page.catalog_row.isVisibleTo(page) and 'could not be reached' in page.catalog_note.text()
+    asked = []
+    monkeypatch.setattr(discovery, 'fresh', lambda snapshot: True)
+    monkeypatch.setattr(window, '_discovering', set())
+    monkeypatch.setattr('threading.Thread.start', lambda thread: asked.append(thread.name))
+    page.catalog_retry.click()
+    assert asked == ['waystone-catalog'] and window.catalog_state == 'checking'
+    assert not page.catalog_row.isVisibleTo(page)
+    catalog.apply(None)
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='Linux launch settings')
+def test_a_launch_field_being_corrected_survives_reopening_and_the_header_says_so(qt, window):
+    window.open_settings('launch')
+    page = window.settings_page
+    page.launch.environment.text.setPlainText('BAD NAME=1')
+    assert 'not saved' in page.saved_note.text()
+    window.show_client_page()
+    window.open_settings('launch')
+    assert page.launch.environment.text.toPlainText() == 'BAD NAME=1'
+    assert 'not saved' in page.saved_note.text()
+    page.launch.environment.text.setPlainText('GOOD=1')
+    assert page.saved_note.text() == 'Changes save automatically.'
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='Linux variables')
+def test_reset_clears_a_variables_draft_that_was_never_saved(qt):
+    from waystone import catalog
+    from waystone.launch_options import ClientOptions
+    from waystone.ui.client_options import ClientOptionsPage
+    page = ClientOptionsPage(linux=True)
+    page.load(catalog.get('wow'), ClientOptions())
+    assert not page.reset_button.isEnabled()
+    page.environment.text.setPlainText('1BAD=yes')
+    assert page.reset_button.isEnabled()
+    page.reset_button.click()
+    assert page.environment.text.toPlainText() == '' and not page.reset_button.isEnabled()

@@ -125,6 +125,7 @@ class LaunchSettings(QWidget):
     """The Linux launch settings that apply to every client."""
 
     changed = Signal()
+    edited = Signal()           # any typing, saved or not
 
     # Setting, label, tooltip. The tooltips say what each one does under umu and Proton.
     TOGGLES = [
@@ -213,6 +214,8 @@ class LaunchSettings(QWidget):
         self.environment.setToolTip('One NAME=value per line. They apply to the game, and a client\'s '
                                     'own variables win over these.')
         self.environment.changed.connect(self._emit)
+        self.wrapper.textChanged.connect(self.edited.emit)
+        self.environment.text.textChanged.connect(self.edited.emit)
         self.row('Environment', self.environment, top=6)
         self._saved_wrapper = ''
         self._loaded = LinuxOptions()
@@ -240,11 +243,16 @@ class LaunchSettings(QWidget):
             self.proton.addItem(Path(settings.proton).name, settings.proton)
             index = self.proton.count() - 1
         self.proton.setCurrentIndex(max(index, 0))
+        # Text that is still being corrected stays when Settings opens again.
+        keep = self._loaded is not None and self.unsaved()
         options = self._loaded = settings.linux_launch
         self.choices = {name: getattr(options, name) for name in self.boxes}
-        self.wrapper.setText(options.wrapper)
         self._saved_wrapper = options.wrapper
-        self.environment.set_variables(options.environment)
+        if keep:
+            self.environment.variables = dict(options.environment)
+        else:
+            self.wrapper.setText(options.wrapper)
+            self.environment.set_variables(options.environment)
         self.update_notes()
         self._wrapper_edited()
         self._loading = False
@@ -256,6 +264,14 @@ class LaunchSettings(QWidget):
 
     def apply(self, settings: Settings) -> None:
         settings.proton, settings.linux_launch = self.values()
+
+    def unsaved(self) -> bool:
+        """Whether a field holds text that cannot be saved yet."""
+        try:
+            parse_wrapper(self.wrapper.text())
+        except OptionError:
+            return True
+        return not self.environment.valid()
 
     def _emit(self, *_):
         if not self._loading:

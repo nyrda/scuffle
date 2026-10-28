@@ -93,6 +93,7 @@ class MainWindow(QMainWindow):
         self.options_page.closed.connect(self.show_client_page)
         self.settings_page = SettingsPage()
         self.settings_page.saved.connect(self.on_settings_saved)
+        self.settings_page.recheck_catalog.connect(lambda: self.discover(force=True))
         self.settings_page.closed.connect(self.show_client_page)
         self.settings_page.choose_folder.connect(self.open_folder_picker)
         self.sign_in_page = SignInPage()
@@ -547,7 +548,7 @@ class MainWindow(QMainWindow):
             self.settings_button.setChecked(False)
             return
         self.settings_page.set_clients(self.offered())
-        self.settings_page.show_catalog_state(self.catalog_state)
+        self.settings_page.show_catalog_state(self.catalog_state, self.catalog_checked_at())
         self.settings_page.load(self.settings, *self.kept_split())
         if section:
             self.settings_page.show_section(section)
@@ -844,12 +845,15 @@ class MainWindow(QMainWindow):
         self.updates.update(found)
         self.refresh()
 
-    def discover(self):
+    def discover(self, force: bool = False):
         """Ask the version service for the current clients, when the cached answer is old."""
         region = self.settings.region
         snapshot = discovery.load(cache_dir(), region)
-        if region in self._discovering or discovery.fresh(snapshot):
+        if region in self._discovering or (discovery.fresh(snapshot) and not force):
             return
+        if force:
+            self.catalog_state = 'checking'
+            self.settings_page.show_catalog_state('checking')
         self._discovering.add(region)
         cache = cache_dir()
 
@@ -870,12 +874,17 @@ class MainWindow(QMainWindow):
             return
         if snapshot:
             catalog.apply(snapshot['products'])
-        self.catalog_state = 'ready' if catalog.checked() else 'offline'
+        # A failed check with an earlier answer shows that answer, and says it is old.
+        self.catalog_state = ('ready' if snapshot else 'stale') if catalog.checked() else 'offline'
         self.show_catalog()
+
+    def catalog_checked_at(self) -> int:
+        snapshot = discovery.load(cache_dir(), self.settings.region)
+        return snapshot['checked_at'] if snapshot else 0
 
     def show_catalog(self):
         self.settings_page.set_clients(self.offered())
-        self.settings_page.show_catalog_state(self.catalog_state)
+        self.settings_page.show_catalog_state(self.catalog_state, self.catalog_checked_at())
         self.populate()
         self.refresh()
 

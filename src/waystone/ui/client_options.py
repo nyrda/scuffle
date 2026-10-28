@@ -107,6 +107,7 @@ class ClientOptionsPage(Page):
                                      'Added to the variables in Settings. A name set here wins.')
             self.environment = EnvironmentEditor()
             self.environment.changed.connect(self._edited)
+            self.environment.text.textChanged.connect(self.update_preview)     # so Reset can clear a draft
             add_row(grid, 'Variables', self.environment, top=6)
         body_layout.addStretch()
         self._saved_arguments = ''
@@ -155,7 +156,8 @@ class ClientOptionsPage(Page):
         except OptionError:
             words = self.options().game_arguments()
         self.preview.setText(f'Adds {" ".join(words)}' if words else 'Starts with the game\'s own defaults.')
-        self.reset_button.setEnabled(self.options().active() or bool(self.arguments.text().strip()))
+        drafts = self.arguments.text().strip() or (self.environment and self.environment.text.toPlainText().strip())
+        self.reset_button.setEnabled(self.options().active() or bool(drafts))
 
     def _arguments_edited(self, *_):
         self.update_arguments_note()

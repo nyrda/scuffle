@@ -104,13 +104,13 @@ def main(output: Path) -> None:
         shot('04b-failed')
         window.downloads.jobs.clear()
         window.clear_notice('wow_classic_era')
-    window.client_list.select('wowf')
-    window.updates['wowf'] = True
+    window.client_list.select('wow')
+    window.updates['wow'] = True
     shot('05-update-available')
-    window.updates['wowf'] = False
-    window.phases['wowf'] = 'Connecting'
+    window.updates['wow'] = False
+    window.phases['wow'] = 'Connecting'
     shot('06-launching')
-    window.phases['wowf'] = 'Running'
+    window.phases['wow'] = 'Running'
     shot('07-running')
     window.phases.clear()
     signed_in = window.signed_in

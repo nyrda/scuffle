@@ -1,6 +1,7 @@
 """The pages shown beside the client list."""
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 import shutil
 import sys
@@ -414,7 +415,6 @@ class ClientPage(Page):
         self.cancel.setVisible(cancellable)
         self.cancel.setToolTip('Take it out of the queue' if queued else
                                'Stop this download. What is already stored stays for later.')
-        self.more.setVisible(not cancellable)
         for action in (self.verify_action, self.folder_action, self.menu_separator):
             action.setVisible(installed)
         # Checking files while the game runs or starts would read files it has open.
@@ -455,6 +455,7 @@ class SettingsPage(Page):
              'Older than live', 'Old build']
 
     saved = Signal()
+    recheck_catalog = Signal()
     closed = Signal()
     choose_folder = Signal(str)
 
@@ -538,6 +539,17 @@ class SettingsPage(Page):
 
         # Clients
         clients = self.section_layouts['clients']
+        # Only when the last check failed. The rows then show what an earlier check found.
+        self.catalog_row = QWidget()
+        row = QHBoxLayout(self.catalog_row)
+        row.setContentsMargins(0, 0, 0, 0)
+        self.catalog_note = label('', 'caution', wrap=True)
+        self.catalog_retry = fixed(QPushButton('Check again'), 120)
+        self.catalog_retry.clicked.connect(self.recheck_catalog.emit)
+        row.addWidget(self.catalog_note, 1)
+        row.addWidget(self.catalog_retry)
+        self.catalog_row.hide()
+        clients.addWidget(self.catalog_row)
         self.choices: dict[str, dict] = {}
         self.category_grids: dict[str, QGridLayout] = {}
         for category, title, note in self.CATEGORIES:
@@ -574,6 +586,7 @@ class SettingsPage(Page):
         if sys.platform != 'win32':
             self.launch = LaunchSettings()
             self.launch.changed.connect(self.apply)
+            self.launch.edited.connect(self.update_saved_note)
             self.proton = self.launch.proton
             grid = self.card(launch, 'Linux', 'How the game runs on Linux, for every client. '
                              'Each client adds its own under ⋯ and Launch options.')
@@ -743,9 +756,16 @@ class SettingsPage(Page):
         if hasattr(window, 'update_tab_order'):
             window.update_tab_order()
 
-    def show_catalog_state(self, state: str) -> None:
-        """What the version service said: checking, offline, or ready."""
+    def show_catalog_state(self, state: str, checked_at: int = 0) -> None:
+        """What the version service said: checking, offline, stale (an earlier answer) or ready."""
         others = any(c['category'] == catalog.OTHER for c in self.choices.values())
+        when = datetime.fromtimestamp(checked_at).strftime('%Y-%m-%d %H:%M') if checked_at else ''
+        self.catalog_note.setText(
+            f'Blizzard\'s version service could not be reached. Versions and clients are from the check on {when}.'
+            if state == 'stale' else
+            'Blizzard\'s version service could not be reached, so only the built-in clients are offered.'
+            if state == 'offline' else '')
+        self.catalog_row.setVisible(state in ('stale', 'offline'))
         self.other_status.setText('' if others else {
             'checking': 'Looking for other public clients…',
             'offline': 'Blizzard\'s version service could not be reached, so only the built-in clients are offered.',
@@ -853,8 +873,13 @@ class SettingsPage(Page):
                 (s.listed if wanted else s.unlisted)(code)
         s.save()
         self.saved_note.setText('Saved.')
-        QTimer.singleShot(1600, lambda: self.saved_note.setText('Changes save automatically.'))
+        QTimer.singleShot(1600, self.update_saved_note)
         self.saved.emit()
+
+    def update_saved_note(self, *_) -> None:
+        unsaved = self.launch is not None and self.launch.unsaved()
+        self.saved_note.setText('A field under Launch is not saved until it is fixed.' if unsaved
+                                else 'Changes save automatically.')
 
 
 class SignInPage(Page):
