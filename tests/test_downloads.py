@@ -239,3 +239,76 @@ def test_a_failed_queue_save_never_stops_the_downloads(managers, monkeypatch):
     monkeypatch.setattr(downloads, 'atomic_json', full)
     job = manager.enqueue('wow', 'install')
     assert manager._next() is job and job.status == RUNNING
+
+
+@pytest.mark.parametrize('status', [QUEUED, RUNNING, PAUSED, FAILED])
+def test_uninstall_cannot_replace_a_download_job(managers, status):
+    from waystone.library import LibraryError
+    manager = managers()
+    existing = manager.enqueue('wow', 'update')
+    existing.status = status
+    with pytest.raises(LibraryError, match='download job'):
+        manager.enqueue('wow', 'uninstall')
+    assert manager.job('wow') is existing
+    assert manager.library.has_download_job('wow')
+
+
+def test_uninstall_queue_ignores_unstarted_requests_on_restore(managers):
+    manager = managers()
+    job = manager.enqueue('wow', 'uninstall', keep_settings=False)
+    assert not job.keep_settings and saved()['jobs'][0]['kind'] == 'uninstall'
+    assert managers().job('wow') is None
+
+
+def test_uninstall_worker_uses_library_without_cdn_and_cannot_cancel(managers, monkeypatch):
+    manager = managers()
+    manager.library.create()
+    calls = []
+    def uninstall(code, *, keep_settings, progress):
+        calls.append((threading.get_ident(), code, keep_settings))
+        assert not manager.library.has_download_job(code)
+        manager.pause(code)
+        manager.cancel(code)
+        assert not manager._pause.is_set() and not manager.current().cancel_requested
+        progress({'stage': 'cleaning_up'})
+        return {'uninstalled': code, 'backup': ''}
+    monkeypatch.setattr(manager.library, 'uninstall', uninstall)
+    monkeypatch.setattr(manager, 'client_factory', lambda *args: pytest.fail('Uninstall must not use the CDN'))
+    job = manager.enqueue('wow', 'uninstall', keep_settings=False)
+    finished = threading.Event()
+    manager.listeners.append(lambda job: finished.set() if job.status in {DONE, FAILED} else None)
+    # This fixture suppresses the constructor's worker, so explicitly start the real loop.
+    # Bind the production implementation saved before the fixture patched scheduling.
+    worker = threading.Thread(target=REAL_DOWNLOAD_RUN, args=(manager,), daemon=True)
+    worker.start()
+    assert finished.wait(5)
+    manager.shutdown()
+    worker.join(5)
+    assert job.status == DONE and job.result['uninstalled'] == 'wow'
+    assert calls == [(worker.ident, 'wow', False)] and worker.ident != threading.get_ident()
+    assert job.stage == 'cleaning_up'
+
+
+# Keep a handle to the real worker; the managers fixture only replaces scheduling.
+REAL_DOWNLOAD_RUN = DownloadManager._run
+
+
+def test_uninstall_worker_reports_database_errors(managers, monkeypatch):
+    import sqlite3
+    manager = managers()
+    manager.library.create()
+    def fail(*args, **kwargs):
+        raise sqlite3.OperationalError('Cannot read the content inventory')
+    monkeypatch.setattr(manager.library, 'uninstall', fail)
+    job = manager.enqueue('wow', 'uninstall')
+    finished = threading.Event()
+    manager.listeners.append(lambda job: finished.set() if job.status in {DONE, FAILED} else None)
+    worker = threading.Thread(target=REAL_DOWNLOAD_RUN, args=(manager,), daemon=True)
+    worker.start()
+    try:
+        assert finished.wait(5)
+        assert job.status == FAILED and job.error == 'Cannot read the content inventory'
+        assert manager.current() is None
+    finally:
+        manager.shutdown()
+        worker.join(5)

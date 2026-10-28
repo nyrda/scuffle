@@ -15,6 +15,7 @@ import shutil
 import sqlite3
 import tempfile
 import time
+import uuid
 from typing import Callable, Iterator
 
 from . import catalog, system
@@ -108,6 +109,8 @@ class Library:
         self.state_dir = self.root / STATE_DIR
         self.metadata = self.state_dir / 'metadata'
         self.clients_dir = self.state_dir / 'clients'
+        self.has_download_job: Callable[[str], bool] = lambda code: False
+        self.uninstall_record = self.state_dir / 'uninstall.json'
 
     # Identity and locking
 
@@ -126,7 +129,8 @@ class Library:
         atomic_json(self.state_dir / 'identity.json', IDENTITY)
 
     def reject_symlinks(self) -> None:
-        names = [STATE_DIR, f'{STATE_DIR}/metadata', f'{STATE_DIR}/clients', 'Data', 'Data/data', 'Data/config']
+        names = [STATE_DIR, f'{STATE_DIR}/metadata', f'{STATE_DIR}/clients', 'Data', 'Data/data', 'Data/config',
+                 f'{STATE_DIR}/library.lock', f'{STATE_DIR}/identity.json', f'{STATE_DIR}/uninstall.json']
         if self.clients_dir.is_dir() and not self.clients_dir.is_symlink():
             for client in self.clients_dir.iterdir():
                 names += [str(client.relative_to(self.root)), str(client.relative_to(self.root) / 'staging')]
@@ -145,6 +149,8 @@ class Library:
             raise LibraryError(f'{self.root} is not a Waystone installation')
         try:
             with system.locked_file(self.state_dir / 'library.lock', blocking=False):
+                if self.uninstall_record.exists():
+                    self.recovered_uninstall = self._finish_uninstall()
                 yield self
         except system.LockBusy:
             raise LibraryError('Another Waystone operation is using this installation') from None
@@ -156,6 +162,8 @@ class Library:
         return self.clients_dir / code
 
     def state(self, code: str) -> dict | None:
+        if self.uninstalling() == code:
+            return None
         try:
             return json.loads((self.client_dir(code) / 'state.json').read_text())
         except FileNotFoundError:
@@ -166,7 +174,144 @@ class Library:
             return []
         # Any product code, since the catalog grows with what Blizzard publishes.
         return sorted(p.name for p in self.clients_dir.iterdir()
-                      if catalog.is_product(p.name) and (p / 'state.json').is_file())
+                      if catalog.is_product(p.name) and p.name != self.uninstalling()
+                      and (p / 'state.json').is_file())
+
+    # Uninstall is a roll-forward transaction. The durable record hides the client
+    # before any files move; locked() finishes it before another writer proceeds.
+
+    def uninstalling(self) -> str | None:
+        if self.state_dir.is_symlink() or self.uninstall_record.is_symlink():
+            raise LibraryError('Uninstall record must not be a symbolic link')
+        try:
+            return json.loads(self.uninstall_record.read_text())['code']
+        except FileNotFoundError:
+            return None
+
+    def _removal_path(self, relative: str) -> Path:
+        """Validate each component without changing its spelling or following links."""
+        managed_path(relative)
+        path = self.root
+        for part in PurePosixPath(relative).parts:
+            if part in {'.', '..'} or '/' in part or '\\' in part:
+                raise LibraryError('Unsafe uninstall path')
+            if (path / part).is_symlink():
+                raise LibraryError(f'Uninstall refuses symbolic links: {relative}')
+            path = contained(path, part)
+        if path == self.root or not path.resolve().is_relative_to(self.root):
+            raise LibraryError('Uninstall path must stay inside the installation')
+        return path
+
+    def _removal_tree(self, path: Path) -> None:
+        self._removal_path(str(path.relative_to(self.root)))
+        if path.is_dir():
+            for directory, folders, files in os.walk(path, followlinks=False):
+                for name in folders + files:
+                    child = Path(directory) / name
+                    if child.is_symlink():
+                        raise LibraryError(f'Uninstall refuses symbolic links: {child.relative_to(self.root)}')
+
+    def _uninstall_folder(self, code: str, folder: str) -> Path:
+        if (not isinstance(folder, str) or managed_path(folder) != folder or '/' in folder
+                or folder.casefold() in {'data', STATE_DIR.casefold()}
+                or folder.startswith(('Waystone-backup-', '.waystone-trash-'))):
+            raise LibraryError('Unsafe client folder for uninstall')
+        game = self._removal_path(folder)
+        self._removal_tree(game)
+        for other in self.clients_dir.iterdir():
+            if other.name == code or not catalog.is_product(other.name):
+                continue
+            for name in ('state.json', 'pending.json'):
+                snapshot = other / name
+                if snapshot.exists() and json.loads(snapshot.read_text()).get('folder', '').casefold() == folder.casefold():
+                    raise LibraryError('Another client owns this folder; uninstall refused')
+        if game.exists() and (game / '.flavor.info').read_bytes() != flavor_info(code):
+            raise LibraryError('The game folder does not belong to this client')
+        return game
+
+    def uninstall(self, code: str, *, keep_settings: bool = True, progress=None) -> dict:
+        """Remove a client inside locked(); keep addons/settings by default.
+
+        Once the journal is durable, cancellation cannot abandon a partly deleted
+        client. Startup or the next locked operation completes the removal.
+        """
+        self.reject_symlinks()
+        for path in (self.state_dir, self.root / 'Data', self.root / '.build.info'):
+            self._removal_tree(path)
+        state = self.state(code)
+        if not state:
+            raise LibraryError(f'{catalog.get(code).label} is not installed')
+        if self.running(code):
+            raise LibraryError('Close the client before uninstalling')
+        if self.pending(code) is not None:
+            raise LibraryError('Finish the unfinished update before uninstalling')
+        if self.has_download_job(code):
+            raise LibraryError('Remove the download job before uninstalling')
+        game = self._uninstall_folder(code, state['folder'])
+        self._removal_tree(game)
+        token = uuid.uuid4().hex
+        record = {'code': code, 'folder': state['folder'], 'token': token, 'keep_settings': keep_settings}
+        for name in (f'.waystone-trash-{token}', f'Waystone-backup-{code}-{token}'):
+            if self._removal_path(name).exists():
+                raise LibraryError('Uninstall destination already exists')
+        atomic_json(self.uninstall_record, record)
+        return self._finish_uninstall(progress=progress)
+
+    def _finish_uninstall(self, *, progress=None) -> dict:
+        self._removal_path(f'{STATE_DIR}/uninstall.json')
+        record = json.loads(self.uninstall_record.read_text())
+        code, token = record['code'], record['token']
+        catalog.get(code)
+        if not isinstance(token, str) or not re.fullmatch('[0-9a-f]{32}', token):
+            raise LibraryError('Invalid uninstall recovery record')
+        self.reject_symlinks()
+        for path in (self.state_dir, self.root / 'Data', self.root / '.build.info'):
+            self._removal_tree(path)
+        game = self._uninstall_folder(code, record['folder'])
+        trash = self._removal_path(f'.waystone-trash-{token}')
+        backup = self._removal_path(f'Waystone-backup-{code}-{token}')
+        client = self._removal_path(f'{STATE_DIR}/clients/{code}')
+        for path in (game, trash, backup, client):
+            self._removal_tree(path)
+        emit = progress or (lambda event: None)
+        emit({'stage': 'uninstalling'})
+        if game.exists():
+            if any(self._executable_running(path) for path in game.iterdir()
+                   if GAME_EXECUTABLE.fullmatch(path.name)):
+                raise LibraryError('Close the client before recovering its uninstall')
+            if trash.exists():
+                raise LibraryError('Both game and uninstall trash exist; refusing to overwrite either')
+            os.rename(game, trash)
+            system.sync_directory(self.root)
+        if record['keep_settings'] and trash.exists():
+            for source in trash.iterdir():
+                if source.name.casefold() in {'wtf', 'interface'}:
+                    backup.mkdir(exist_ok=True)
+                    system.sync_directory(self.root)
+                    destination = self._removal_path(f'{backup.name}/{source.name}')
+                    if destination.exists():
+                        raise LibraryError('Settings backup already exists; refusing to overwrite it')
+                    os.rename(source, destination)
+                    system.sync_directory(backup)
+                    system.sync_directory(trash)
+        # The record already excludes this state from build.info and from readers.
+        self.write_build_info()
+        if client.exists():
+            shutil.rmtree(client)
+            system.sync_directory(self.clients_dir)
+        if trash.exists():
+            shutil.rmtree(trash)
+            system.sync_directory(self.root)
+        emit({'stage': 'cleaning_up'})
+        try:
+            cleanup = self.cleanup(threshold=0.0)
+        except LibraryError as error:
+            # Other clients may still be playing or updating. Their content stays.
+            cleanup = {'deferred': str(error)}
+        result = {'uninstalled': code, 'backup': str(backup) if backup.exists() else '', 'cleanup': cleanup}
+        self.uninstall_record.unlink()
+        system.sync_directory(self.state_dir)
+        return result
 
     def pending(self, code: str) -> dict | None:
         try:
@@ -209,6 +354,9 @@ class Library:
         path = self.executable(code)
         if path is None:
             return False
+        return self._executable_running(path)
+
+    def _executable_running(self, path: Path) -> bool:
         folder, name = path.parent, path.name.lower()
         executable = str(path).lower()
         for _, command, cwd in system.running_executables():

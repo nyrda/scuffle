@@ -18,11 +18,11 @@ from PySide6.QtWidgets import (QApplication, QFrame, QGraphicsOpacityEffect, QHB
 from .. import catalog, discovery
 from ..downloads import DONE, FAILED, PAUSED, QUEUED, RUNNING, DownloadManager, Job
 from ..launch import Launcher, LaunchError
-from ..library import Library, update_available
+from ..library import Library, LibraryError, update_available
 from ..ngdp.cdn import CDNClient
 from ..settings import LOCALE_NAMES, MEGABYTE, REGIONS, Settings, cache_dir, data_dir
 from .client_options import ClientOptionsPage, summary as options_summary
-from .pages import ClientPage, FolderPage, QueuePage, SettingsPage, SignInPage
+from .pages import ClientPage, FolderPage, QueuePage, SettingsPage, SignInPage, UninstallPage
 from .style import SPACING, dark_palette, make_images, size_text, stylesheet
 from .widgets import ClientList, DownloadBar, fixed, label, progress_variants
 
@@ -87,6 +87,10 @@ class MainWindow(QMainWindow):
         self.client_page.open_folder_clicked.connect(self.open_folder)
         self.client_page.mode_changed.connect(self.remember_mode)
         self.client_page.hide_clicked.connect(self.hide_client)
+        self.client_page.uninstall_clicked.connect(self.open_uninstall)
+        self.uninstall_page = UninstallPage()
+        self.uninstall_page.cancelled.connect(self.show_client_page)
+        self.uninstall_page.confirmed.connect(self.confirm_uninstall)
         self.client_page.launch_options_clicked.connect(self.open_launch_options)
         self.client_page.show_clients_clicked.connect(lambda: self.open_settings('clients'))
         self.options_page = ClientOptionsPage()
@@ -112,7 +116,7 @@ class MainWindow(QMainWindow):
         self.queue_page.pause_all.connect(lambda: self.downloads.pause_all())
         self.queue_page.resume_all.connect(lambda: self.downloads.resume_all())
         for page in [self.client_page, self.settings_page, self.sign_in_page, self.folder_page, self.queue_page,
-                     self.options_page]:
+                     self.options_page, self.uninstall_page]:
             self.stack.addWidget(page)
         right.addWidget(self.stack, 1)
         self.download_bar = DownloadBar()
@@ -215,7 +219,7 @@ class MainWindow(QMainWindow):
         installed = self.library.installed() if self.library else []
         names = {RUNNING: 'Downloading', QUEUED: 'Queued', PAUSED: 'Paused'}
         failed = {'install': 'Install failed', 'update': 'Update failed', 'verify': 'Needs repair',
-                  'repair': 'Repair failed'}
+                  'repair': 'Repair failed', 'uninstall': 'Uninstall failed'}
         return installed, {job.client: failed[job.kind] if job.status == FAILED else names.get(job.status, 'Downloading')
                            for job in (self.downloads.jobs if self.downloads else []) if job.status != DONE}
 
@@ -264,7 +268,7 @@ class MainWindow(QMainWindow):
             return 'Did not start', 'danger'
         if job and job.status == RUNNING:
             verb = {'install': 'Installing', 'update': 'Updating', 'verify': 'Verifying',
-                    'repair': 'Repairing'}[job.kind]
+                    'repair': 'Repairing', 'uninstall': 'Uninstalling'}[job.kind]
             return (f'{verb} {job.fraction:.0%}' if job.total_bytes else verb), 'active'
         if job and job.status == QUEUED:
             return 'Queued', 'active'
@@ -274,7 +278,7 @@ class MainWindow(QMainWindow):
             return (f'Paused at {job.fraction:.0%}' if job.total_bytes else 'Paused'), 'attention'
         if job and job.status == FAILED:
             return {'install': 'Install failed', 'update': 'Update failed', 'verify': 'Needs repair',
-                    'repair': 'Repair failed'}[job.kind], 'danger'
+                    'repair': 'Repair failed', 'uninstall': 'Uninstall failed'}[job.kind], 'danger'
         if code in self.phases:
             return self.phases[code], 'active'
         state = self.library.state(code) if self.library else None
@@ -347,6 +351,8 @@ class MainWindow(QMainWindow):
             self.update_tab_order()
             return
         self.refresh_client(code)
+        if self.stack.currentWidget() is self.uninstall_page:
+            self.uninstall_page.set_reason(self.uninstall_reason(self.uninstall_page.code))
         self.update_tab_order()
 
     def update_tab_order(self):
@@ -373,7 +379,10 @@ class MainWindow(QMainWindow):
         downloading = bool(job and job.status in {QUEUED, RUNNING, PAUSED})
         launching = code in self.phases
         failed = bool(job and job.status == FAILED)
-        if failed and job.kind == 'verify':
+        removing = bool(job and job.kind == 'uninstall' and job.status == RUNNING)
+        if removing:
+            primary = 'Uninstalling…'
+        elif failed and job.kind == 'verify':
             # A failed check is fixed by repairing, not by checking again.
             primary = 'Repair'
         elif failed:
@@ -429,14 +438,17 @@ class MainWindow(QMainWindow):
         had_primary = self.client_page.primary.hasFocus()
         self.client_page.show_client(
             client, status=status, tone_name=tone_name, primary=primary,
-            primary_enabled=bool(self.library) and not launching and primary != 'Queued',
+            primary_enabled=bool(self.library) and not launching and not removing and primary != 'Queued',
             primary_tip=self.primary_tip(code),
             installed=bool(state),
             busy=(launching and self.phases[code] != 'Running') or preparing, progress=progress,
             busy_launch=launching, queued=bool(job and job.status == QUEUED),
-            progress_text=progress_text, cancellable=downloading, paused=bool(job and job.status == PAUSED),
+            progress_text=progress_text, cancellable=downloading and not removing, paused=bool(job and job.status == PAUSED),
             modes=[(m.id, m.label) for m in client.modes], mode=self.settings.modes.get(code),
             facts=self.facts(code), hint=hint, hideable=code not in self.kept_split()[1])
+        reason = self.uninstall_reason(code)
+        self.client_page.uninstall_action.setEnabled(bool(state) and not reason)
+        self.client_page.uninstall_action.setToolTip(reason)
         # Pause is a secondary action. Only starting something gets the accent color.
         secondary = primary in {'Pause', 'Queued'} or launching
         button = self.client_page.primary
@@ -686,6 +698,44 @@ class MainWindow(QMainWindow):
                         client=self.selected())
         self.refresh()
 
+    def uninstall_reason(self, code: str) -> str:
+        if not self.library or not self.library.state(code):
+            return 'This client is not installed.'
+        if code in self.phases:
+            return 'Close the client before uninstalling.'
+        job = self.downloads.job(code) if self.downloads else None
+        if job and job.status != DONE:
+            return 'Finish or remove this client\'s job before uninstalling.'
+        if self.library.running(code):
+            return 'Close the client before uninstalling.'
+        if self.library.pending(code) is not None:
+            return 'Finish the unfinished update before uninstalling.'
+        return ''
+
+    def open_uninstall(self):
+        code = self.selected()
+        if not code or self.uninstall_reason(code):
+            return
+        state = self.library.state(code)
+        size = self.storage.get('clients', {}).get(code, state.get('encoded_bytes', 0))
+        self.uninstall_page.load(code, size)
+        self.stack.setCurrentWidget(self.uninstall_page)
+        self.update_tab_order()
+
+    def confirm_uninstall(self):
+        page = self.uninstall_page
+        reason = self.uninstall_reason(page.code)
+        if reason:
+            page.set_reason(reason)
+            return
+        try:
+            self.downloads.enqueue(page.code, 'uninstall', keep_settings=page.keep.isChecked())
+        except LibraryError as error:
+            page.set_reason(str(error))
+            return
+        self.show_client_page()
+        self.refresh()
+
     def remember_mode(self, mode: str):
         code = self.selected()
         if code and mode:
@@ -854,9 +904,16 @@ class MainWindow(QMainWindow):
         # A new job can bring a hidden client into the list. A finished or removed one can
         # take it out again.
         self.populate()
-        if job.status == DONE and job.kind in {'install', 'update'}:
+        if job.status == DONE and job.kind in {'install', 'update', 'uninstall'}:
             self.updates[job.client] = False
             self.measure_storage()
+        if job.status == DONE and job.kind == 'uninstall':
+            message = f'{catalog.get(job.client).label} uninstalled.'
+            if job.result.get('backup'):
+                message += f" Addons and settings saved in {Path(job.result['backup']).name}."
+            if job.result.get('cleanup', {}).get('deferred'):
+                message += ' Shared content cleanup will finish after other clients close or finish updating.'
+            self.notify(message, 'info', client=job.client if job.client in self.client_list.rows else '')
         if job.status == FAILED:
             # The message shows on that client's own page, so it needs no name.
             # Dismiss also clears a failed download. Found damage stays until it is repaired.

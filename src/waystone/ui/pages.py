@@ -26,6 +26,58 @@ FIELD_WIDTH = 480
 ROW_WIDTH = 96 + 16 + FIELD_WIDTH      # a settings row: its name, the spacing and the capped field
 
 
+class UninstallPage(QWidget):
+    """An explicit confirmation, kept separate from the client's play controls."""
+    confirmed = Signal()
+    cancelled = Signal()
+
+    def __init__(self):
+        super().__init__()
+        self.code = None
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(*PAGE_MARGINS)
+        layout.setSpacing(18)
+        self.title = label('', 'title', wrap=True)
+        self.details = label(wrap=True)
+        self.keep = QCheckBox('Keep WTF and Interface (recommended)')
+        self.explanation = label('Keep addons and settings in a Waystone-backup folder inside your '
+                                 'installation folder. You can copy them back after reinstalling.', wrap=True)
+        self.warning = label('If unchecked, WTF and Interface are deleted too. All other files in '
+                             'this client\'s game folder are deleted, including files you added.', wrap=True)
+        self.problem = label(wrap=True)
+        for widget in (self.title, self.details, self.keep, self.explanation, self.warning, self.problem):
+            layout.addWidget(widget)
+        actions = QHBoxLayout()
+        self.cancel = fixed(QPushButton('Cancel'))
+        self.confirm = fixed(QPushButton('Uninstall'))
+        self.confirm.setObjectName('primary')
+        self.cancel.clicked.connect(self.cancelled.emit)
+        self.confirm.clicked.connect(self.confirmed.emit)
+        actions.addWidget(self.cancel)
+        actions.addWidget(self.confirm)
+        actions.addStretch()
+        layout.addLayout(actions)
+        layout.addStretch()
+
+    def load(self, code: str, size: int):
+        self.code = code
+        self.title.setText(f'Uninstall {catalog.get(code).label}?')
+        self.details.setText(f'Up to {size_text(size)} of client content can be freed. Content shared '
+                             'with other clients stays. Kept addons and settings still take up space.')
+        self.keep.setChecked(True)
+        self.set_reason('')
+        self.cancel.setFocus()
+
+    def set_reason(self, reason: str):
+        self.problem.setText(reason)
+        self.problem.setVisible(bool(reason))
+        self.confirm.setEnabled(not reason)
+        self.confirm.setToolTip(reason)
+
+    def focus_chain(self):
+        return [self.keep, self.cancel, self.confirm]
+
+
 class Tinted(QWidget):
     """A page body with a faint band of the client's color behind the header."""
 
@@ -212,6 +264,7 @@ class ClientPage(Page):
     verify_clicked = Signal()
     open_folder_clicked = Signal()
     hide_clicked = Signal()
+    uninstall_clicked = Signal()
     show_clients_clicked = Signal()
     launch_options_clicked = Signal()
     mode_changed = Signal(str)
@@ -292,6 +345,8 @@ class ClientPage(Page):
         self.verify_action = menu.addAction('Verify files', self.verify_clicked.emit)
         self.folder_action = menu.addAction('Open folder', self.open_folder_clicked.emit)
         self.launch_action = menu.addAction('Launch options…', self.launch_options_clicked.emit)
+        self.uninstall_action = menu.addAction('Uninstall…', self.uninstall_clicked.emit)
+        menu.setToolTipsVisible(True)
         self.menu_separator = menu.addSeparator()
         self.hide_action = menu.addAction('Hide from list', self.hide_clicked.emit)
         self.more.setMenu(menu)
@@ -437,7 +492,7 @@ class ClientPage(Page):
         self.cancel.setVisible(cancellable)
         self.cancel.setToolTip('Take it out of the queue' if queued else
                                'Stop this download. What is already stored stays for later.')
-        for action in (self.verify_action, self.folder_action, self.menu_separator):
+        for action in (self.verify_action, self.folder_action, self.uninstall_action, self.menu_separator):
             action.setVisible(installed)
         # Checking files while the game runs or starts would read files it has open.
         self.verify_action.setEnabled(installed and not busy and not busy_launch and progress is None)
@@ -1280,7 +1335,7 @@ class QueuePage(Page):
         movable = [j for j in jobs if j.status in {QUEUED, PAUSED}]
         for job in jobs:
             card = self.cards[job.client]
-            verb = {'install': 'Install', 'update': 'Update', 'verify': 'Verify', 'repair': 'Repair'}[job.kind]
+            verb = {'install': 'Install', 'update': 'Update', 'verify': 'Verify', 'repair': 'Repair', 'uninstall': 'Uninstall'}[job.kind]
             card['title'].setText(f'{verb} {labels[job.client]}')
             if job.status == RUNNING:
                 state = 'Running'
@@ -1309,6 +1364,9 @@ class QueuePage(Page):
             card['cancel'].setText('Remove' if job.status == FAILED else 'Cancel')
             # A waiting job has nothing to pause. Cancel takes it out of the queue.
             card['toggle'].setVisible(job.status != QUEUED)
+            removing = job.kind == 'uninstall' and job.status == RUNNING
+            card['toggle'].setEnabled(not removing)
+            card['cancel'].setEnabled(not removing)
             for key, step in [('up', -1), ('down', 1)]:
                 card[key].setVisible(job in movable)
                 card[key].setEnabled(job in movable and 0 <= movable.index(job) + step < len(movable))
