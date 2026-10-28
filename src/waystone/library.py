@@ -521,8 +521,9 @@ class Updater:
             def progress(amount):
                 nonlocal received
                 received = base_bytes + amount
-                self.emit('downloading', done=completed, total=total,
-                          bytes=max(received, done_bytes), total_bytes=size)
+                # Arriving bytes drive the speed only. Progress counts stored, verified objects.
+                self.emit('downloading', done=completed, total=total, bytes=done_bytes,
+                          received=max(received, done_bytes), total_bytes=size)
             self.emit('downloading', force=True, done=completed, total=total,
                       bytes=done_bytes, total_bytes=size)
             try:
@@ -534,8 +535,8 @@ class Updater:
                         if fetched % 256 == 0:
                             self.store.checkpoint()
                         self.check_cancelled()
-                        self.emit('downloading', done=completed, total=total,
-                                  bytes=max(received, done_bytes), total_bytes=size)
+                        self.emit('downloading', done=completed, total=total, bytes=done_bytes,
+                                  received=max(received, done_bytes), total_bytes=size)
             except TransferCancelled as error:
                 self.store.checkpoint()
                 raise Cancelled('Paused') from error

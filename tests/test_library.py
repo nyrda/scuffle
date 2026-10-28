@@ -865,3 +865,21 @@ def test_pausing_everything_never_starts_a_waiting_download(tmp_path):
     time.sleep(0.2)
     assert "wow" not in started and "wowf" in started
     assert {job.client: job.status for job in manager.jobs} == {"wowf": PAUSED, "wow": PAUSED}
+
+
+def test_progress_counts_only_stored_objects_while_arriving_bytes_drive_the_rate(tmp_path, monkeypatch):
+    monkeypatch.setattr(LibraryUpdater, "emit", lambda self, stage, force=False, **fields:   # no event is throttled
+                        self.progress({"client": self.code, "stage": stage, **fields}))
+    class ArrivesThenStops(FixtureCDN):
+        def fetch_many(self, entries, *, as_bytes=False, progress=None, **kwargs):
+            entries = list(entries)
+            progress(sum(entry.encoded_size for entry in entries))    # everything arrived, none verified yet
+            raise KeyboardInterrupt
+            yield
+
+    events = []
+    with pytest.raises(KeyboardInterrupt):
+        run_build(tmp_path / "install", ArrivesThenStops(SyntheticBuild(), tmp_path / "cdn"), progress=events.append)
+    downloading = [event for event in events if event["stage"] == "downloading"]
+    assert downloading and all(event["bytes"] == downloading[0]["bytes"] for event in downloading)
+    assert max(event.get("received", 0) for event in downloading) == downloading[0]["total_bytes"]

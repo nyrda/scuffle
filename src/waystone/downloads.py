@@ -188,7 +188,7 @@ class DownloadManager:
             job.stage = stage
             if 'total_bytes' in event:
                 job.done_bytes, job.total_bytes = event['bytes'], event['total_bytes']
-                job.speed = rate.update(job.done_bytes) if stage == 'downloading' else 0.0
+                job.speed = rate.update(event.get('received', job.done_bytes)) if stage == 'downloading' else 0.0
             elif stage == 'planned':
                 job.total_bytes = event['encoded_bytes']
                 job.done_bytes = event['encoded_bytes'] - event['missing_bytes']
