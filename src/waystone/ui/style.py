@@ -60,11 +60,17 @@ def _draw(path: Path, width: int, height: int, paint) -> None:
 def make_images(directory: Path) -> dict[str, str]:
     """Draw the drop-down chevron and check mark. PNG needs no image plugin."""
     directory.mkdir(parents=True, exist_ok=True)
-    images = {'chevron': directory / 'chevron.png', 'check': directory / 'check.png'}
+    images = {'chevron': directory / 'chevron.png', 'check': directory / 'check.png',
+              'chevron_up': directory / 'chevron-up.png'}
 
     def chevron(painter):
         painter.setPen(QPen(QColor(MUTED), 3, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
         painter.drawPolyline([QPointF(4, 4), QPointF(10, 10), QPointF(16, 4)])
+
+    def chevron_up(painter):
+        painter.translate(0, 14)
+        painter.scale(1, -1)
+        chevron(painter)
 
     def check(painter):
         painter.setPen(QPen(QColor('white'), 3.4, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
@@ -72,6 +78,7 @@ def make_images(directory: Path) -> dict[str, str]:
 
     _draw(images['chevron'], 10, 7, chevron)
     _draw(images['check'], 12, 12, check)
+    _draw(images['chevron_up'], 10, 7, chevron_up)
     return {name: path.as_posix() for name, path in images.items()}
 
 
@@ -123,6 +130,7 @@ QPushButton#primary:disabled {{ background: #26314a; color: #8a96ad; }}
 QPushButton#primary[secondary="true"] {{ background: {RAISED}; color: {TEXT}; }}
 QPushButton#primary[secondary="true"]:hover {{ background: #2c3039; }}
 QPushButton#primary[secondary="true"]:disabled {{ background: #1d2026; color: {MUTED}; }}
+QPushButton#reorder {{ padding: 0; font-size: 16px; }}
 QPushButton#flat {{ background: transparent; color: {MUTED}; padding: 0 6px; min-height: 24px; }}
 QPushButton#flat:hover {{ color: {TEXT}; }}
 QPushButton#flat:disabled {{ color: #535863; background: transparent; border-color: transparent; }}
@@ -150,9 +158,9 @@ QProgressBar#strip::chunk {{ border-radius: 0; }}
 QProgressBar#strip[tone="attention"]::chunk {{ background: #d9a650; }}
 QProgressBar[tone="attention"]::chunk {{ background: #d9a650; }}
 QLabel#titlelarge {{ font-size: 24pt; font-weight: 600; }}
-QComboBox, QLineEdit {{ background: #1f2229; color: {TEXT}; border: 1px solid {BORDER};
+QComboBox, QLineEdit, QSpinBox {{ background: #1f2229; color: {TEXT}; border: 1px solid {BORDER};
                        border-radius: 6px; padding: 0 10px; min-height: {CONTROL_HEIGHT - 2}px; }}
-QComboBox:hover, QLineEdit:focus, QComboBox:focus {{ border-color: #4a6fb0; }}
+QComboBox:hover, QLineEdit:focus, QComboBox:focus, QSpinBox:focus {{ border-color: #4a6fb0; }}
 QPlainTextEdit {{ background: #1f2229; color: {TEXT}; border: 1px solid {BORDER}; border-radius: 6px;
                   padding: 4px 6px; }}
 QPlainTextEdit:focus {{ border-color: #4a6fb0; }}
@@ -160,6 +168,12 @@ QLabel#problem {{ color: #f19a9a; font-size: 9.5pt; }}
 QLabel#caution {{ color: #f0c27a; font-size: 9.5pt; }}
 QLineEdit:read-only {{ background: transparent; border-color: #262a33; color: #c9ced6; }}
 QLineEdit[locked="true"] {{ color: {FAINT}; }}
+QSpinBox {{ padding-right: 26px; }}
+QSpinBox::up-button, QSpinBox::down-button {{ width: 24px; border: none; background: transparent; }}
+QSpinBox::up-button {{ subcontrol-origin: border; subcontrol-position: top right; }}
+QSpinBox::down-button {{ subcontrol-origin: border; subcontrol-position: bottom right; }}
+QSpinBox::up-arrow {{ image: url({images['chevron_up']}); width: 10px; height: 7px; }}
+QSpinBox::down-arrow {{ image: url({images['chevron']}); width: 10px; height: 7px; }}
 QComboBox::drop-down {{ border: none; width: 26px; }}
 QComboBox::down-arrow {{ image: url({images['chevron']}); width: 10px; height: 7px; }}
 QComboBox QAbstractItemView {{ background: #1d2027; color: {TEXT}; border: 1px solid {BORDER};

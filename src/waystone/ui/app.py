@@ -108,6 +108,9 @@ class MainWindow(QMainWindow):
         self.queue_page.resume.connect(self.retry_or_resume)
         self.queue_page.cancel.connect(self.cancel_from_queue)
         self.queue_page.limit_changed.connect(self.set_limit)
+        self.queue_page.move.connect(lambda code, offset: self.downloads.move(code, offset))
+        self.queue_page.pause_all.connect(lambda: self.downloads.pause_all())
+        self.queue_page.resume_all.connect(lambda: self.downloads.resume_all())
         for page in [self.client_page, self.settings_page, self.sign_in_page, self.folder_page, self.queue_page,
                      self.options_page]:
             self.stack.addWidget(page)
@@ -159,6 +162,8 @@ class MainWindow(QMainWindow):
     def open_library(self):
         if not self.settings.root:
             return
+        if self.downloads:
+            self.downloads.shutdown()
         self.library = Library(self.settings.root)
         self.downloads = DownloadManager(self.settings, self.library)
         self.downloads.listeners.append(self.bus.job_changed.emit)
@@ -261,7 +266,7 @@ class MainWindow(QMainWindow):
         if job and job.status == QUEUED:
             return 'Queued', 'active'
         if job and job.status == PAUSED:
-            return f'Paused at {job.fraction:.0%}', 'attention'
+            return (f'Paused at {job.fraction:.0%}' if job.total_bytes else 'Paused'), 'attention'
         if job and job.status == FAILED:
             return {'install': 'Install failed', 'update': 'Update failed', 'verify': 'Needs repair',
                     'repair': 'Repair failed'}[job.kind], 'danger'
@@ -488,6 +493,8 @@ class MainWindow(QMainWindow):
         # A failure stays listed with its reason until it is retried or removed.
         jobs = jobs + failed
         self.queue_page.show_jobs(jobs, {j.client: catalog.get(j.client).label for j in jobs})
+        if self.stack.currentWidget() is self.queue_page:
+            self.update_tab_order()
 
     # Messages
 
@@ -761,10 +768,17 @@ class MainWindow(QMainWindow):
 
     def on_phase(self, code: str, text: str):
         self.phases[code] = text
+        self.sync_game_downloads()
         self.refresh()
+
+    def sync_game_downloads(self):
+        if self.downloads:
+            self.downloads.set_game_running(self.settings.pause_while_playing and
+                                            'Running' in self.phases.values())
 
     def on_task_finished(self, code: str, message: str):
         self.phases.pop(code, None)
+        self.sync_game_downloads()
         if not code:
             self._signing_in = False
         self.refresh()
@@ -897,6 +911,7 @@ class MainWindow(QMainWindow):
         self.refresh()
 
     def on_settings_saved(self):
+        self.sync_game_downloads()
         if self.downloads:
             self.downloads.set_bandwidth_limit(self.settings.bandwidth_limit)
         self.download_bar.set_limit(self.settings.bandwidth_limit // MEGABYTE)
@@ -919,12 +934,13 @@ class MainWindow(QMainWindow):
             self.check_updates()
 
     def closeEvent(self, event):
+        if self.downloads:
+            self.downloads.shutdown()
         if self.downloads and self.downloads.busy():
-            # Pausing keeps everything stored so far. The next start resumes it.
+            # Keep stored content and the queue for the next start.
             self.notify('Pausing downloads before closing…', 'info', client='')
             self.stack.setCurrentWidget(self.client_page)
             QApplication.processEvents()
-            self.downloads.pause_all()        # a waiting download must not start as the window closes
             deadline = time.monotonic() + 30
             while self.downloads.busy() and time.monotonic() < deadline:
                 QApplication.processEvents()

@@ -91,3 +91,28 @@ def test_an_installed_other_client_stays_listed_while_other_clients_are_off():
     assert codes() == [] and codes(extra=['wowlivetest']) == []
     assert codes(installed=['wowlivetest']) == ['wowlivetest']
     assert codes(installed=['wowlivetest'], hidden=['wowlivetest']) == []
+
+
+def test_old_settings_default_to_manual_resume_and_no_game_pause(config):
+    config.write_text('{"workers": 8, "bandwidth_limit": 7000000}')
+    settings = Settings.load()
+    assert not settings.resume_downloads and not settings.pause_while_playing
+    assert settings.workers == 8 and settings.bandwidth_limit == 7_000_000
+
+
+@pytest.mark.parametrize('workers, limit, expected', [
+    (0, -1, (1, 0)),
+    (1000, 20_000_000_000, (64, 10_000_000_000)),
+    ('many', 'fast', (16, 0)),
+    (None, None, (16, 0)),
+    (True, False, (16, 0)),
+    ([], {}, (16, 0)),
+])
+def test_invalid_download_settings_load_safely(config, workers, limit, expected):
+    config.write_text(json.dumps({'workers': workers, 'bandwidth_limit': limit,
+                                  'pause_while_playing': 'yes', 'resume_downloads': 1}))
+    settings = Settings.load()
+    assert (settings.workers, settings.bandwidth_limit) == expected
+    assert settings.pause_while_playing is False and settings.resume_downloads is False
+    settings.save()
+    assert Settings.load().workers == expected[0]

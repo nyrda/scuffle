@@ -6,13 +6,14 @@ A paused job keeps every object it stored and resumes from there.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
 import threading
 from typing import Callable
 
 from . import catalog
-from .library import Cancelled, Library, LibraryError, Updater
+from .library import Cancelled, Library, LibraryError, Updater, atomic_json
 from .ngdp.cdn import CDNClient, Throttle
-from .settings import Settings, cache_dir
+from .settings import Settings, cache_dir, data_dir
 from .rates import RateSmoother
 
 QUEUED, RUNNING, PAUSED, FAILED, DONE = 'queued', 'running', 'paused', 'failed', 'done'
@@ -46,16 +47,64 @@ class DownloadManager:
         self._lock = threading.Condition()
         self._pause = threading.Event()
         self._current: Job | None = None
+        self._path = data_dir() / 'downloads.json'
+        self._game_running = False
+        self._game_paused: set[str] = set()
+        self._resume_requested: set[str] = set()
+        self._stopping = False
+        self._restore()
         self._worker = threading.Thread(target=self._run, name='waystone-downloads', daemon=True)
         self._worker.start()
 
     def _client(self, code: str, region: str) -> CDNClient:
         return CDNClient(cache_dir(), region, code, workers=self.settings.workers, throttle=self.throttle)
 
+    def _restore(self) -> None:
+        try:
+            saved = json.loads(self._path.read_text())
+        except (OSError, ValueError):
+            return
+        if not isinstance(saved, dict) or saved.get('root') != str(self.library.root):
+            return
+        rows = saved.get('jobs')
+        if not isinstance(rows, list):
+            return
+        for row in rows:
+            if not isinstance(row, dict) or not catalog.is_product(row.get('client')):
+                continue
+            if row.get('kind') not in ('install', 'update', 'verify', 'repair'):
+                continue
+            if row.get('status') not in (QUEUED, RUNNING, PAUSED, FAILED) or self.job(row['client']):
+                continue
+            status = FAILED if row['status'] == FAILED else PAUSED
+            job = Job(row['client'], row['kind'], status=status,
+                      error=row.get('error', '') if isinstance(row.get('error', ''), str) else '')
+            if job.kind != 'verify':
+                job.done_bytes, job.total_bytes = self.library.download_progress(job.client)
+            if status == PAUSED and self.settings.resume_downloads:
+                job.status = QUEUED
+            self.jobs.append(job)
+
+    def _save(self) -> None:
+        """Called with the queue lock, only when membership, order or status changes."""
+        atomic_json(self._path, {'root': str(self.library.root), 'jobs': [
+            {'client': j.client, 'kind': j.kind, 'status': j.status, 'error': j.error}
+            for j in self.jobs if j.status != DONE and not j.cancel_requested]})
+
     # Control
 
     def set_bandwidth_limit(self, limit: int) -> None:
         self.throttle.limit = max(0, limit)
+
+    def _resume(self, job: Job) -> None:
+        if self._stopping:
+            return
+        if self._game_running:
+            self._game_paused.add(job.client)
+        elif job is self._current:
+            self._resume_requested.add(job.client)
+        else:
+            job.status, job.speed = QUEUED, 0.0
 
     def enqueue(self, client: str, kind: str) -> Job:
         catalog.get(client)
@@ -64,77 +113,148 @@ class DownloadManager:
         with self._lock:
             existing = self.job(client)
             if existing and existing.status in {QUEUED, RUNNING}:
+                if existing is self._current and self._pause.is_set():
+                    self._resume(existing)
                 return existing
             if existing and existing.status == PAUSED and existing.kind == kind:
-                existing.status = QUEUED
                 job = existing
             else:
                 if existing:
                     self.jobs.remove(existing)
-                job = Job(client, kind)
+                job = Job(client, kind, status=PAUSED)
                 self.jobs.append(job)
-            self._lock.notify()
+            self._resume(job)
+            self._save()
+            self._lock.notify_all()
         self._notify(job)
         return job
 
     def pause(self, client: str) -> None:
         with self._lock:
+            self._game_paused.discard(client)
+            self._resume_requested.discard(client)
             job = self.job(client)
             if job is None:
                 return
             if job.status == QUEUED:
                 job.status = PAUSED
-            elif job.status == RUNNING:
+            elif job is self._current:
                 self._pause.set()
-        if job:
-            self._notify(job)
+            self._save()
+        self._notify(job)
 
     def pause_all(self) -> None:
-        """Pause every job, waiting ones first, so none starts while the running one stops."""
+        """Pause waiting jobs before stopping the current one."""
         with self._lock:
-            waiting = [job for job in self.jobs if job.status == QUEUED]
-            for job in waiting:
-                job.status = PAUSED
-            if self._current is not None:
-                self._pause.set()
-        for job in waiting:
+            self._game_paused.clear()
+            self._resume_requested.clear()
+            changed = [j for j in self.jobs if j.status in {QUEUED, RUNNING}]
+            for job in changed:
+                if job is self._current:
+                    self._pause.set()
+                else:
+                    job.status = PAUSED
+            self._save()
+        for job in changed:
             self._notify(job)
+
+    def resume_all(self) -> None:
+        with self._lock:
+            changed = [j for j in self.jobs if j.status == PAUSED or
+                       (j is self._current and self._pause.is_set())]
+            for job in changed:
+                self._resume(job)
+            self._save()
+            self._lock.notify_all()
+        for job in changed:
+            self._notify(job)
+
+    def set_game_running(self, running: bool) -> None:
+        """Hold downloads during games, preserving the user's own pauses."""
+        with self._lock:
+            if running == self._game_running:
+                return
+            self._game_running = running
+            if running:
+                changed = [j for j in self.jobs if j.status == QUEUED or
+                           (j is self._current and not self._pause.is_set())]
+                self._game_paused.update(j.client for j in changed)
+                for job in changed:
+                    if job is self._current:
+                        self._pause.set()
+                    else:
+                        job.status = PAUSED
+            else:
+                changed = [j for j in self.jobs if j.client in self._game_paused]
+                self._game_paused.clear()
+                for job in changed:
+                    if job.status == PAUSED or (job is self._current and self._pause.is_set()):
+                        self._resume(job)
+            self._save()
+            self._lock.notify_all()
+        for job in changed:
+            self._notify(job)
+
+    def move(self, client: str, offset: int) -> None:
+        """Move a waiting job by an offset among waiting jobs only."""
+        with self._lock:
+            waiting = self.pending()
+            job = self.job(client)
+            if job not in waiting:
+                return
+            index = waiting.index(job)
+            target = max(0, min(len(waiting) - 1, index + offset))
+            waiting.insert(target, waiting.pop(index))
+            ordered = iter(waiting)
+            self.jobs[:] = [next(ordered) if j.status in {QUEUED, PAUSED} and j is not self._current
+                            else j for j in self.jobs]
+            self._save()
+        self._notify(job)
 
     def remove(self, client: str) -> None:
         with self._lock:
             job = self.job(client)
-            if job and job.status != RUNNING:
-                self.jobs.remove(job)
+            if job and job is not self._current:
+                self.cancel(client)
 
     def cancel(self, client: str) -> None:
-        """Drop a job. A running one stops at the next object first.
-
-        Stored objects stay in the folder. Cleanup removes them later if no
-        client needs them.
-        """
+        """Drop a job after its current object. Stored content stays for reuse."""
         with self._lock:
             job = self.job(client)
             if job is None:
                 return
-            if job.status == RUNNING:
+            self._game_paused.discard(client)
+            self._resume_requested.discard(client)
+            if job is self._current:
                 job.cancel_requested = True
                 self._pause.set()
-                return
-            self.jobs.remove(job)
+            else:
+                self.jobs.remove(job)
+            self._save()
         self._notify(job)
 
     def pending(self) -> list[Job]:
         """Queued and paused jobs other than the running one, in queue order."""
-        return [j for j in self.jobs if j.status in {QUEUED, PAUSED} and j is not self._current]
+        with self._lock:
+            return [j for j in self.jobs if j.status in {QUEUED, PAUSED} and j is not self._current]
 
     def job(self, client: str) -> Job | None:
-        return next((j for j in self.jobs if j.client == client), None)
+        with self._lock:
+            return next((j for j in self.jobs if j.client == client), None)
 
     def busy(self) -> bool:
-        return self._current is not None
+        with self._lock:
+            return self._current is not None
 
     def current(self) -> Job | None:
-        return self._current
+        with self._lock:
+            return self._current
+
+    def shutdown(self) -> None:
+        with self._lock:
+            self._stopping = True
+            self.pause_all()
+            self._lock.notify_all()
 
     # Work
 
@@ -142,34 +262,38 @@ class DownloadManager:
         for listener in list(self.listeners):
             listener(job)
 
-    def _next(self) -> Job:
+    def _next(self) -> Job | None:
         with self._lock:
-            while True:
+            while not self._stopping:
                 job = next((j for j in self.jobs if j.status == QUEUED), None)
-                if job:
+                if job and not self._game_running:
                     job.status, job.error = RUNNING, ''
                     self._current = job
                     self._pause.clear()
+                    self._save()
                     return job
                 self._lock.wait()
+            return None
 
     def _run(self) -> None:
-        while True:
-            job = self._next()
+        while (job := self._next()) is not None:
             self._notify(job)
+            status, error = DONE, ''
             try:
                 job.result = self._execute(job)
-                job.status = DONE
             except Cancelled:
-                job.status = PAUSED
-                if job.cancel_requested:
-                    with self._lock:
-                        self.jobs.remove(job)
-            except (LibraryError, OSError, ValueError, RuntimeError) as error:
-                job.status, job.error = FAILED, str(error)
-            finally:
-                job.speed = 0.0
+                status = PAUSED
+            except (LibraryError, OSError, ValueError, RuntimeError) as failure:
+                status, error = FAILED, str(failure)
+            with self._lock:
+                job.status, job.error, job.speed = status, error, 0.0
                 self._current = None
+                if job.cancel_requested:
+                    self.jobs.remove(job)
+                elif status == PAUSED and job.client in self._resume_requested:
+                    self._resume(job)
+                self._resume_requested.discard(job.client)
+                self._save()
             self._notify(job)
 
     def _execute(self, job: Job) -> dict:

@@ -64,11 +64,13 @@ def progress_variants(job) -> list[str]:
     if job.status == QUEUED:
         return ['Starts when the current download is done', 'Waiting']
     if not job.total_bytes:
-        return ['']
+        return ['Progress will be checked on resume']
     percent = f'{job.fraction:.0%}'
     sizes = f'{size_text(job.done_bytes)} of {size_text(job.total_bytes)}'
-    if running and job.speed > 0:
-        left, speed = time_left(job), f'{size_text(job.speed)}/s'
+    if running:
+        left = time_left(job) if job.speed > 0 else 'Estimating…'
+        speed = (f'{job.speed / 1_000_000:.0f} MB/s' if job.speed >= 10_000_000 else
+                 f'{size_text(job.speed)}/s') if job.speed > 0 else 'Estimating…'
         # Narrow windows drop the sizes first, then the speed.
         return [f'{percent} · {left} · {speed} · {sizes}', f'{percent} · {left} · {speed}', f'{percent} · {left}']
     return [f'{percent} · {sizes}', percent]
