@@ -921,3 +921,14 @@ def test_a_client_installed_from_discovery_is_listed_by_the_library(tmp_path):
     (clients / "not-a-product").mkdir()
     (clients / "not-a-product/state.json").write_text("{}")
     assert Library(root).installed() == ["wowe1", "wowf"]
+
+
+def test_a_paused_update_reserves_the_folder_it_moves_into(tmp_path):
+    root = tmp_path / "install"
+    run_build(root, FixtureCDN(SyntheticBuild(changed=b"forever content"), tmp_path / "forever-cache"))
+    # Forever is installed and has an unfinished update that targets another folder.
+    pending = root / ".waystone/clients/wowf/pending.json"
+    pending.write_text(json.dumps({"phase": "downloading", "folder": "_moved_"}))
+    event = SyntheticBuild("0.0.2.2", changed=b"event content", product="wowe1", folder="_moved_")
+    with pytest.raises(UpdateError, match="_moved_, which Forever already uses"):
+        run_build(root, FixtureCDN(event, tmp_path / "event-cache"), product="wowe1")

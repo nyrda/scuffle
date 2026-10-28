@@ -445,8 +445,10 @@ class Updater:
         for other in self.library.clients_dir.iterdir():
             if other.name == self.code or not catalog.is_product(other.name):
                 continue
-            used = (self.library.state(other.name) or self.library.pending(other.name) or {}).get('folder', '')
-            if used.lower() == folder.lower():
+            # A paused update can target a new folder while the installed one is still in use.
+            used = {(snapshot or {}).get('folder', '').lower()
+                    for snapshot in (self.library.state(other.name), self.library.pending(other.name))}
+            if folder.lower() in used:
                 raise LibraryError(f'{self.entry.label} would install into {folder}, '
                                    f'which {catalog.get(other.name).label} already uses')
         if self.locale not in config.get('supported_locales', []):
