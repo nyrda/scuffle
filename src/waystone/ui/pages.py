@@ -126,7 +126,7 @@ class Page(QWidget):
         layout.insertWidget(0, self._fixed_top)
 
     def balance(self, outer: QVBoxLayout) -> None:
-        """On tall windows, share the spare height above and below the content, one part to two."""
+        """On tall windows, a gap above the content, the same on every page so switching never jumps."""
         self._top = top_inset(outer)
         self._balanced = outer
 
@@ -137,16 +137,15 @@ class Page(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        height = self.window().height() if self.window() is not self else self.height()
+        tall = height >= 820
+        # One gap for every page on the same window, so the titles line up page to page.
+        gap = min(TOP_INSET, max(0, 40 + (height - 820) // 3)) if tall else 0
         fixed = getattr(self, '_fixed_top', None)
         if fixed is not None:
-            tall = (self.window().height() if self.window() is not self else self.height()) >= 820
-            # About what the balanced pages get above them on the same window.
-            spare = (self.window().height() if self.window() is not self else self.height()) - 820
-            fixed.setFixedHeight(min(TOP_INSET, max(0, 40 + spare // 3)) if tall else 0)
-        outer = getattr(self, '_balanced', None)
-        if outer is not None:
-            tall = (self.window().height() if self.window() is not self else self.height()) >= 820
-            outer.setStretch(0, 1 if tall else 0)
+            fixed.setFixedHeight(gap)
+        if getattr(self, '_balanced', None) is not None:
+            self._top.setFixedHeight(gap)
             self._top.setVisible(tall)
         wide = self.width() >= self.WIDE
         for row in self._rows:
@@ -160,10 +159,8 @@ TOP_INSET = 140      # the most spare height that goes above a page's content
 
 
 def top_inset(outer: QVBoxLayout) -> QWidget:
-    """A gap above the content that grows on tall windows, up to TOP_INSET."""
+    """A gap above the content on tall windows, up to TOP_INSET. Page.resizeEvent sizes it."""
     gap = QWidget()
-    gap.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
-    gap.setMaximumHeight(TOP_INSET)
     gap.hide()
     outer.insertWidget(0, gap)
     return gap
@@ -332,7 +329,7 @@ class ClientPage(Page):
         self.main_layout.insertWidget(self.main_layout.indexOf(self.hint), self.storage_gap)
         self.main_layout.insertWidget(self.main_layout.indexOf(self.hint), self.storage)
         # Spare height goes below the content, and on tall windows a little above it too.
-        self._top = top_inset(outer)
+        self.balance(outer)
         outer.addStretch(1)
 
     def resizeEvent(self, event):
@@ -364,8 +361,6 @@ class ClientPage(Page):
         # Tall windows give the header more presence, in step with the tinted band behind it.
         if tall != self._tall:
             self._tall = tall
-            self.outer.setStretch(0, 1 if tall else 0)
-            self._top.setVisible(tall)
             size = 64 if tall else 52
             self.icon.setFixedSize(size, size)
             self.title.setObjectName('titlelarge' if tall else 'title')
