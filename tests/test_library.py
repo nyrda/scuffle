@@ -1056,29 +1056,22 @@ def test_uninstall_refuses_unsafe_or_other_client_folder(uninstall_pair, folder)
     assert library.state('wowf') and not library.uninstall_record.exists()
 
 
-@pytest.mark.parametrize('point', ['rename', 'backup', 'build_info', 'state_delete', 'trash_delete', 'cleanup'])
+@pytest.mark.parametrize('point', ['rename', 'backup', 'state_move', 'build_info'])
 def test_uninstall_interruption_recovers_on_next_start(uninstall_pair, monkeypatch, point):
     import waystone.library as module
     library, _, _ = uninstall_pair
-    original_rename, original_rmtree = module.os.rename, module.shutil.rmtree
+    original_rename = module.os.rename
     def rename(source, destination):
-        if point == 'rename' or (point == 'backup' and Path(source).name.casefold() == 'wtf'):
+        if (point == 'rename' or (point == 'backup' and Path(source).name.casefold() == 'wtf')
+                or (point == 'state_move' and Path(source).name == 'wowf')):
             raise OSError('simulated crash')
         original_rename(source, destination)
-    def rmtree(path, *args, **kwargs):
-        if ((point == 'state_delete' and Path(path).name == 'wowf') or
-                (point == 'trash_delete' and Path(path).name.startswith('.waystone-trash-'))):
-            # A real interruption after a partial deletion, not just before it.
-            next(p for p in Path(path).rglob('*') if p.is_file()).unlink()
-            raise OSError('simulated crash')
-        original_rmtree(path, *args, **kwargs)
     def fail(*args, **kwargs):
         raise OSError('simulated crash')
     with monkeypatch.context() as patch:
         patch.setattr(module.os, 'rename', rename)
-        patch.setattr(module.shutil, 'rmtree', rmtree)
-        if point in {'build_info', 'cleanup'}:
-            patch.setattr(library, 'write_build_info' if point == 'build_info' else 'cleanup', fail)
+        if point == 'build_info':
+            patch.setattr(library, 'write_build_info', fail)
         with library.locked(), pytest.raises(OSError, match='simulated crash'):
             library.uninstall('wowf')
     restarted = Library(library.root)
@@ -1094,6 +1087,57 @@ def test_uninstall_interruption_recovers_on_next_start(uninstall_pair, monkeypat
     assert len(backups) == 1 and (backups[0] / 'WTF/Config.wtf').is_file()
     assert (library.root / '_retail_/Wow.exe').is_file()
     assert [row['Product'] for row in parse_psv((library.root / '.build.info').read_bytes())] == ['wow']
+
+
+@pytest.mark.parametrize('point', ['trash_delete', 'cleanup'])
+def test_a_file_that_cannot_be_deleted_never_blocks_the_library(uninstall_pair, monkeypatch, point):
+    import waystone.library as module
+    library, _, _ = uninstall_pair
+    original_rmtree = module.shutil.rmtree
+    def rmtree(path, *args, **kwargs):
+        if Path(path).name.startswith('.waystone-trash-'):
+            # Partly deleted, then a file that stays, such as one held open on Windows.
+            next(p for p in Path(path).rglob('*') if p.is_file()).unlink()
+            raise PermissionError('in use')
+        original_rmtree(path, *args, **kwargs)
+    def fail(*args, **kwargs):
+        raise OSError('simulated failure')
+    with monkeypatch.context() as patch:
+        patch.setattr(module.shutil, 'rmtree', rmtree if point == 'trash_delete' else original_rmtree)
+        if point == 'cleanup':
+            patch.setattr(library, 'cleanup', fail)
+        with library.locked():
+            result = library.uninstall('wowf')
+    assert library.state('wowf') is None and not library.uninstall_record.exists()
+    assert bool(result['leftover']) == (point == 'trash_delete')
+    # Other clients keep working, and the next operation removes what stayed.
+    with library.locked():
+        pass
+    assert not list(library.root.glob('.waystone-trash-*'))
+    assert library.installed() == ['wow']
+
+
+def test_uninstall_never_crosses_into_another_file_system(uninstall_pair, monkeypatch, tmp_path):
+    import waystone.library as module
+    library, _, _ = uninstall_pair
+    mounted = library.root / '_forever_' / 'Screenshots'
+    mounted.mkdir(exist_ok=True)
+    (mounted / 'precious.png').write_bytes(b'picture')
+    # A bind mount of the same file system, which only the mount table shows.
+    monkeypatch.setattr(module, 'mount_points', lambda: [Path('/'), mounted.resolve()])
+    with library.locked(), pytest.raises(UpdateError, match='another file system'):
+        library.uninstall('wowf', keep_settings=False)
+    assert (mounted / 'precious.png').read_bytes() == b'picture' and library.state('wowf')
+    assert not library.uninstall_record.exists()
+
+
+def test_cleanup_keeps_content_of_a_client_that_is_still_being_installed(uninstall_pair):
+    library, _, _ = uninstall_pair
+    planning = library.client_dir('wowt')
+    planning.mkdir(parents=True)
+    (planning / 'pending.json').write_text('{"phase": "preparing"}')
+    with library.locked(), pytest.raises(UpdateError, match='before cleaning up'):
+        library.cleanup()
 
 
 def test_uninstall_defers_cleanup_while_another_client_runs(uninstall_pair, monkeypatch):

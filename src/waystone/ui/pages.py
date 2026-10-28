@@ -39,11 +39,11 @@ class UninstallPage(QWidget):
         layout.setSpacing(18)
         self.title = label('', 'title', wrap=True)
         self.details = label(wrap=True)
-        self.keep = QCheckBox('Keep WTF and Interface (recommended)')
-        self.explanation = label('Keep addons and settings in a Waystone-backup folder inside your '
-                                 'installation folder. You can copy them back after reinstalling.', wrap=True)
-        self.warning = label('If unchecked, WTF and Interface are deleted too. All other files in '
-                             'this client\'s game folder are deleted, including files you added.', wrap=True)
+        self.keep = QCheckBox('Keep WTF, Interface and Screenshots (recommended)')
+        self.explanation = label('Keeps settings, addons and screenshots in a Waystone-backup folder inside '
+                                 'your installation folder. You can copy them back after reinstalling.', wrap=True)
+        self.warning = label('If unchecked, they are deleted too. All other files in this client\'s '
+                             'game folder are deleted, including files you added.', wrap=True)
         self.problem = label(wrap=True)
         for widget in (self.title, self.details, self.keep, self.explanation, self.warning, self.problem):
             layout.addWidget(widget)

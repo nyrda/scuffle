@@ -599,10 +599,12 @@ class CascStore:
             finally:
                 self._db.execute("PRAGMA synchronous=NORMAL")
 
-    def put(self, ekey: bytes, source: Path | bytes) -> None:
+    def put(self, ekey: bytes, source: Path | bytes, *, relocate: bool = False) -> None:
+        """Append a verified object. With relocate, a stored object gets a new copy, and its
+        entry switches to it in the same commit, so a crash keeps one valid copy either way."""
         ekey = _key(ekey)
         with self._locked():
-            if self.has(ekey):
+            if self.has(ekey) and not relocate:
                 return
             stream = io.BytesIO(source) if isinstance(source, bytes) else Path(source).open("rb")
             with stream:
@@ -851,8 +853,9 @@ class CascStore:
         exceeds ``threshold`` has its live objects appended again, then the
         segment file is deleted. The newest segment and segments with bytes
         this store did not write, such as game-written data, are never
-        rewritten. A crash while moving an object loses only that object,
-        which the next update or repair fetches again.
+        rewritten. Each move commits the new location in one step, and the
+        public index is published before a segment file goes, so a crash never
+        loses an object another client needs.
         """
         progress = progress or (lambda event: None)
         cancelled = cancelled or (lambda: False)
@@ -893,15 +896,18 @@ class CascStore:
                 if cancelled():
                     break
                 payload = self.read(ekey)
-                self.invalidate(ekey)
-                self.put(ekey, payload)
+                self.put(ekey, payload, relocate=True)
                 moved += 1
                 progress({"stage": "compacting", "segment": segment, "moved": moved})
             if cancelled():
                 break
-            with self._locked():
+            with self._mutex:
                 if self._db.execute("SELECT 1 FROM objects WHERE segment=? LIMIT 1", (segment,)).fetchone():
                     continue
+            # The game reads the public index, which must name the new copies before the old file goes.
+            # Only the newest segment takes appends, so this one stays empty meanwhile.
+            self.publish()
+            with self._locked():
                 self._checkpoint()
                 self._db.execute("DELETE FROM segments WHERE segment=?", (segment,))
                 self._db.commit()

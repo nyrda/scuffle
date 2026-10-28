@@ -1421,7 +1421,7 @@ def test_uninstall_confirmation_cancel_and_explicit_choice(qt, window, tmp_path,
     page = window.uninstall_page
     assert window.stack.currentWidget() is page
     assert 'World of Warcraft' in page.title.text() and '12.0 GB' in page.details.text()
-    assert 'shared' in page.details.text() and 'WTF and Interface' in page.warning.text()
+    assert 'shared' in page.details.text() and 'Screenshots' in page.keep.text()
     assert page.keep.isChecked() and 'recommended' in page.keep.text()
     page.cancel.click()
     assert not requests and window.stack.currentWidget() is window.client_page

@@ -736,3 +736,30 @@ def test_recovery_seals_oversized_unclaimed_segment_instead_of_overwriting(tmp_p
         assert store._location(key) == (1, 0, len(data))
         with path.open("rb") as stream:
             assert stream.read(12) == b"native bytes"
+
+
+def test_compaction_interrupted_mid_move_keeps_the_object_another_client_needs(tmp_path, monkeypatch):
+    import sqlite3
+    from waystone.ngdp import store as module
+    monkeypatch.setattr(module, "SEGMENT_SIZE", 2048)          # a few objects per segment
+    objects = [blte(os.urandom(300) + bytes([i]), table=False) for i in range(8)]
+    with CascStore(tmp_path) as casc:
+        for key, data in objects:
+            casc.put(key, data)
+        assert casc._location(objects[-1][0])[0] > casc._location(objects[0][0])[0]
+    needed = objects[1][0]                                      # in the first segment, which is mostly dead
+    live = tmp_path / "live.sqlite"
+    with sqlite3.connect(live) as db:
+        db.execute("CREATE TABLE keys(ekey BLOB PRIMARY KEY) WITHOUT ROWID")
+        db.executemany("INSERT INTO keys VALUES(?)", [(needed,), *[(k,) for k, _ in objects[4:]]])
+    original = CascStore._record
+    def crash(self, ekey, *args):
+        if ekey == needed:
+            raise OSError("simulated crash while moving")
+        original(self, ekey, *args)
+    monkeypatch.setattr(CascStore, "_record", crash)
+    with CascStore(tmp_path) as casc, pytest.raises(OSError, match="simulated crash"):
+        casc.compact(live, threshold=0.25)
+    monkeypatch.setattr(CascStore, "_record", original)
+    with CascStore(tmp_path) as casc:
+        assert casc.read(needed) == dict(objects)[needed]

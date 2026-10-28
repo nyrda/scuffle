@@ -13,6 +13,7 @@ from pathlib import Path, PurePosixPath
 import re
 import shutil
 import sqlite3
+import stat
 import tempfile
 import time
 import uuid
@@ -58,6 +59,38 @@ def atomic_bytes(path: Path, value: bytes) -> None:
 
 def atomic_json(path: Path, value) -> None:
     atomic_bytes(path, (json.dumps(value, indent=2) + '\n').encode())
+
+
+def mount_points() -> list[Path]:
+    """Every mount point Linux knows of, including bind mounts. Empty elsewhere."""
+    try:
+        text = Path('/proc/self/mountinfo').read_text()
+    except OSError:
+        return []
+    unescape = lambda field: re.sub(r'\\([0-7]{3})', lambda m: chr(int(m.group(1), 8)), field)
+    return [Path(unescape(line.split(' ')[4])) for line in text.splitlines() if len(line.split(' ')) > 4]
+
+
+KEPT_FOLDERS = {'wtf', 'interface', 'screenshots'}     # the user's settings, addons and pictures
+
+
+def remove_tree(path: Path) -> bool:
+    """Delete a folder, making read-only entries writable first. False when something stays."""
+    def retry(function, name, _error):
+        for target in (os.path.dirname(name), name):
+            try:
+                os.chmod(target, os.stat(target, follow_symlinks=False).st_mode | stat.S_IWRITE | stat.S_IEXEC)
+            except OSError:
+                pass
+        function(name)
+    if not path.exists():
+        return True
+    try:
+        shutil.rmtree(path, onexc=retry)
+    except OSError:
+        return False
+    system.sync_directory(path.parent)
+    return True
 
 
 def md5_file(path: Path) -> bytes:
@@ -151,6 +184,8 @@ class Library:
             with system.locked_file(self.state_dir / 'library.lock', blocking=False):
                 if self.uninstall_record.exists():
                     self.recovered_uninstall = self._finish_uninstall()
+                elif not self.uninstall_record.is_symlink():
+                    self.sweep_trash()
                 yield self
         except system.LockBusy:
             raise LibraryError('Another Waystone operation is using this installation') from None
@@ -203,13 +238,27 @@ class Library:
         return path
 
     def _removal_tree(self, path: Path) -> None:
-        self._removal_path(str(path.relative_to(self.root)))
+        self._removal_path(path.relative_to(self.root).as_posix())     # forward slashes on Windows too
+        device = self.root.lstat().st_dev
+        def foreign(entry: Path) -> bool:
+            # A bind mount, a junction or another drive mounted inside is not ours to delete.
+            return (os.path.ismount(entry) or entry.lstat().st_dev != device
+                    or (hasattr(entry, 'is_junction') and entry.is_junction()))
+        real = Path(os.path.realpath(path))
+        # A bind mount of the same file system has the same device, so the mount table decides.
+        inside = [point for point in mount_points() if point.is_relative_to(real)]
+        if inside:
+            raise LibraryError(f'Uninstall refuses another file system mounted at {inside[0]}')
+        if path.exists() and foreign(path):
+            raise LibraryError(f'Uninstall refuses another file system: {path.relative_to(self.root)}')
         if path.is_dir():
             for directory, folders, files in os.walk(path, followlinks=False):
                 for name in folders + files:
                     child = Path(directory) / name
                     if child.is_symlink():
                         raise LibraryError(f'Uninstall refuses symbolic links: {child.relative_to(self.root)}')
+                    if foreign(child):
+                        raise LibraryError(f'Uninstall refuses another file system: {child.relative_to(self.root)}')
 
     def _uninstall_folder(self, code: str, folder: str) -> Path:
         if (not isinstance(folder, str) or managed_path(folder) != folder or '/' in folder
@@ -285,7 +334,7 @@ class Library:
             system.sync_directory(self.root)
         if record['keep_settings'] and trash.exists():
             for source in trash.iterdir():
-                if source.name.casefold() in {'wtf', 'interface'}:
+                if source.name.casefold() in KEPT_FOLDERS:
                     backup.mkdir(exist_ok=True)
                     system.sync_directory(self.root)
                     destination = self._removal_path(f'{backup.name}/{source.name}')
@@ -294,24 +343,34 @@ class Library:
                     os.rename(source, destination)
                     system.sync_directory(backup)
                     system.sync_directory(trash)
+        # The client's own state goes into the trash too. A rename cannot half fail, so once
+        # the record is gone the client is uninstalled, whatever deleting the trash meets.
+        if client.exists():
+            trash.mkdir(exist_ok=True)
+            os.rename(client, trash / '.waystone-client')
+            system.sync_directory(self.clients_dir)
         # The record already excludes this state from build.info and from readers.
         self.write_build_info()
-        if client.exists():
-            shutil.rmtree(client)
-            system.sync_directory(self.clients_dir)
-        if trash.exists():
-            shutil.rmtree(trash)
-            system.sync_directory(self.root)
-        emit({'stage': 'cleaning_up'})
-        try:
-            cleanup = self.cleanup(threshold=0.0)
-        except LibraryError as error:
-            # Other clients may still be playing or updating. Their content stays.
-            cleanup = {'deferred': str(error)}
-        result = {'uninstalled': code, 'backup': str(backup) if backup.exists() else '', 'cleanup': cleanup}
         self.uninstall_record.unlink()
         system.sync_directory(self.state_dir)
-        return result
+        emit({'stage': 'cleaning_up'})
+        removed = remove_tree(trash)
+        try:
+            cleanup = self.cleanup(threshold=0.0)
+        except (LibraryError, StoreError, OSError) as error:
+            # Other clients may still be playing or updating. Their content stays.
+            cleanup = {'deferred': str(error)}
+        return {'uninstalled': code, 'backup': str(backup) if backup.exists() else '', 'cleanup': cleanup,
+                'leftover': '' if removed else str(trash)}
+
+    def sweep_trash(self) -> None:
+        """Delete what an earlier uninstall could not, such as a file that was open. Never raises."""
+        for trash in self.root.glob('.waystone-trash-*'):
+            try:
+                self._removal_tree(trash)
+            except (LibraryError, OSError):
+                continue        # not provably ours, so it stays
+            remove_tree(trash)
 
     def pending(self, code: str) -> dict | None:
         try:
@@ -400,9 +459,13 @@ class Library:
         the old one is still in use, so cleanup waits until it finished.
         """
         plans = sorted(self.clients_dir.glob('*/plan.sqlite')) if self.clients_dir.is_dir() else []
+        # A client being installed may be planning again, with a plan that does not list
+        # what it already downloaded yet. Its content stays until it finished.
+        for pending in sorted(self.clients_dir.glob('*/pending.json')) if self.clients_dir.is_dir() else []:
+            code = pending.parent.name
+            name = catalog.get(code).label if catalog.is_product(code) else code
+            raise LibraryError(f'Finish the {name} {"update" if self.state(code) else "download"} before cleaning up')
         for code in self.installed():
-            if self.pending(code):
-                raise LibraryError(f'Finish the {catalog.get(code).label} update before cleaning up')
             if self.running(code):
                 raise LibraryError(f'Close {catalog.get(code).label} before cleaning up')
         live = self.state_dir / 'live.sqlite'

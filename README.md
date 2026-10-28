@@ -31,8 +31,9 @@ service in the background and keeps the last answer for when it is offline.
 
 To free space, choose **Uninstall…** in an installed client's **⋯** menu.
 The confirmation shows its measured content size; shared content stays for the
-other clients. By default, Waystone moves WTF and Interface, including settings
-and addons, to `Waystone-backup-<client>-<id>` inside the installation folder.
+other clients. By default, Waystone moves WTF, Interface and Screenshots, with
+your settings, addons and pictures, to `Waystone-backup-<client>-<id>` inside the
+installation folder.
 Uncheck that option to delete them too. All other files in that client's game
 folder are deleted. **Hide from list** leaves the installation on disk.
 
