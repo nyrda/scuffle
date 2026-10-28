@@ -111,6 +111,12 @@ class ClientOptionsPage(Page):
             add_row(grid, 'Variables', self.environment, top=6)
         body_layout.addStretch()
         self._saved_arguments = ''
+        self._drafts: dict[str, tuple[str | None, str | None]] = {}
+        self._note_timer = QTimer(self)
+        self._note_timer.setSingleShot(True)
+        self._note_timer.setInterval(1600)
+        self._note_timer.timeout.connect(lambda: self.saved_note.setText(
+            f'For {self.client_name}. Changes save automatically.'))
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.setInterval(SAVE_DELAY)
@@ -118,11 +124,29 @@ class ClientOptionsPage(Page):
 
     def focus_chain(self) -> list[QWidget]:
         """The page's controls in reading order, for the window's tab order."""
-        return [self.reset_button, self.close_button, *self.graphics.group.buttons(),
-                *self.display.group.buttons(), *self.switches.values(), self.arguments,
+        return [self.reset_button, self.close_button, self.graphics.current(),
+                self.display.current(), *self.switches.values(), self.arguments,
                 *([self.environment.text] if self.environment else [])]
 
+    def remember_draft(self) -> None:
+        """Text with a mistake that is not saved yet, kept for when this client's page opens again."""
+        if not self.code:
+            return
+        arguments = self.arguments.text()
+        try:
+            split_arguments(arguments)
+            arguments = None
+        except OptionError:
+            pass
+        environment = (self.environment.text.toPlainText()
+                       if self.environment and not self.environment.valid() else None)
+        if arguments is None and environment is None:
+            self._drafts.pop(self.code, None)
+        else:
+            self._drafts[self.code] = arguments, environment
+
     def load(self, client: catalog.Client, options: ClientOptions | None) -> None:
+        self.remember_draft()
         options = options or ClientOptions()
         self._loading = True
         self.code = client.code
@@ -137,6 +161,11 @@ class ClientOptionsPage(Page):
         if self.environment:
             self.environment.set_variables(options.environment)
         self._hidden_environment = dict(options.environment)
+        arguments, environment = self._drafts.pop(client.code, (None, None))
+        if arguments is not None:
+            self.arguments.setText(arguments)
+        if environment is not None and self.environment:
+            self.environment.text.setPlainText(environment)
         self._loading = False
         self._arguments_edited()
         self._timer.stop()
@@ -192,10 +221,10 @@ class ClientOptionsPage(Page):
         self.update_preview()
         self.changed.emit(self.code, self.options())
         self.saved_note.setText(f'For {self.client_name}. Saved.')
-        QTimer.singleShot(1600, lambda: self.saved_note.setText(
-            f'For {self.client_name}. Changes save automatically.'))
+        self._note_timer.start()            # restarted by each save, so the note never flips mid-typing
 
     def reset(self):
+        self._drafts.pop(self.code, None)
         self.arguments.setText('')
         self._saved_arguments = ''
         self.graphics.set_options(list(GRAPHICS), '')

@@ -73,3 +73,13 @@ def test_other_clients_appear_only_while_they_are_shown():
         assert 'wowe1' in [c.code for c in catalog.visible(downloading=['wowe1'])]
     finally:
         catalog.apply(None)
+
+
+def test_launch_options_of_a_discovered_client_survive_a_restart(config):
+    from waystone.launch_options import ClientOptions
+    saved = Settings()
+    saved.client_launch = {'wowlivetest': ClientOptions(switches=['-console'])}
+    saved.save()
+    # The catalog has not found the client yet when settings load at start.
+    loaded = Settings.load()
+    assert loaded.client_launch == saved.client_launch and not loaded.problems

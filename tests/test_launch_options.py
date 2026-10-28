@@ -50,7 +50,7 @@ def test_invalid_launch_options_are_dropped_and_reported_instead_of_failing_the_
         'client_launch': {'wow': {'graphics': '-vulkan', 'switches': ['-console', '-made-up'],
                                   'arguments': '-console -uid wow', 'environment': {'WINEPREFIX': '/elsewhere'}},
                           'wow_classic': {'graphics': ['-d3d11'], 'window': {'mode': 1}, 'switches': [{}]},
-                          'wow_not_a_client': {}, 'wowf': 'not a dict'},
+                          '../not a client': {}, 'wowf': 'not a dict'},
     }))
     loaded = Settings.load()
     assert loaded.linux_launch == LinuxOptions(mangohud=True, environment={'GOOD': '2'})
@@ -58,7 +58,7 @@ def test_invalid_launch_options_are_dropped_and_reported_instead_of_failing_the_
     assert loaded.client_launch == {'wow': ClientOptions(switches=['-console']), 'wow_classic': ClientOptions()}
     text = ' '.join(loaded.problems)
     for part in ['gamemode', 'Linux settings', 'wrapper', 'graphics', 'switches', '-uid',
-                 'World of Warcraft', 'wow_not_a_client', 'Forever', 'window option of Mists']:
+                 'World of Warcraft', 'not a client', 'Forever', 'window option of Mists']:
         assert part in text
 
 
@@ -327,3 +327,19 @@ def test_a_game_that_does_not_start_points_at_the_launch_options_when_there_are_
     with pytest.raises(launch.LaunchError, match='did not start') as raised:
         launcher.play('wow_classic_era', sign_in=None)
     assert ('launch options may be the cause' in str(raised.value)) == hint
+
+
+def test_a_saved_variable_name_with_spaces_is_dropped_instead_of_stopping_the_start(config):
+    config.write_text(json.dumps({'linux_launch': {'environment': {' DXVK_HUD': 'fps', 'GOOD': '1'}}}))
+    loaded = Settings.load()
+    assert loaded.linux_launch.environment == {'GOOD': '1'} and loaded.problems
+
+
+def test_a_relative_wrapper_is_made_absolute_since_the_game_starts_in_its_own_folder(tmp_path, monkeypatch):
+    from waystone.launch_options import wrapper_command
+    tool = tmp_path / 'wrap'
+    tool.write_text('#!/bin/sh\n')
+    tool.chmod(0o755)
+    monkeypatch.chdir(tmp_path)
+    words = wrapper_command(LinuxOptions(wrapper='./wrap --flag'))
+    assert words == [str(tool), '--flag']

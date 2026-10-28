@@ -482,10 +482,9 @@ def test_settings_tab_goes_from_the_sections_into_the_one_shown(qt, window):
     from PySide6.QtWidgets import QComboBox
     page = window.settings_page
     window.open_settings()
-    sections = page.sections.group.buttons()
     chain = page.focus_chain()
-    assert chain[:1 + len(sections)] == [page.close_button, *sections]
-    assert chain[len(sections) + 1] is page.browse and page.limit not in chain
+    # The sections are one Tab stop, the chosen one. Arrow keys move between them.
+    assert chain[:3] == [page.close_button, page.sections.current(), page.browse] and page.limit not in chain
     page.show_section('launch')
     extra = QComboBox()
     page.add_launch_widget(extra)       # how launch options built elsewhere join the page
@@ -493,7 +492,7 @@ def test_settings_tab_goes_from_the_sections_into_the_one_shown(qt, window):
     chain = page.focus_chain()
     assert chain[-1] is extra and page.browse not in chain
     if page.proton is not None:
-        assert chain.index(page.proton) == len(sections) + 1
+        assert chain.index(page.proton) == 2
     assert extra.isVisibleTo(page) and page.section_widgets['launch'].isAncestorOf(extra)
 
 
@@ -801,8 +800,9 @@ def test_a_clients_launch_options_save_restore_and_show_on_its_page(qt, window, 
     page.arguments.setText('-config Other.wtf -uid wow')
     page.close_button.click()
     assert Settings.load().client_launch['wow'].arguments == '-config Other.wtf'
+    # Reopening keeps the text being corrected, with its note, while the saved value stays.
     window.open_launch_options()
-    assert page.arguments.text() == '-config Other.wtf'
+    assert page.arguments.text() == '-config Other.wtf -uid wow' and '-uid' in page.arguments_note.text()
     page.reset_button.click()
     assert Settings.load().client_launch == {}
 
@@ -820,7 +820,7 @@ def test_linux_launch_settings_save_valid_input_and_keep_it_through_mistakes(qt,
     saved = Settings.load().linux_launch
     assert saved.log and saved.environment == {'DXVK_HUD': 'fps'} and saved.wrapper == 'gamescope -f --'
     assert not launch.wrapper_note.isVisibleTo(launch)
-    # Mistakes are named under their field and the saved values stay as they were.
+    # Mistakes are named under their field. Good lines save, a bad one waits until it is fixed.
     launch.environment.text.setPlainText('DXVK_HUD=full\nBAD NAME=1')
     launch.environment.flush()
     launch.wrapper.setText('missing-tool --')
@@ -828,7 +828,7 @@ def test_linux_launch_settings_save_valid_input_and_keep_it_through_mistakes(qt,
     assert 'Line 2' in launch.environment.problem.text() and launch.environment.problem.isVisibleTo(launch)
     assert 'missing-tool was not found' in launch.wrapper_note.text()
     saved = Settings.load().linux_launch
-    assert saved.environment == {'DXVK_HUD': 'fps'} and saved.wrapper == 'missing-tool --'
+    assert saved.environment == {'DXVK_HUD': 'full'} and saved.wrapper == 'missing-tool --'
     launch.wrapper.setText('gamescope "unclosed')
     launch.wrapper.editingFinished.emit()
     assert Settings.load().linux_launch.wrapper == 'missing-tool --'
@@ -979,3 +979,60 @@ def test_reset_clears_a_variables_draft_that_was_never_saved(qt):
     assert page.reset_button.isEnabled()
     page.reset_button.click()
     assert page.environment.text.toPlainText() == '' and not page.reset_button.isEnabled()
+
+
+def test_a_segmented_row_is_one_tab_stop_so_space_never_changes_the_saved_choice(qt):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from waystone import catalog
+    from waystone.launch_options import ClientOptions
+    from waystone.ui.client_options import ClientOptionsPage
+    page = ClientOptionsPage(linux=False)
+    saved = []
+    page.changed.connect(lambda code, options: saved.append(options))
+    page.load(catalog.get('wow'), ClientOptions(graphics='-d3d11'))
+    page.show()
+    chain = page.focus_chain()
+    chosen = page.graphics.current()
+    assert chosen.text() == 'DirectX 11' and chain[2] is chosen
+    assert all(b.focusPolicy() == Qt.ClickFocus for b in page.graphics.group.buttons() if b is not chosen)
+    chosen.setFocus()
+    QTest.keyClick(chosen, Qt.Key_Space)
+    assert page.graphics.value() == '-d3d11'
+    QTest.keyClick(chosen, Qt.Key_Left)                    # arrows move the choice
+    assert page.graphics.value() == '-d3d12' and page.focusWidget() is page.graphics.current()
+    page.hide()
+
+
+def test_dismissing_a_failed_download_removes_a_client_only_it_kept_listed(qt, window, tmp_path):
+    from waystone.downloads import FAILED, Job
+    window.settings.root = str(tmp_path / 'games')
+    window.open_library()
+    failed = Job('wowt', 'install', status=FAILED, error='The servers did not answer.')
+    window.downloads.jobs.append(failed)
+    window.on_job(failed)
+    window.client_list.select('wowt')
+    assert 'wowt' in window.client_list.rows          # a test client nobody chose, listed for its download
+    window.dismiss_notice()
+    assert 'wowt' not in window.client_list.rows
+
+
+def test_a_failed_check_is_named_for_what_failed(qt, window, tmp_path):
+    from waystone.downloads import FAILED, Job
+    window.settings.root = str(tmp_path / 'games')
+    window.open_library()
+    window.downloads.jobs.append(Job('wow', 'verify', status=FAILED, error='3 damaged files'))
+    assert window.kept_split()[1] == {'wow': 'Needs repair'}
+    window.downloads.jobs.clear()
+
+
+def test_typing_in_settings_does_not_check_for_updates_each_time(qt, window, monkeypatch):
+    calls = []
+    monkeypatch.setattr(window, 'check_updates', lambda: calls.append(1))
+    window._update_key = (window.settings.root, window.settings.region, window.settings.locale)
+    window.open_settings()
+    page = window.settings_page
+    page.limit.setCurrentIndex(page.limit.findData(5))
+    assert calls == []
+    page.locale.setCurrentIndex(page.locale.findData('deDE'))
+    assert calls == [1]

@@ -107,10 +107,12 @@ class Settings:
         self.linux_launch = LinuxOptions.from_json(launch, problems)
         self.client_launch = {}
         for code, data in (clients.items() if isinstance(clients, dict) else []):
-            if code not in catalog.BY_CODE:
-                problems.append(f'Launch options of an unknown client {code} were removed.')
+            # Discovered clients are not in the catalog yet when settings load, so any
+            # product code counts. Only an entry that cannot be a product is dropped.
+            if not catalog.is_product(code):
+                problems.append(f'Launch options of an unknown client {code!r} were removed.')
                 continue
-            options = ClientOptions.from_json(data, catalog.BY_CODE[code].label, problems)
+            options = ClientOptions.from_json(data, catalog.get(code).label, problems)
             if options is not None:
                 self.client_launch[code] = options
         if not isinstance(clients, dict):

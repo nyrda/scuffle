@@ -371,7 +371,7 @@ class ClientPage(Page):
 
     def focus_chain(self) -> list[QWidget]:
         """The page's controls in reading order, for the window's tab order."""
-        widgets = [self.banner.action, self.banner.close_button, *self.modes.group.buttons(),
+        widgets = [self.banner.action, self.banner.close_button, *([self.modes.current()] if self.modes.current() else []),
                    self.primary, self.cancel, self.more]
         return widgets
 
@@ -480,6 +480,10 @@ class SettingsPage(Page):
         title_block.addWidget(label('Settings', 'pagetitle'))
         self.saved_note = label('Changes save automatically.', 'small')
         title_block.addWidget(self.saved_note)
+        self._note_timer = QTimer(self)
+        self._note_timer.setSingleShot(True)
+        self._note_timer.setInterval(1600)
+        self._note_timer.timeout.connect(self.update_saved_note)
         title_row.addLayout(title_block)
         title_row.addStretch()
         self.close_button = close = fixed(QPushButton('Close'), 96)
@@ -688,7 +692,7 @@ class SettingsPage(Page):
 
     def focus_chain(self) -> list[QWidget]:
         """The page's controls in reading order, for the window's tab order."""
-        chain = [self.close_button, *self.sections.group.buttons()]
+        chain = [self.close_button, self.sections.current()]
         if self.section == 'general':
             chain += [self.browse, self.region, self.locale]
         elif self.section == 'clients':
@@ -873,7 +877,7 @@ class SettingsPage(Page):
                 (s.listed if wanted else s.unlisted)(code)
         s.save()
         self.saved_note.setText('Saved.')
-        QTimer.singleShot(1600, self.update_saved_note)
+        self._note_timer.start()            # restarted by each save, so the note never flips mid-typing
         self.saved.emit()
 
     def update_saved_note(self, *_) -> None:

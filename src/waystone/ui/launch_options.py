@@ -103,13 +103,14 @@ class EnvironmentEditor(QWidget):
     def _edited(self):
         _, errors = parse_environment(self.text.toPlainText())
         # The first problem is enough to act on. The rest follow once it is fixed.
-        say(self.problem, f'{errors[0]} Not saved until fixed.' if errors else '')
+        say(self.problem, f'{errors[0]} That line is not saved until it is fixed.' if errors else '')
         self._timer.start()
 
     def flush(self) -> None:
         self._timer.stop()
-        variables, errors = parse_environment(self.text.toPlainText())
-        if not errors and variables != self.variables:
+        # The good lines save. A line with a mistake waits until it is fixed.
+        variables, _ = parse_environment(self.text.toPlainText())
+        if variables != self.variables:
             self.variables = variables
             self.changed.emit()
 
@@ -214,8 +215,8 @@ class LaunchSettings(QWidget):
         self.environment.setToolTip('One NAME=value per line. They apply to the game, and a client\'s '
                                     'own variables win over these.')
         self.environment.changed.connect(self._emit)
-        self.wrapper.textChanged.connect(self.edited.emit)
-        self.environment.text.textChanged.connect(self.edited.emit)
+        self.wrapper.textChanged.connect(lambda *_: self.edited.emit())
+        self.environment.text.textChanged.connect(lambda *_: self.edited.emit())
         self.row('Environment', self.environment, top=6)
         self._saved_wrapper = ''
         self._loaded = LinuxOptions()

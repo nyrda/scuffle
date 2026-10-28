@@ -263,10 +263,11 @@ def checked_environment(data, where: str, problems: list[str]) -> dict[str, str]
         problems.append(f'The environment variables of {where} were unreadable and were removed.')
         return {}
     variables, errors = parse_environment('\n'.join(f'{k}={v}' for k, v in data.items() if '\n' not in k + v))
-    if errors or len(variables) != len(data):
-        problems.append(f'Some environment variables of {where} were invalid and were removed.')
     # Values keep their exact text, including quotes the editor would have taken off.
-    return {name: data[name] for name in variables}
+    kept = {name: data[name] for name in variables if name in data}
+    if errors or len(kept) != len(data):
+        problems.append(f'Some environment variables of {where} were invalid and were removed.')
+    return kept
 
 
 def linux_environment(options: LinuxOptions, client: ClientOptions | None = None, *,
@@ -301,9 +302,10 @@ def wrapper_command(options: LinuxOptions) -> list[str]:
         found = find_program(words[0])
         if found is None:
             raise OptionError(f'The wrapper command {words[0]} was not found.')
-        words[0] = found
+        # The game starts in its own folder, where a relative path would point elsewhere.
+        words[0] = os.path.abspath(found)
     gamemoderun = find_program('gamemoderun') if options.gamemode else None
     if gamemoderun:
         # Without it the settings show GameMode as off, so the game starts without it too.
-        words.append(gamemoderun)
+        words.append(os.path.abspath(gamemoderun))
     return words

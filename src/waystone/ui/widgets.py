@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-from PySide6.QtCore import QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel,
                                QListWidget, QListWidgetItem, QProgressBar, QPushButton, QSizePolicy,
@@ -494,7 +494,27 @@ class Segmented(QWidget):
         self.group = QButtonGroup(self)
         self.group.setExclusive(True)
         self.group.buttonClicked.connect(lambda button: self.changed.emit(button.property('value')))
+        self.group.buttonToggled.connect(lambda *_: self._update_focus())
         self.options: list[tuple[str, str]] = []
+
+    def current(self) -> QPushButton | None:
+        """The one Tab stop of the row. Arrow keys move between the choices."""
+        return self.group.checkedButton()
+
+    def _update_focus(self) -> None:
+        # Tab lands on the chosen button only, so Space never picks another choice.
+        for button in self.group.buttons():
+            button.setFocusPolicy(Qt.StrongFocus if button.isChecked() else Qt.ClickFocus)
+
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.KeyPress and event.key() in (Qt.Key_Left, Qt.Key_Right):
+            buttons = self.group.buttons()
+            index = buttons.index(watched) + (1 if event.key() == Qt.Key_Right else -1)
+            if 0 <= index < len(buttons):
+                buttons[index].click()
+                buttons[index].setFocus(Qt.TabFocusReason)
+            return True
+        return super().eventFilter(watched, event)
 
     def set_options(self, options: list[tuple[str, str]], current: str | None) -> None:
         if options != self.options:
@@ -514,6 +534,7 @@ class Segmented(QWidget):
                     button.setProperty('edge', 'first')
                 if index == len(options) - 1:
                     button.setProperty('edge', 'last')
+                button.installEventFilter(self)
                 self.group.addButton(button)
                 self.layout_.addWidget(button)
             self.options = options
@@ -521,6 +542,7 @@ class Segmented(QWidget):
             button.setChecked(button.property('value') == current)
         if options and self.group.checkedButton() is None:
             self.group.buttons()[0].setChecked(True)
+        self._update_focus()
 
     def value(self) -> str | None:
         button = self.group.checkedButton()

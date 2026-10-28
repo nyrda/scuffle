@@ -124,6 +124,7 @@ class MainWindow(QMainWindow):
         self.banner = self.client_page.banner
         self._tab_order: tuple = ()
         self._focus_primary = False
+        self._update_key = None
         self.messages: dict[str, tuple] = {}      # client, or '' for everything, -> banner arguments
         self.client_page.banner.dismissed.connect(self.dismiss_notice)
 
@@ -205,8 +206,10 @@ class MainWindow(QMainWindow):
         no longer keeps the client listed.
         """
         installed = self.library.installed() if self.library else []
-        names = {RUNNING: 'Downloading', QUEUED: 'Queued', PAUSED: 'Paused', FAILED: 'Install failed'}
-        return installed, {job.client: names.get(job.status, 'Downloading')
+        names = {RUNNING: 'Downloading', QUEUED: 'Queued', PAUSED: 'Paused'}
+        failed = {'install': 'Install failed', 'update': 'Update failed', 'verify': 'Needs repair',
+                  'repair': 'Repair failed'}
+        return installed, {job.client: failed[job.kind] if job.status == FAILED else names.get(job.status, 'Downloading')
                            for job in (self.downloads.jobs if self.downloads else []) if job.status != DONE}
 
     def offered(self) -> list[catalog.Client]:
@@ -507,6 +510,9 @@ class MainWindow(QMainWindow):
         job = self.downloads.job(current) if self.downloads and current else None
         if job and job.status == FAILED and job.kind != 'verify':
             self.downloads.remove(current)
+            # Its job may have been all that kept the client listed.
+            self.populate()
+            self.settings_page.lock_clients(*self.kept_split())
             self.refresh()
 
     def clear_notice(self, client: str | None = None):
@@ -822,6 +828,7 @@ class MainWindow(QMainWindow):
         self.refresh()
 
     def check_updates(self):
+        self._update_key = (self.settings.root, self.settings.region, self.settings.locale)
         if not self.library:
             return
         library = self.library
@@ -905,7 +912,10 @@ class MainWindow(QMainWindow):
             self.catalog_state = 'ready' if catalog.checked() else 'checking'
             self.discover()
         self.show_catalog()
-        self.check_updates()
+        # Every typing pause saves. Only a new folder, region or language changes what is current.
+        key = (self.settings.root, self.settings.region, self.settings.locale)
+        if key != self._update_key:
+            self.check_updates()
 
     def closeEvent(self, event):
         if self.downloads and self.downloads.busy():
