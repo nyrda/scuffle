@@ -50,7 +50,7 @@ class UninstallPage(QWidget):
         actions = QHBoxLayout()
         self.cancel = fixed(QPushButton('Cancel'))
         self.confirm = fixed(QPushButton('Uninstall'))
-        self.confirm.setObjectName('primary')
+        self.confirm.setObjectName('destructive')     # red, so it never reads as the safe choice
         self.cancel.clicked.connect(self.cancelled.emit)
         self.confirm.clicked.connect(self.confirmed.emit)
         actions.addWidget(self.cancel)

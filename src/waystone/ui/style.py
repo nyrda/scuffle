@@ -125,6 +125,9 @@ QPushButton:disabled, QToolButton:disabled {{ color: {FAINT}; background: #1d202
 QPushButton#primary {{ background: {ACCENT}; color: white; font-size: 11pt; font-weight: 600;
                       min-height: 38px; min-width: 132px; padding: 0 22px; }}
 QPushButton#primary:hover {{ background: #3b7deb; }}
+QPushButton#destructive {{ background: #8c2f35; color: white; font-weight: 600; border: none; }}
+QPushButton#destructive:hover {{ background: #a3373e; }}
+QPushButton#destructive:focus {{ border: 2px solid #f1b5b5; }}
 QPushButton#primary:focus {{ border: 2px solid #c3d6ff; }}
 QPushButton#primary:disabled {{ background: #26314a; color: #8a96ad; }}
 QPushButton#primary[secondary="true"] {{ background: {RAISED}; color: {TEXT}; }}
