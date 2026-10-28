@@ -176,7 +176,10 @@ class Launcher:
                     if process.poll() is not None:
                         break
                     time.sleep(0.1)
-                raise LaunchError(f'{entry.label} did not start. Check its runtime and try again.')
+                # A wrapper's or variable's failure is otherwise silent, since its output is not kept.
+                hint = ' Your launch options may be the cause.' if plan.arguments or plan.environment \
+                    or plan.wrapper else ''
+                raise LaunchError(f'{entry.label} did not start. Check its runtime and try again.{hint}')
             finally:
                 ack.unlink(missing_ok=True)
                 self.vault.token.unlink(missing_ok=True)

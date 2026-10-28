@@ -49,15 +49,16 @@ def test_invalid_launch_options_are_dropped_and_reported_instead_of_failing_the_
                          'wrapper': 'gamescope "unclosed'},
         'client_launch': {'wow': {'graphics': '-vulkan', 'switches': ['-console', '-made-up'],
                                   'arguments': '-console -uid wow', 'environment': {'WINEPREFIX': '/elsewhere'}},
+                          'wow_classic': {'graphics': ['-d3d11'], 'window': {'mode': 1}, 'switches': [{}]},
                           'wow_not_a_client': {}, 'wowf': 'not a dict'},
     }))
     loaded = Settings.load()
     assert loaded.linux_launch == LinuxOptions(mangohud=True, environment={'GOOD': '2'})
     # What was valid stays. The rest goes, and each removal is reported.
-    assert loaded.client_launch == {'wow': ClientOptions(switches=['-console'])}
+    assert loaded.client_launch == {'wow': ClientOptions(switches=['-console']), 'wow_classic': ClientOptions()}
     text = ' '.join(loaded.problems)
     for part in ['gamemode', 'Linux settings', 'wrapper', 'graphics', 'switches', '-uid',
-                 'World of Warcraft', 'wow_not_a_client', 'Forever']:
+                 'World of Warcraft', 'wow_not_a_client', 'Forever', 'window option of Mists']:
         assert part in text
 
 
@@ -78,6 +79,19 @@ def test_environment_lines_are_checked_one_by_one(text, variables, error):
     assert (error in errors[0]) if error else not errors
 
 
+def test_saved_values_keep_their_quotes_and_spaces_through_the_editor():
+    variables = {'QUOTED': '"kept"', 'SINGLE': "'kept'", 'EMPTY': '""', 'SPACED': ' x ', 'PLAIN': 'a "b" c',
+                 'NOTHING': ''}
+    assert parse_environment(launch_options.format_environment(variables)) == (variables, [])
+
+
+@pytest.mark.parametrize('nvidia, nvapi, expected', [
+    (True, True, {}), (True, False, {'PROTON_DISABLE_NVAPI': '1'}), (False, False, {})])
+def test_nvapi_is_left_to_proton_unless_turned_off_on_an_nvidia_gpu(nvidia, nvapi, expected, tmp_path):
+    options = LinuxOptions(nvapi=nvapi)
+    assert launch_options.linux_environment(options, nvidia=nvidia, log_dir=tmp_path) == expected
+
+
 @pytest.mark.parametrize('text', ['-uid wow_beta', '-LauncherLogin', '-initialgamemode=chc', '--uid=x',
                                   '-console -initialgamemode cera'])
 def test_arguments_waystone_sets_itself_are_rejected(text):
@@ -91,10 +105,22 @@ def test_other_arguments_split_like_a_shell_and_keep_windows_paths():
         split_arguments('-config "WTF')
 
 
-def test_toggles_come_first_and_a_typed_copy_is_passed_once():
+def test_toggles_come_first_and_the_extra_words_follow_as_typed():
     options = ClientOptions(graphics='-d3d12', window='-fullscreen', switches=['-nosound', '-console'],
-                            arguments='-console -config Other.wtf')
+                            arguments='-config Other.wtf')
     assert options.game_arguments() == ['-d3d12', '-fullscreen', '-console', '-nosound', '-config', 'Other.wtf']
+    # A word that looks like a toggle may be another argument's value, so it stays where it was typed.
+    options = ClientOptions(switches=['-console'], arguments='-config -console')
+    assert options.game_arguments() == ['-console', '-config', '-console']
+
+
+def test_extra_arguments_that_repeat_or_contradict_a_toggle_are_named():
+    options = ClientOptions(graphics='-d3d12', window='-windowed', switches=['-console'],
+                            arguments='-D3D11 -console -windowed -config Other.wtf')
+    assert options.overlaps() == ['-d3d11 contradicts DirectX 12 under Graphics.',
+                                  '-console is already on under Options.',
+                                  '-windowed is already chosen under Window.']
+    assert ClientOptions(arguments='-d3d11 -nosound -fullscreen').overlaps() == []
 
 
 def executable(path: Path, text: str) -> Path:
@@ -131,9 +157,21 @@ def test_wrapper_programs_are_found_on_path_and_gamemode_runs_closest_to_umu(pro
     gamemoderun = executable(programs / 'gamemoderun', '#!/bin/sh\n')
     command = launch_options.wrapper_command(LinuxOptions(gamemode=True, wrapper="gamescope -f --"))
     assert command == [str(gamescope), '-f', '--', str(gamemoderun)]
+    # Without gamemoderun the settings show GameMode as off, so the game starts without it.
     gamemoderun.unlink()
-    with pytest.raises(OptionError, match='gamemoderun was not found'):
-        launch_options.wrapper_command(LinuxOptions(gamemode=True))
+    assert launch_options.wrapper_command(LinuxOptions(gamemode=True)) == []
+
+
+def test_the_windows_runtime_starts_the_game_without_wrappers_or_variables(tmp_path, monkeypatch):
+    from waystone.runtime import game
+    started = {}
+    monkeypatch.setattr(game.subprocess, 'Popen', lambda command, env, **kwargs: started.update(
+        command=command, env=env))
+    runtime = game.WindowsRuntime(tmp_path / 'bridge.exe')
+    runtime.start(tmp_path / 'Wow.exe', ['-console'], tmp_path / 'token', tmp_path / 'ack',
+                  environment={'DXVK_HUD': 'fps'}, wrapper=['gamemoderun'])
+    assert started['command'][0] == str(tmp_path / 'bridge.exe') and started['command'][-1] == '-console'
+    assert 'gamemoderun' not in started['command'] and 'DXVK_HUD' not in started['env']
 
 
 def test_windows_gets_the_arguments_only(programs):
@@ -262,3 +300,30 @@ def test_a_missing_wrapper_stops_the_launch_before_the_sign_in_is_used(tmp_path,
     with pytest.raises(launch.LaunchError, match='not-installed was not found'):
         launcher.play('wow_classic_era', sign_in=None)
     assert renewed == []
+
+
+@pytest.mark.parametrize('options, hint', [(ClientOptions(), False), (ClientOptions(switches=['-console']), True)])
+def test_a_game_that_does_not_start_points_at_the_launch_options_when_there_are_any(
+        tmp_path, monkeypatch, options, hint):
+    from types import SimpleNamespace
+    monkeypatch.setattr(launch, 'renew', lambda *args: None)
+    monkeypatch.setattr(launch, 'has_nvidia', lambda: False)
+
+    class Runtime:
+        bridge = None
+
+        def prepare(self):
+            pass
+
+        def start(self, *args, **kwargs):
+            return SimpleNamespace(poll=lambda: 1)        # a wrapper or the game that quit at once
+
+    settings = Settings()
+    settings.client_launch['wow_classic_era'] = options
+    vault = Vault(tmp_path / 'session', bridge=None)
+    vault.directory.mkdir()
+    vault.session.write_bytes(b'protected')
+    launcher = launch.Launcher(settings, Library(tmp_path / 'games'), runtime=Runtime(), vault=vault)
+    with pytest.raises(launch.LaunchError, match='did not start') as raised:
+        launcher.play('wow_classic_era', sign_in=None)
+    assert ('launch options may be the cause' in str(raised.value)) == hint

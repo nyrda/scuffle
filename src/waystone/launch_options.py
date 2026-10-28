@@ -93,7 +93,16 @@ def parse_environment(text: str) -> tuple[dict[str, str], list[str]]:
 
 
 def format_environment(variables: dict[str, str]) -> str:
-    return '\n'.join(f'{name}={value}' for name, value in variables.items())
+    """The editor's text for saved variables. parse_environment reads it back to the same values."""
+    return '\n'.join(f'{name}={quoted(value)}' for name, value in variables.items())
+
+
+def quoted(value: str) -> str:
+    # The parser strips spaces and one pair of surrounding quotes, so such a value gets a pair of its own.
+    if value != value.strip() or (len(value) >= 2 and value[0] == value[-1] and value[0] in '"\''):
+        mark = "'" if value.startswith('"') else '"'
+        return f'{mark}{value}{mark}'
+    return value
 
 
 def parse_wrapper(text: str) -> list[str]:
@@ -198,9 +207,23 @@ class ClientOptions:
 
     def game_arguments(self) -> list[str]:
         chosen = [self.graphics, self.window, *(a for a in SWITCH_ARGUMENTS if a in self.switches)]
-        words = [a for a in chosen if a]
-        # A word typed into the extra arguments that a toggle already adds is passed once.
-        return words + [w for w in split_arguments(self.arguments) if w not in words]
+        # The extra words go as typed, since one of them may be another argument's value.
+        return [a for a in chosen if a] + split_arguments(self.arguments)
+
+    def overlaps(self) -> list[str]:
+        """Extra arguments that repeat or contradict a toggle. The game gets both, so the page says so."""
+        notes = []
+        groups = [('Graphics', GRAPHICS, self.graphics), ('Window', WINDOW, self.window)]
+        for word in dict.fromkeys(w.lower() for w in split_arguments(self.arguments)):
+            if word in SWITCH_ARGUMENTS and word in self.switches:
+                notes.append(f'{word} is already on under Options.')
+            for name, choices, chosen in groups:
+                names = dict(choices)
+                if word in names and chosen == word:
+                    notes.append(f'{word} is already chosen under {name}.')
+                elif word in names and chosen:
+                    notes.append(f'{word} contradicts {names[chosen]} under {name}.')
+        return notes
 
     def active(self) -> bool:
         return self != ClientOptions()
@@ -213,7 +236,7 @@ class ClientOptions:
         options = cls()
         for name, allowed in [('graphics', GRAPHICS), ('window', WINDOW)]:
             value = data.get(name, '')
-            if value in {v for v, _ in allowed}:
+            if isinstance(value, str) and value in {v for v, _ in allowed}:
                 setattr(options, name, value)
             else:
                 problems.append(f'An unknown {name} option of {label} was removed.')
@@ -258,9 +281,9 @@ def linux_environment(options: LinuxOptions, client: ClientOptions | None = None
         variables['PROTON_ENABLE_WAYLAND'] = '1'
     if options.hdr:
         variables['PROTON_ENABLE_HDR'] = '1'
-    if nvidia:
-        # Newer Proton builds turn NVAPI on by default, older ones only with this.
-        variables['PROTON_ENABLE_NVAPI' if options.nvapi else 'PROTON_DISABLE_NVAPI'] = '1'
+    if nvidia and not options.nvapi:
+        # Proton 9 and later give NVIDIA GPUs NVAPI by default, so only turning it off needs a variable.
+        variables['PROTON_DISABLE_NVAPI'] = '1'
     if not options.ntsync:
         variables['PROTON_NO_NTSYNC'] = '1'
     if options.log:
@@ -279,9 +302,8 @@ def wrapper_command(options: LinuxOptions) -> list[str]:
         if found is None:
             raise OptionError(f'The wrapper command {words[0]} was not found.')
         words[0] = found
-    if options.gamemode:
-        gamemoderun = find_program('gamemoderun')
-        if gamemoderun is None:
-            raise OptionError('GameMode is on, but gamemoderun was not found.')
+    gamemoderun = find_program('gamemoderun') if options.gamemode else None
+    if gamemoderun:
+        # Without it the settings show GameMode as off, so the game starts without it too.
         words.append(gamemoderun)
     return words

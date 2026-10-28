@@ -44,7 +44,9 @@ On Linux the **Launch** card in the settings sets what runs around every client:
 
 - GameMode runs the game through `gamemoderun`.
 - MangoHud sets `MANGOHUD=1`, which works through umu's container.
-- Wayland, HDR and ntsync appear when the chosen Proton build supports them.
+- An option that cannot work with the chosen Proton build or this machine,
+  such as Wayland, HDR or ntsync, is greyed out and shown off. Its choice is
+  kept for a build or tool that has it.
 - NVIDIA Reflex appears only on a machine with an NVIDIA GPU.
 - The Proton log goes to `~/.local/share/waystone/logs/steam-battlenet.log`.
 - Environment variables are `NAME=value` lines. A client's own variables win.

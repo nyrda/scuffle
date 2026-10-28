@@ -133,8 +133,8 @@ class LaunchSettings(QWidget):
         ('mangohud', 'MangoHud', 'Shows the MangoHud overlay with frame rate and frame times.'),
         ('wayland', 'Wayland', 'Runs the game as a native Wayland window instead of through XWayland.'),
         ('hdr', 'HDR', 'Lets the game output HDR. Needs Wayland or gamescope and an HDR display.'),
-        ('nvapi', 'NVIDIA Reflex', 'Gives the game NVIDIA\'s NVAPI, which it uses for Reflex. '
-                                   'Turn it off if the game fails to start.'),
+        ('nvapi', 'NVIDIA Reflex', 'Gives the game NVIDIA\'s NVAPI, which it uses for Reflex. On is Proton\'s '
+                                   'default. Turn it off if the game fails to start.'),
         ('ntsync', 'ntsync', 'Uses the kernel\'s ntsync driver for faster thread synchronization. '
                              'Turn it off only to rule it out when the game misbehaves.'),
         ('log', 'Proton log', 'Writes a detailed Proton log. It grows quickly, so turn it off again '
@@ -167,10 +167,12 @@ class LaunchSettings(QWidget):
         # Only an NVIDIA GPU has NVAPI to offer. The choice stays saved for one.
         self.nvidia = options_module.has_nvidia()
         shown = [t for t in self.TOGGLES if t[0] != 'nvapi' or self.nvidia]
+        # What the user chose. A greyed out box shows off, and its choice waits here for a build that has it.
+        self.choices: dict[str, bool] = {}
         for index, (name, text, tip) in enumerate(shown):
             box = QCheckBox(text)
             box.setToolTip(tip)
-            box.toggled.connect(self._toggled)
+            box.toggled.connect(lambda checked, name=name: self._toggled(name, checked))
             # Why an option does nothing here, on a line of its own so the columns stay narrow.
             note = label('', 'small', wrap=True)
             note.setContentsMargins(26, 0, 0, 2)
@@ -180,7 +182,11 @@ class LaunchSettings(QWidget):
             cell.addWidget(box)
             cell.addWidget(note)
             cell.addStretch()
-            toggles.addLayout(cell, index // 2, index % 2)
+            if name == 'log':
+                # Its note names a folder, so it gets the whole width.
+                toggles.addLayout(cell, (index + 1) // 2, 0, 1, 2)
+            else:
+                toggles.addLayout(cell, index // 2, index % 2)
             self.boxes[name], self.notes[name] = box, note
         toggles.setColumnStretch(0, 1)
         toggles.setColumnStretch(1, 1)
@@ -235,8 +241,7 @@ class LaunchSettings(QWidget):
             index = self.proton.count() - 1
         self.proton.setCurrentIndex(max(index, 0))
         options = self._loaded = settings.linux_launch
-        for name, box in self.boxes.items():
-            box.setChecked(getattr(options, name))
+        self.choices = {name: getattr(options, name) for name in self.boxes}
         self.wrapper.setText(options.wrapper)
         self._saved_wrapper = options.wrapper
         self.environment.set_variables(options.environment)
@@ -246,9 +251,8 @@ class LaunchSettings(QWidget):
 
     def values(self) -> tuple[str, LinuxOptions]:
         """The Proton build and the options as they would be saved. Invalid text keeps its saved value."""
-        flags = {name: box.isChecked() for name, box in self.boxes.items()}
         return self.proton.currentData() or '', replace(
-            self._loaded, **flags, environment=dict(self.environment.variables), wrapper=self._saved_wrapper)
+            self._loaded, **self.choices, environment=dict(self.environment.variables), wrapper=self._saved_wrapper)
 
     def apply(self, settings: Settings) -> None:
         settings.proton, settings.linux_launch = self.values()
@@ -257,7 +261,8 @@ class LaunchSettings(QWidget):
         if not self._loading:
             self.changed.emit()
 
-    def _toggled(self, *_):
+    def _toggled(self, name: str, checked: bool):
+        self.choices[name] = checked      # update_notes shows choices with the signals blocked
         self.update_notes()
         self._emit()
 
@@ -308,7 +313,7 @@ class LaunchSettings(QWidget):
     def update_notes(self) -> None:
         proton = self.chosen_proton()
         reads = lambda name: options_module.proton_reads(proton, name)
-        # Why an option cannot work here. It is greyed out, and its choice is kept for later.
+        # Why an option cannot work here. It is greyed out and shown off, and its choice is kept for later.
         reasons = {
             'gamemode': '' if options_module.find_program('gamemoderun') else 'gamemoderun was not found',
             'mangohud': '' if self.mangohud_found or options_module.find_program('mangohud')
@@ -321,6 +326,9 @@ class LaunchSettings(QWidget):
         for option, box in self.boxes.items():
             reason = reasons.get(option, '')
             box.setEnabled(not reason)
+            box.blockSignals(True)
+            box.setChecked(self.choices.get(option, False) and not reason)
+            box.blockSignals(False)
             note = reason or (f'Written to {log_folder()}' if option == 'log' and box.isChecked() else '')
             self.notes[option].setText(note)
             self.notes[option].setVisible(bool(note))

@@ -111,7 +111,9 @@ their own usage text (`Wow.exe -help`): `-d3d12` or `-d3d11`, `-windowed` or
 `-fullscreen`, `-console`, `-nosound`, `-compat` and `-nodriverext`. Extra
 arguments are split like a shell command line, with backslashes kept for
 Windows paths. Waystone sets `-launcherlogin`, `-uid` and `-initialgamemode`
-itself, so the extra arguments may not contain them. The game gets
+itself, so the extra arguments may not contain them. Extra arguments that
+repeat or contradict a toggle are passed as typed, since a word may be another
+argument's value, and the page points them out. The game gets
 `-launcherlogin -uid <uid>`, the product configuration's arguments, the user's
 arguments and then the game mode.
 
@@ -119,11 +121,11 @@ On Linux, global options shape the game process:
 
 | Option | Effect | Notes |
 | --- | --- | --- |
-| GameMode | `gamemoderun` before `umu-run` | gamemode stays active while umu-run waits for the game |
+| GameMode | `gamemoderun` before `umu-run` | gamemode stays active while umu-run waits for the game. Left out when `gamemoderun` is missing |
 | MangoHud | `MANGOHUD=1` | pressure-vessel imports the host's MangoHud Vulkan layer. The `mangohud` wrapper's `LD_PRELOAD` would only reach umu-run |
 | Wayland | `PROTON_ENABLE_WAYLAND=1` | offered when the chosen Proton build reads it |
 | HDR | `PROTON_ENABLE_HDR=1` | offered when the chosen Proton build reads it |
-| NVIDIA Reflex | `PROTON_ENABLE_NVAPI=1`, or `PROTON_DISABLE_NVAPI=1` when off | shown only with an NVIDIA GPU. The game uses NVAPI for Reflex. It has no DLSS |
+| NVIDIA Reflex | `PROTON_DISABLE_NVAPI=1` when off | shown only with an NVIDIA GPU. Proton 9 and later give NVIDIA GPUs NVAPI by default, and current builds no longer read `PROTON_ENABLE_NVAPI`. The game uses NVAPI for Reflex. It has no DLSS |
 | ntsync | `PROTON_NO_NTSYNC=1` when off | on by default in builds that offer the switch, and needs `/dev/ntsync` |
 | Proton log | `PROTON_LOG=1`, `PROTON_LOG_DIR=<data>/logs` | Proton writes `steam-battlenet.log`. Waystone's quiet `WINEDEBUG` is left out so Proton picks its channels |
 
@@ -136,8 +138,17 @@ wrappers nor the user's variables. The options are checked before the session
 is renewed, so a missing wrapper never spends a sign-in. On Windows only the
 arguments apply.
 
+An option that cannot work with the chosen build or on this machine is greyed
+out and shown off in the settings, while its saved choice is kept. Wayland, HDR
+and ntsync variables are harmless to a build that does not read them, and the
+game starts without GameMode when `gamemoderun` is missing, so a setting the
+user cannot change never blocks a launch. When the game does not start and any
+launch option is set, the message says the options may be the cause, since the
+wrappers' output is not kept.
+
 Invalid launch options in the settings file are dropped and reported in the
-window instead of stopping the start.
+window instead of stopping the start. The report comes before the notice to
+choose an installation folder.
 
 ## Settings and state
 

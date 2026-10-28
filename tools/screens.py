@@ -155,7 +155,7 @@ def launch_states(window, shot) -> None:
         window.settings_page.load(window.settings, *window.kept_split())
     code = 'wow'
     if not (window.library and window.library.state(code)):
-        return
+        fake_installed(window, code)
     window.client_list.select(code)
     window.show_client_page()
     window.open_launch_options()
@@ -165,6 +165,8 @@ def launch_states(window, shot) -> None:
                                                      arguments='-config Config2.wtf',
                                                      environment={'DXVK_HUD': 'fps'}))
     shot('13b-launch-options')
+    options.arguments.setText('-config Config2.wtf -d3d12')
+    shot('13d-launch-options-overlap', options.arguments_note)
     options.arguments.setText('-console -uid wow')
     if options.environment:
         options.environment.text.setPlainText('DXVK_HUD=fps\n1BAD=yes')
@@ -175,6 +177,17 @@ def launch_states(window, shot) -> None:
     window.show_client_page()
     shot('14-client-with-launch-options')
     window.settings.client_launch.pop(code)
+
+
+def fake_installed(window, code: str) -> None:
+    """Show a client as installed, as the tests do, when this machine has none. Nothing is written."""
+    import tempfile
+    if not window.library:
+        window.settings.root = tempfile.mkdtemp(prefix='waystone-screens-')
+        window.open_library()
+    state = window.library.state
+    window.library.state = lambda c: ({'version': '12.0.5.66741', 'region': 'eu', 'locale': 'enUS',
+                                       'folder': '_retail_'} if c == code else state(c))
 
 
 if __name__ == '__main__':

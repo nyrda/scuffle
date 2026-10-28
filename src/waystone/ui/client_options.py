@@ -97,9 +97,11 @@ class ClientOptionsPage(Page):
         extra.addWidget(self.arguments_note)
         add_row(grid, 'Extra', extra, top=FIELD_TOP)
         self.preview = label('', 'small', wrap=True)
-        grid.addWidget(self.preview, grid.rowCount(), 1, 1, 2)
+        # In the fields' column only, so the cards' fields end at the same edge.
+        grid.addWidget(self.preview, grid.rowCount(), 1)
 
         self.environment = None
+        self._hidden_environment: dict[str, str] = {}     # kept for Linux when this page cannot show it
         if linux:
             grid = SettingsPage.card(content, 'Environment',
                                      'Added to the variables in Settings. A name set here wins.')
@@ -133,6 +135,7 @@ class ClientOptionsPage(Page):
         self._saved_arguments = options.arguments
         if self.environment:
             self.environment.set_variables(options.environment)
+        self._hidden_environment = dict(options.environment)
         self._loading = False
         self._arguments_edited()
         self._timer.stop()
@@ -143,7 +146,8 @@ class ClientOptionsPage(Page):
         return ClientOptions(graphics=self.graphics.value() or '', window=self.display.value() or '',
                              switches=[a for a, box in self.switches.items() if box.isChecked()],
                              arguments=self._saved_arguments,
-                             environment=dict(self.environment.variables) if self.environment else {})
+                             environment=dict(self.environment.variables if self.environment
+                                              else self._hidden_environment))
 
     def update_preview(self) -> None:
         try:
@@ -154,11 +158,7 @@ class ClientOptionsPage(Page):
         self.reset_button.setEnabled(self.options().active() or bool(self.arguments.text().strip()))
 
     def _arguments_edited(self, *_):
-        try:
-            split_arguments(self.arguments.text())
-            say(self.arguments_note, '')
-        except OptionError as error:
-            say(self.arguments_note, f'{error} Not saved until fixed.')
+        self.update_arguments_note()
         self.update_preview()
         if not self._loading:
             self._timer.start()
@@ -173,9 +173,20 @@ class ClientOptionsPage(Page):
             self._saved_arguments = self.arguments.text()
             self._edited()
 
+    def update_arguments_note(self) -> None:
+        typed = ClientOptions(**{**self.options().__dict__, 'arguments': self.arguments.text()})
+        try:
+            overlaps = typed.overlaps()
+        except OptionError as error:
+            say(self.arguments_note, f'{error} Not saved until fixed.')
+            return
+        # Saved anyway. The game gets both, so the first overlap is worth a calm word.
+        say(self.arguments_note, overlaps[0] if overlaps else '', 'caution')
+
     def _edited(self, *_):
         if self._loading or not self.code:
             return
+        self.update_arguments_note()
         self.update_preview()
         self.changed.emit(self.code, self.options())
         self.saved_note.setText(f'For {self.client_name}. Saved.')
@@ -192,6 +203,7 @@ class ClientOptionsPage(Page):
             box.setChecked(False)
         if self.environment:
             self.environment.set_variables({})
+        self._hidden_environment = {}
         self._loading = False
         self._timer.stop()
         self._edited()

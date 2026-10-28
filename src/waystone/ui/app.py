@@ -121,14 +121,19 @@ class MainWindow(QMainWindow):
         self.refresh()
         self.check_updates()
         self.measure_storage()
+        # Messages for every page, one at a time. The next shows once the current one is dismissed,
+        # if it still applies then.
+        self.startup_notices: list[tuple] = []
+        if self.settings.problems:
+            # First, since the file is rewritten without them on the next save.
+            self.startup_notices.append((lambda: True, f'Some saved launch options were invalid and were '
+                                         f'removed. {self.settings.problems[0]}', 'info'))
         if not self.library:
-            self.notify('Choose an installation folder before installing a client.', 'info',
-                        'Choose folder', lambda: (self.open_settings(), self.open_folder_picker(str(Path.home()))),
-                        client='')
-        elif self.settings.problems:
-            # The file is rewritten without them on the next save.
-            self.notify(f'Some saved launch options were invalid and were removed. {self.settings.problems[0]}',
-                        'info', client='')
+            self.startup_notices.append((
+                lambda: not self.library, 'Choose an installation folder before installing a client.', 'info',
+                'Choose folder', lambda: (self.open_settings(), self.open_folder_picker(str(Path.home())))))
+        self.client_page.banner.dismissed.connect(self.next_startup_notice)
+        self.next_startup_notice()
         timer = QTimer(self)
         timer.timeout.connect(self.refresh)
         timer.start(1000)
@@ -445,6 +450,12 @@ class MainWindow(QMainWindow):
         code = self.selected() if client is None else client
         self.messages[code or ''] = (text, kind, action, callback)
         self.show_notice()
+
+    def next_startup_notice(self):
+        while self.startup_notices and '' not in self.messages:
+            applies, *notice = self.startup_notices.pop(0)
+            if applies():
+                self.notify(*notice, client='')
 
     def dismiss_notice(self):
         current = self.selected()

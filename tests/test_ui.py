@@ -145,13 +145,17 @@ def test_the_folder_cannot_change_under_queued_downloads(qt, window, tmp_path):
 @pytest.fixture
 def styled(qt, monkeypatch, tmp_path):
     """The real style and a Proton build with a long name, set before the window is built."""
-    from types import SimpleNamespace
     from waystone.ui import app as ui
     monkeypatch.setattr(ui, 'cache_dir', lambda: tmp_path / 'style')
     ui.prepare(qt)
-    build = SimpleNamespace(name='GE-Proton10-25 with a very long name from a custom folder', path='/opt/proton')
+    from waystone import launch
+    from waystone.runtime.proton import Proton
     from waystone.ui import launch_options
+    build = Proton('GE-Proton10-25 with a very long name from a custom folder', tmp_path / 'proton')
+    build.path.mkdir()
+    # Both the list and the build a launch would pick, so nothing depends on this machine's builds.
     monkeypatch.setattr(launch_options, 'find_protons', lambda: [build])
+    monkeypatch.setattr(launch, 'find_protons', lambda: [build])
 
 
 def test_settings_never_scroll_sideways_at_the_minimum_size(qt, styled, window):
@@ -544,13 +548,13 @@ def test_linux_launch_settings_save_valid_input_and_keep_it_through_mistakes(qt,
     from waystone.settings import Settings
     window.open_settings()
     launch = window.settings_page.launch
-    launch.boxes['mangohud'].setChecked(True)
+    launch.boxes['log'].setChecked(True)          # works with any build and machine
     launch.environment.text.setPlainText('DXVK_HUD=fps')
     launch.environment.flush()
     launch.wrapper.setText('gamescope -f --')
     launch.wrapper.editingFinished.emit()
     saved = Settings.load().linux_launch
-    assert saved.mangohud and saved.environment == {'DXVK_HUD': 'fps'} and saved.wrapper == 'gamescope -f --'
+    assert saved.log and saved.environment == {'DXVK_HUD': 'fps'} and saved.wrapper == 'gamescope -f --'
     assert not launch.wrapper_note.isVisibleTo(launch)
     # Mistakes are named under their field and the saved values stay as they were.
     launch.environment.text.setPlainText('DXVK_HUD=full\nBAD NAME=1')
@@ -573,3 +577,76 @@ def programs_on_path(tmp_path, monkeypatch):
     (folder / 'gamescope').write_text('#!/bin/sh\n')
     (folder / 'gamescope').chmod(0o755)
     monkeypatch.setenv('PATH', str(folder))
+    return folder
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='Linux launch settings')
+def test_an_option_that_cannot_work_here_shows_off_and_keeps_its_choice(qt, styled, window, programs_on_path):
+    from waystone.launch_options import LinuxOptions
+    from waystone.settings import Settings
+    window.settings.linux_launch = LinuxOptions(gamemode=True, wayland=True)
+    window.open_settings()
+    launch = window.settings_page.launch
+    # No gamemoderun, and a Proton build without Wayland or an ntsync switch.
+    for name, note in [('gamemode', 'gamemoderun was not found'), ('wayland', 'Not in this Proton build'),
+                       ('ntsync', 'Not adjustable')]:
+        box = launch.boxes[name]
+        assert not box.isChecked() and not box.isEnabled() and note in launch.notes[name].text()
+    launch.boxes['log'].setChecked(True)
+    saved = Settings.load().linux_launch
+    assert saved.log and saved.gamemode and saved.wayland and saved.ntsync
+    # Once gamemoderun is installed, the saved choice shows again.
+    (programs_on_path / 'gamemoderun').write_text('#!/bin/sh\n')
+    (programs_on_path / 'gamemoderun').chmod(0o755)
+    launch.update_notes()
+    assert launch.boxes['gamemode'].isChecked() and launch.boxes['gamemode'].isEnabled()
+
+
+def test_the_client_page_without_linux_saves_arguments_and_keeps_hidden_variables(qt):
+    from waystone import catalog
+    from waystone.launch_options import ClientOptions
+    from waystone.ui.client_options import ClientOptionsPage
+    page = ClientOptionsPage(linux=False)
+    saved = []
+    page.changed.connect(lambda code, options: saved.append((code, options)))
+    page.load(catalog.get('wow'), ClientOptions(switches=['-console'], environment={'DXVK_HUD': 'fps'}))
+    assert page.environment is None and page.focus_chain()[-1] is page.arguments
+    page.switches['-nosound'].setChecked(True)
+    # The variables were set on Linux. This page cannot show them, and keeps them as they were.
+    assert saved[-1] == ('wow', ClientOptions(switches=['-console', '-nosound'], environment={'DXVK_HUD': 'fps'}))
+    page.reset_button.click()
+    assert saved[-1] == ('wow', ClientOptions())
+
+
+def test_extra_arguments_that_contradict_a_toggle_save_with_a_calm_note(qt):
+    from waystone import catalog
+    from waystone.launch_options import ClientOptions
+    from waystone.ui.client_options import ClientOptionsPage
+    page = ClientOptionsPage(linux=False)
+    saved = []
+    page.changed.connect(lambda code, options: saved.append(options))
+    page.load(catalog.get('wow'), ClientOptions(graphics='-d3d12'))
+    page.show()
+    page.arguments.setText('-d3d11')
+    note = page.arguments_note
+    assert note.objectName() == 'caution' and not note.isHidden() and 'contradicts DirectX 12' in note.text()
+    page.hide()                         # leaving the page saves what was typed
+    assert saved[-1].arguments == '-d3d11'
+    next(b for b in page.graphics.group.buttons() if b.text() == 'Automatic').click()
+    assert note.isHidden()
+
+
+@pytest.fixture
+def bad_launch_options(tmp_path):
+    """A settings file without a folder and with launch options that cannot load, for the window fixture."""
+    import json
+    (tmp_path / 'config_dir').mkdir()
+    (tmp_path / 'config_dir/settings.json').write_text(json.dumps({'client_launch': {'wow': {'graphics': ['-d3d11']}}}))
+
+
+def test_dropped_launch_options_are_reported_before_the_folder_notice(qt, bad_launch_options, window):
+    banner = window.client_page.banner
+    assert 'invalid and were removed' in banner.text.text() and banner.isVisible()
+    banner.close_button.click()
+    assert 'Choose an installation folder' in banner.text.text() and banner.isVisible()
+    assert banner.action.text() == 'Choose folder'
