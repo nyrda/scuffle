@@ -108,6 +108,7 @@ class ClientOptionsPage(Page):
             self.environment = EnvironmentEditor()
             self.environment.changed.connect(self._edited)
             self.environment.text.textChanged.connect(self.update_preview)     # so Reset can clear a draft
+            self.environment.text.textChanged.connect(lambda: self._note_timer.isActive() or self.update_note())
             add_row(grid, 'Variables', self.environment, top=6)
         body_layout.addStretch()
         self._saved_arguments = ''
@@ -115,8 +116,7 @@ class ClientOptionsPage(Page):
         self._note_timer = QTimer(self)
         self._note_timer.setSingleShot(True)
         self._note_timer.setInterval(1600)
-        self._note_timer.timeout.connect(lambda: self.saved_note.setText(
-            f'For {self.client_name}. Changes save automatically.'))
+        self._note_timer.timeout.connect(self.update_note)
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.setInterval(SAVE_DELAY)
@@ -124,9 +124,21 @@ class ClientOptionsPage(Page):
 
     def focus_chain(self) -> list[QWidget]:
         """The page's controls in reading order, for the window's tab order."""
-        return [self.reset_button, self.close_button, self.graphics.current(),
-                self.display.current(), *self.switches.values(), self.arguments,
+        return [self.reset_button, self.close_button, *self.graphics.group.buttons(),
+                *self.display.group.buttons(), *self.switches.values(), self.arguments,
                 *([self.environment.text] if self.environment else [])]
+
+    def unsaved(self) -> bool:
+        """Whether a field holds text with a mistake, which keeps its last good value meanwhile."""
+        try:
+            split_arguments(self.arguments.text())
+        except OptionError:
+            return True
+        return bool(self.environment and not self.environment.valid())
+
+    def update_note(self, *_) -> None:
+        self.saved_note.setText(f'For {self.client_name}. A field with a mistake is not saved until it is fixed.'
+                                if self.unsaved() else f'For {self.client_name}. Changes save automatically.')
 
     def remember_draft(self) -> None:
         """Text with a mistake that is not saved yet, kept for when this client's page opens again."""
@@ -151,7 +163,6 @@ class ClientOptionsPage(Page):
         self._loading = True
         self.code = client.code
         self.client_name = client.label
-        self.saved_note.setText(f'For {client.label}. Changes save automatically.')
         self.graphics.set_options(list(GRAPHICS), options.graphics)
         self.display.set_options(list(WINDOW), options.window)
         for argument, box in self.switches.items():
@@ -170,6 +181,7 @@ class ClientOptionsPage(Page):
         self._arguments_edited()
         self._timer.stop()
         self.update_preview()
+        self.update_note()
 
     def options(self) -> ClientOptions:
         """The options as saved. Text with a mistake keeps its last good value."""
@@ -194,6 +206,8 @@ class ClientOptionsPage(Page):
     def _arguments_edited(self, *_):
         self.update_arguments_note()
         self.update_preview()
+        if not self._note_timer.isActive():
+            self.update_note()
         if not self._loading:
             self._timer.start()
 
@@ -223,7 +237,8 @@ class ClientOptionsPage(Page):
         self.update_arguments_note()
         self.update_preview()
         self.changed.emit(self.code, self.options())
-        self.saved_note.setText(f'For {self.client_name}. Saved.')
+        self.saved_note.setText(f'For {self.client_name}. Saved, except the field marked below.'
+                                if self.unsaved() else f'For {self.client_name}. Saved.')
         self._note_timer.start()            # restarted by each save, so the note never flips mid-typing
 
     def reset(self):

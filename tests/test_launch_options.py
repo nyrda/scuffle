@@ -367,3 +367,11 @@ def test_paths_in_variables_expand_as_in_a_shell(monkeypatch, tmp_path):
     variables = linux_environment(options, nvidia=False, log_dir=tmp_path)
     assert variables['MANGOHUD_CONFIGFILE'] == f'{tmp_path}/mango.conf'
     assert variables['DXVK_CONFIG_FILE'] == f'{tmp_path}/dxvk.conf'
+
+
+def test_an_unset_variable_expands_to_nothing_as_in_a_shell(monkeypatch, tmp_path):
+    from waystone.launch_options import linux_environment
+    monkeypatch.delenv('WAYSTONE_UNSET', raising=False)
+    options = LinuxOptions(environment={'LD_LIBRARY_PATH': '/x:$WAYSTONE_UNSET', 'A': '${WAYSTONE_UNSET}b'})
+    variables = linux_environment(options, nvidia=False, log_dir=tmp_path)
+    assert variables['LD_LIBRARY_PATH'] == '/x:' and variables['A'] == 'b'

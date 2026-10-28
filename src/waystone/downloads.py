@@ -31,6 +31,7 @@ class Job:
     error: str = ''
     result: dict = field(default_factory=dict)
     cancel_requested: bool = False
+    held: bool = False            # paused by Waystone while a game runs, not by the user
 
     @property
     def fraction(self) -> float:
@@ -50,6 +51,7 @@ class DownloadManager:
         self._path = data_dir() / 'downloads.json'
         self._game_running = False
         self._game_paused: set[str] = set()
+        self._overrides: set[str] = set()     # resumed by the user while a game runs
         self._resume_requested: set[str] = set()
         self._stopping = False
         self._restore()
@@ -69,6 +71,9 @@ class DownloadManager:
         rows = saved.get('jobs')
         if not isinstance(rows, list):
             return
+        # A folder on a drive that is not mounted looks empty. Resuming there would start over
+        # on the wrong disk, so the jobs then wait for the user.
+        present = (self.library.root / '.waystone').is_dir()
         for row in rows:
             if not isinstance(row, dict) or not catalog.is_product(row.get('client')):
                 continue
@@ -81,27 +86,39 @@ class DownloadManager:
                       error=row.get('error', '') if isinstance(row.get('error', ''), str) else '')
             if job.kind != 'verify':
                 job.done_bytes, job.total_bytes = self.library.download_progress(job.client)
-            if status == PAUSED and self.settings.resume_downloads:
+            if status == PAUSED and self.settings.resume_downloads and present:
                 job.status = QUEUED
             self.jobs.append(job)
 
     def _save(self) -> None:
         """Called with the queue lock, only when membership, order or status changes."""
-        atomic_json(self._path, {'root': str(self.library.root), 'jobs': [
-            {'client': j.client, 'kind': j.kind, 'status': j.status, 'error': j.error}
-            for j in self.jobs if j.status != DONE and not j.cancel_requested]})
+        for job in self.jobs:
+            job.held = job.client in self._game_paused
+        try:
+            atomic_json(self._path, {'root': str(self.library.root), 'jobs': [
+                {'client': j.client, 'kind': j.kind, 'status': j.status, 'error': j.error}
+                for j in self.jobs if j.status != DONE and not j.cancel_requested]})
+        except OSError:
+            # A full or read-only data folder only loses the queue for the next start.
+            # The downloads themselves carry on.
+            pass
 
     # Control
 
     def set_bandwidth_limit(self, limit: int) -> None:
         self.throttle.limit = max(0, limit)
 
-    def _resume(self, job: Job) -> None:
+    def _resume(self, job: Job, *, override: bool = False) -> None:
         if self._stopping:
             return
+        if self._game_running and not override:
+            self._game_paused.add(job.client)       # held until the game closes
+            return
         if self._game_running:
-            self._game_paused.add(job.client)
-        elif job is self._current:
+            # Resuming a held download by hand runs it now, game or not.
+            self._game_paused.discard(job.client)
+            self._overrides.add(job.client)
+        if job is self._current:
             self._resume_requested.add(job.client)
         else:
             job.status, job.speed = QUEUED, 0.0
@@ -114,16 +131,18 @@ class DownloadManager:
             existing = self.job(client)
             if existing and existing.status in {QUEUED, RUNNING}:
                 if existing is self._current and self._pause.is_set():
-                    self._resume(existing)
+                    self._resume(existing, override=True)
                 return existing
-            if existing and existing.status == PAUSED and existing.kind == kind:
+            # A new download waits for a running game. Resuming a paused one is the user's call.
+            override = bool(existing and existing.status == PAUSED and existing.kind == kind)
+            if override:
                 job = existing
             else:
                 if existing:
                     self.jobs.remove(existing)
                 job = Job(client, kind, status=PAUSED)
                 self.jobs.append(job)
-            self._resume(job)
+            self._resume(job, override=override)
             self._save()
             self._lock.notify_all()
         self._notify(job)
@@ -163,7 +182,7 @@ class DownloadManager:
             changed = [j for j in self.jobs if j.status == PAUSED or
                        (j is self._current and self._pause.is_set())]
             for job in changed:
-                self._resume(job)
+                self._resume(job, override=True)     # the user's own choice
             self._save()
             self._lock.notify_all()
         for job in changed:
@@ -175,6 +194,7 @@ class DownloadManager:
             if running == self._game_running:
                 return
             self._game_running = running
+            self._overrides.clear()
             if running:
                 changed = [j for j in self.jobs if j.status == QUEUED or
                            (j is self._current and not self._pause.is_set())]
@@ -266,7 +286,7 @@ class DownloadManager:
         with self._lock:
             while not self._stopping:
                 job = next((j for j in self.jobs if j.status == QUEUED), None)
-                if job and not self._game_running:
+                if job and (not self._game_running or job.client in self._overrides):
                     job.status, job.error = RUNNING, ''
                     self._current = job
                     self._pause.clear()
@@ -291,7 +311,7 @@ class DownloadManager:
                 if job.cancel_requested:
                     self.jobs.remove(job)
                 elif status == PAUSED and job.client in self._resume_requested:
-                    self._resume(job)
+                    self._resume(job, override=True)      # asked for while it was stopping
                 self._resume_requested.discard(job.client)
                 self._save()
             self._notify(job)

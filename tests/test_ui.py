@@ -483,8 +483,9 @@ def test_settings_tab_goes_from_the_sections_into_the_one_shown(qt, window):
     page = window.settings_page
     window.open_settings()
     chain = page.focus_chain()
-    # The sections are one Tab stop, the chosen one. Arrow keys move between them.
-    assert chain[:3] == [page.close_button, page.sections.current(), page.browse] and page.limit not in chain
+    sections = page.sections.group.buttons()
+    # Every section is in the chain, and only the chosen one takes Tab. Arrow keys move between them.
+    assert chain[:2 + len(sections)] == [page.close_button, *sections, page.browse] and page.limit not in chain
     page.show_section('launch')
     extra = QComboBox()
     page.add_launch_widget(extra)       # how launch options built elsewhere join the page
@@ -492,7 +493,7 @@ def test_settings_tab_goes_from_the_sections_into_the_one_shown(qt, window):
     chain = page.focus_chain()
     assert chain[-1] is extra and page.browse not in chain
     if page.proton is not None:
-        assert chain.index(page.proton) == 2
+        assert chain.index(page.proton) == 1 + len(sections)
     assert extra.isVisibleTo(page) and page.section_widgets['launch'].isAncestorOf(extra)
 
 
@@ -994,7 +995,7 @@ def test_a_segmented_row_is_one_tab_stop_so_space_never_changes_the_saved_choice
     page.show()
     chain = page.focus_chain()
     chosen = page.graphics.current()
-    assert chosen.text() == 'DirectX 11' and chain[2] is chosen
+    assert chosen.text() == 'DirectX 11' and chosen in chain
     assert all(b.focusPolicy() == Qt.ClickFocus for b in page.graphics.group.buttons() if b is not chosen)
     chosen.setFocus()
     QTest.keyClick(chosen, Qt.Key_Space)
@@ -1086,9 +1087,12 @@ def test_transfer_details_keep_their_shape_during_warmup_and_stalls(qt):
     for speed in [0, 48_200_000, 48_400_000, 9_500_000, 0]:
         job.speed = speed
         variants = progress_variants(job)
-        assert [len(v.split(' · ')) for v in variants] == [4, 3, 2]
         assert variants[0].startswith('39% · ') and variants[0].endswith('12.4 GB of 31.8 GB')
-        assert ('Estimating… · Estimating…' in variants[0]) == (speed == 0)
+        if speed == 0:
+            # One estimating note, and the bytes in every length, so known progress never goes.
+            assert all(v.endswith('12.4 GB of 31.8 GB') and v.count('Estimating') <= 1 for v in variants)
+        else:
+            assert [len(v.split(' · ')) for v in variants] == [4, 3, 2]
         if speed >= 10_000_000:
             assert '48 MB/s' in variants[0] and '48.' not in variants[0]
         elif speed:
@@ -1243,3 +1247,122 @@ def test_queue_total_includes_waiting_sizes_and_qualifies_paused_jobs(qt):
     queue.show_jobs(jobs, labels)
     assert 'min left' not in queue.summary.text()
     assert '1 not sized yet' in queue.summary.text()
+
+
+def test_a_start_that_failed_elsewhere_shows_in_the_list_until_it_is_read(qt, window, tmp_path, monkeypatch):
+    window.settings.root = str(tmp_path / 'games')
+    window.open_library()
+    installed(window, monkeypatch, ['wow', 'wowf'])
+    window.populate()
+    window.client_list.select('wow')
+    window.phases['wowf'] = 'Starting'
+    window.on_task_finished('wowf', 'Forever did not start. Check its runtime and try again.')
+    assert window.client_list.rows['wowf'].status.text() == 'Did not start'
+    window.client_list.select('wowf')
+    window.refresh()
+    assert 'did not start' in window.client_page.banner.text.text()
+    window.dismiss_notice()
+    window.refresh()
+    assert window.client_list.rows['wowf'].status.text() != 'Did not start'
+
+
+def test_the_downloads_page_stays_reachable_when_its_only_download_is_on_screen(qt, window, tmp_path):
+    from waystone.downloads import FAILED, RUNNING, Job
+    window.settings.root = str(tmp_path / 'games')
+    window.open_library()
+    job = Job('wowf', 'install', status=RUNNING, stage='downloading', done_bytes=1, total_bytes=10)
+    window.downloads.jobs.append(job)
+    window.downloads._current = job
+    window.client_list.select('wowf')
+    window.refresh()
+    assert window.download_bar.isVisibleTo(window) and window.download_bar.queue.isVisibleTo(window)
+    window.downloads._current = None
+    job.status = FAILED
+    window.client_list.select('wow')
+    window.refresh()
+    assert window.download_bar.isVisibleTo(window) and 'failed' in window.download_bar.title.text()
+    window.downloads.jobs.clear()
+
+
+def test_the_client_options_header_never_claims_a_field_with_a_mistake_was_saved(qt):
+    from waystone import catalog
+    from waystone.launch_options import ClientOptions
+    from waystone.ui.client_options import ClientOptionsPage
+    page = ClientOptionsPage(linux=False)
+    page.load(catalog.get('wow'), ClientOptions())
+    page.arguments.setText('"unclosed')
+    page.switches['-console'].setChecked(True)
+    assert 'except' in page.saved_note.text()
+    page._note_timer.timeout.emit()
+    assert 'not saved' in page.saved_note.text()
+
+
+def test_tab_after_an_arrow_key_moves_on_to_the_next_row(qt, window, tmp_path, monkeypatch):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    window.settings.root = str(tmp_path / 'games')
+    window.open_library()
+    installed(window, monkeypatch, ['wow'])
+    window.client_list.select('wow')
+    window.refresh()
+    window.open_launch_options()
+    window.activateWindow()
+    page = window.options_page
+    window.update_tab_order()          # the order as it was before the arrow key
+    first = page.graphics.current()
+    first.setFocus(Qt.TabFocusReason)
+    QTest.keyClick(first, Qt.Key_Right)
+    moved = page.graphics.current()
+    assert moved is not first
+    # Tab goes from the chosen Graphics button to the chosen Window button, never out of the page.
+    assert moved.nextInFocusChain() is not None
+    following = moved
+    for _ in range(8):
+        following = following.nextInFocusChain()
+        if following.focusPolicy() & Qt.TabFocus and following.isVisibleTo(window):
+            break
+    assert following is page.display.current()
+
+
+def test_the_bar_keeps_no_buttons_while_the_page_shows_its_own_download(qt, window, tmp_path):
+    from waystone.downloads import PAUSED, RUNNING, Job
+    window.settings.root = str(tmp_path / 'games')
+    window.open_library()
+    job = Job('wowf', 'install', status=RUNNING, stage='downloading', done_bytes=1, total_bytes=10)
+    waiting = Job('wow', 'install', status=PAUSED, done_bytes=1, total_bytes=10)   # it has buttons of its own
+    window.downloads.jobs.extend([job, waiting])
+    window.downloads._current = job
+    window.client_list.select('wowf')
+    window.refresh()
+    bar = window.download_bar
+    assert bar.isVisibleTo(window) and not bar.cancel.isVisibleTo(window) and not bar.toggle.isVisibleTo(window)
+    window.downloads._current = None
+    window.downloads.jobs.clear()
+
+
+def test_a_ptr_page_says_when_it_runs_another_games_build(qt, window):
+    import json
+    from pathlib import Path
+    from waystone import catalog
+    snapshot = json.loads((Path(__file__).parent / 'fixtures/catalog-us.json').read_text())
+    snapshot['products']['wow_classic_era_ptr']['version'] = '2.5.6.70006'
+    window.on_catalog(window.settings.region, snapshot)
+    window.settings.extra_clients = ['wow_classic_era_ptr']
+    window.populate()
+    window.client_list.select('wow_classic_era_ptr')
+    window.refresh()
+    assert 'runs a 2.5.6 build' in window.client_page.blurb.text()
+    catalog.apply(None)
+
+
+def test_every_page_starts_at_the_same_height_on_a_tall_window(qt, window):
+    window.resize(1440, 900)
+    titles = {}
+    for name, open_page, title in [('client', window.show_client_page, lambda: window.client_page.title),
+                                   ('settings', window.open_settings, lambda: window.settings_page.title_label),
+                                   ('queue', window.open_queue, lambda: window.queue_page.title_label)]:
+        open_page()
+        qt.processEvents()
+        widget = title()
+        titles[name] = widget.mapTo(window, widget.rect().topLeft()).y()
+    assert max(titles.values()) - min(titles.values()) <= 3, titles

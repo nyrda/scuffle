@@ -270,6 +270,11 @@ def checked_environment(data, where: str, problems: list[str]) -> dict[str, str]
     return kept
 
 
+def expand_variables(value: str) -> str:
+    """$NAME and ${NAME} as a shell expands them, with an unset variable as nothing."""
+    return re.sub(r'\$(?:\{(\w+)\}|(\w+))', lambda m: os.environ.get(m.group(1) or m.group(2), ''), value)
+
+
 def linux_environment(options: LinuxOptions, client: ClientOptions | None = None, *,
                       nvidia: bool, log_dir: Path) -> dict[str, str]:
     """The variables the game's umu-run gets on top of Waystone's own. Later ones win."""
@@ -290,7 +295,7 @@ def linux_environment(options: LinuxOptions, client: ClientOptions | None = None
     if options.log:
         variables.update(PROTON_LOG='1', PROTON_LOG_DIR=str(log_dir))
     # Paths such as ~/.config/MangoHud/wow.conf or $HOME/dxvk.conf work as in a shell.
-    expand = lambda values: {name: os.path.expanduser(os.path.expandvars(value)) for name, value in values.items()}
+    expand = lambda values: {name: os.path.expanduser(expand_variables(value)) for name, value in values.items()}
     variables.update(expand(options.environment))
     if client is not None:
         variables.update(expand(client.environment))

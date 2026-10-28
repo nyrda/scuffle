@@ -145,7 +145,8 @@ class Page(QWidget):
         if fixed is not None:
             fixed.setFixedHeight(gap)
         if getattr(self, '_balanced', None) is not None:
-            self._top.setFixedHeight(gap)
+            # The layout adds its spacing below the gap, which a fixed top does not have.
+            self._top.setFixedHeight(max(0, gap - self._balanced.spacing()))
             self._top.setVisible(tall)
         wide = self.width() >= self.WIDE
         for row in self._rows:
@@ -373,7 +374,7 @@ class ClientPage(Page):
         """The page's controls in reading order, for the window's tab order."""
         if not self.empty.isHidden():
             return [self.empty_button]
-        widgets = [self.banner.action, self.banner.close_button, *([self.modes.current()] if self.modes.current() else []),
+        widgets = [self.banner.action, self.banner.close_button, *self.modes.group.buttons(),
                    self.primary, self.cancel, self.more]
         return widgets
 
@@ -397,7 +398,9 @@ class ClientPage(Page):
         self.title.setText(client.label)
         self.family.setText(FAMILY_NAMES[client.family] + (' · test client' if client.test else
                                                             ' · other public client' if client.optional else ''))
-        self.blurb.setText(client.blurb)
+        other = catalog.other_game(client.code)
+        # A PTR can carry another game's build, such as Classic Era PTR testing Burning Crusade.
+        self.blurb.setText(f'{client.blurb} It runs a {other} build for now.' if other else client.blurb)
         self.chip.setText(status)
         tone(self.chip, tone_name)
         # The mode does not change what is installed, so it appears once there is something to play.
@@ -479,7 +482,8 @@ class SettingsPage(Page):
         title_row.setSpacing(12)
         title_block = QVBoxLayout()
         title_block.setSpacing(2)
-        title_block.addWidget(label('Settings', 'pagetitle'))
+        self.title_label = label('Settings', 'pagetitle')
+        title_block.addWidget(self.title_label)
         self.saved_note = label('Changes save automatically.', 'small')
         title_block.addWidget(self.saved_note)
         self._note_timer = QTimer(self)
@@ -715,7 +719,7 @@ class SettingsPage(Page):
 
     def focus_chain(self) -> list[QWidget]:
         """The page's controls in reading order, for the window's tab order."""
-        chain = [self.close_button, self.sections.current()]
+        chain = [self.close_button, *self.sections.group.buttons()]
         if self.section == 'general':
             chain += [self.browse, self.region, self.locale]
         elif self.section == 'clients':
@@ -1196,7 +1200,8 @@ class QueuePage(Page):
         content = self.centre(column(outer))
         title_row = QHBoxLayout()
         title_row.setSpacing(12)
-        title_row.addWidget(label('Downloads', 'pagetitle'))
+        self.title_label = label('Downloads', 'pagetitle')
+        title_row.addWidget(self.title_label)
         title_row.addStretch()
         self.close_button = close = fixed(QPushButton('Close'), 96)
         close.setToolTip('Close the downloads (Esc)')
@@ -1296,8 +1301,9 @@ class QueuePage(Page):
             for key, step in [('up', -1), ('down', 1)]:
                 card[key].setVisible(job in movable)
                 card[key].setEnabled(job in movable and 0 <= movable.index(job) + step < len(movable))
-        self.pause_all_button.setEnabled(any(j.status in {QUEUED, RUNNING, PAUSED} for j in jobs))
-        self.resume_all_button.setEnabled(any(j.status in {PAUSED, RUNNING} for j in jobs))
+        # Each only when it would change something.
+        self.pause_all_button.setEnabled(any(j.status in {QUEUED, RUNNING} for j in jobs))
+        self.resume_all_button.setEnabled(any(j.status == PAUSED for j in jobs))
         self.empty.setVisible(not jobs)
         active = [j for j in jobs if j.status != FAILED]
         left = sum(j.total_bytes - j.done_bytes for j in active if j.total_bytes)

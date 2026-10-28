@@ -129,6 +129,7 @@ class MainWindow(QMainWindow):
         self._tab_order: tuple = ()
         self._focus_primary = False
         self._update_key = None
+        self.launch_failed: set[str] = set()     # clients whose last start failed, until dismissed
         self.messages: dict[str, tuple] = {}      # client, or '' for everything, -> banner arguments
         self.client_page.banner.dismissed.connect(self.dismiss_notice)
 
@@ -259,6 +260,8 @@ class MainWindow(QMainWindow):
         job = self.downloads.job(code) if self.downloads else None
         if self.phases.get(code) == 'Running':
             return 'Running', 'active'        # a running game outweighs a file check beside it
+        if code in self.launch_failed and code not in self.phases and code in self.messages:
+            return 'Did not start', 'danger'
         if job and job.status == RUNNING:
             verb = {'install': 'Installing', 'update': 'Updating', 'verify': 'Verifying',
                     'repair': 'Repairing'}[job.kind]
@@ -266,6 +269,8 @@ class MainWindow(QMainWindow):
         if job and job.status == QUEUED:
             return 'Queued', 'active'
         if job and job.status == PAUSED:
+            if job.held:
+                return 'Paused while playing', 'attention'
             return (f'Paused at {job.fraction:.0%}' if job.total_bytes else 'Paused'), 'attention'
         if job and job.status == FAILED:
             return {'install': 'Install failed', 'update': 'Update failed', 'verify': 'Needs repair',
@@ -485,9 +490,19 @@ class MainWindow(QMainWindow):
         job = shown[0] if shown else None
         failures = sum(1 for j in self.downloads.jobs if j.status == FAILED)
         if job:
-            # The count matches the Downloads page, which also lists failures.
-            self.download_bar.show_job(job, catalog.get(job.client).label, len(jobs) - 1 + failures)
-        self.download_bar.setVisible(job is not None and self.stack.currentWidget() is not self.queue_page)
+            # The count matches the Downloads page, which also lists failures. With the page's own
+            # download on screen, the bar keeps no buttons, so one Cancel never stops another client.
+            mine = on_page and any(j.client == self.selected() for j in jobs)
+            self.download_bar.show_job(job, catalog.get(job.client).label, len(jobs) - 1 + failures,
+                                       controls=not mine)
+        elif failures:
+            # Failures wait on the Downloads page, so the way there stays.
+            self.download_bar.show_summary(f'{failures} download{"s" if failures > 1 else ""} failed',
+                                           'Try again or remove it on the Downloads page.', len(jobs) + failures)
+        elif jobs:
+            self.download_bar.show_summary('Downloads', 'This client\'s download is shown above.', len(jobs))
+        listed = bool(jobs) or failures > 0
+        self.download_bar.setVisible(listed and self.stack.currentWidget() is not self.queue_page)
         self.align_download_bar()
         failed = [j for j in self.downloads.jobs if j.status == FAILED]
         # A failure stays listed with its reason until it is retried or removed.
@@ -513,6 +528,7 @@ class MainWindow(QMainWindow):
     def dismiss_notice(self):
         current = self.selected()
         self.messages.pop(current if current in self.messages else '', None)
+        self.launch_failed.discard(current)
         # Dismissing a failed download also clears it from the list and brings back the usual
         # action. Damage found by a check stays until it is repaired.
         job = self.downloads.job(current) if self.downloads and current else None
@@ -686,6 +702,7 @@ class MainWindow(QMainWindow):
         client = catalog.get(code)
         mode = self.settings.modes.get(code) or (client.modes[0].id if client.modes else None)
         self.clear_notice()
+        self.launch_failed.discard(code)
         self.phases[code] = 'Checking for updates'
         self.refresh()
 
@@ -784,6 +801,9 @@ class MainWindow(QMainWindow):
         self.refresh()
         if not message or 'cancelled' in message.lower():
             return
+        if code:
+            # Seen in the list too, since another client may be selected by now.
+            self.launch_failed.add(code)
         if code and not self.signed_in() and ('sign-in' in message.lower() or 'battle.net' in message.lower()):
             # The primary button now reads "Sign in and play", which is the way back.
             self.notify(message, 'error', client=code)
@@ -791,6 +811,7 @@ class MainWindow(QMainWindow):
             self.notify(message, 'error', client=code)       # the main button below is the retry
         else:
             self.notify(message, client=code)
+        self.refresh()
 
     def on_update_needed(self, code: str):
         self.phases.pop(code, None)

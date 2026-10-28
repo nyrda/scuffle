@@ -67,12 +67,17 @@ def progress_variants(job) -> list[str]:
         return ['Progress will be checked on resume']
     percent = f'{job.fraction:.0%}'
     sizes = f'{size_text(job.done_bytes)} of {size_text(job.total_bytes)}'
+    if running and job.speed <= 0:
+        # The first seconds, before the speed settles. The bytes are known, so they stay.
+        return [f'{percent} · Estimating time and speed · {sizes}', f'{percent} · Estimating… · {sizes}',
+                f'{percent} · {sizes}']
     if running:
-        left = time_left(job) if job.speed > 0 else 'Estimating…'
-        speed = (f'{job.speed / 1_000_000:.0f} MB/s' if job.speed >= 10_000_000 else
-                 f'{size_text(job.speed)}/s') if job.speed > 0 else 'Estimating…'
+        speed = f'{job.speed / 1_000_000:.0f} MB/s' if job.speed >= 10_000_000 else f'{size_text(job.speed)}/s'
         # Narrow windows drop the sizes first, then the speed.
-        return [f'{percent} · {left} · {speed} · {sizes}', f'{percent} · {left} · {speed}', f'{percent} · {left}']
+        return [f'{percent} · {time_left(job)} · {speed} · {sizes}', f'{percent} · {time_left(job)} · {speed}',
+                f'{percent} · {time_left(job)}']
+    if getattr(job, 'held', False):
+        return [f'{percent} · Paused while a game runs · {sizes}', f'{percent} · Paused while a game runs', percent]
     return [f'{percent} · {sizes}', percent]
 
 
@@ -500,7 +505,9 @@ class Segmented(QWidget):
         self.options: list[tuple[str, str]] = []
 
     def current(self) -> QPushButton | None:
-        """The one Tab stop of the row. Arrow keys move between the choices."""
+        """The one Tab stop of the row. Arrow keys move between the choices.
+
+        Focus chains list every button. Qt's Tab skips the ones that only take click focus."""
         return self.group.checkedButton()
 
     def _update_focus(self) -> None:
@@ -676,6 +683,18 @@ class DownloadBar(QFrame):
         self.cancel.setVisible(controls and job.status != QUEUED)
         self.toggle.setToolTip(f'{self.toggle.text()} {label_text}')
         self.queue.setText(f'Downloads · {waiting + 1}' if waiting else 'Downloads')
+
+    def show_summary(self, title: str, detail: str, count: int) -> None:
+        """No other download to show, but the Downloads page still has something on it."""
+        self.client = ''
+        self.title.setText(title)
+        self.detail.set_variants([detail])
+        tone(self.progress, '')
+        self.progress.setRange(0, 1000)
+        self.progress.setValue(0)
+        self.toggle.hide()
+        self.cancel.hide()
+        self.queue.setText(f'Downloads · {count}' if count > 1 else 'Downloads')
 
     def show_idle(self, text: str) -> None:
         self.client = ''

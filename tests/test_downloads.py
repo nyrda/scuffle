@@ -70,6 +70,7 @@ def test_auto_resume_is_opt_in_and_leaves_failures_visible(managers):
     failed = manager.enqueue('wowf', 'verify')
     failed.status, failed.error = FAILED, 'Damage'
     manager.pause_all()
+    manager.library.create()              # an interrupted install has its folder
     restored = managers(resume_downloads=True)
     assert restored.job('wow').status == QUEUED
     assert restored.job('wowf').status == FAILED
@@ -203,3 +204,38 @@ def test_shutdown_keeps_waiting_jobs_paused_and_stops_scheduling(managers):
     manager.resume_all()
     assert manager._next() is None
     assert saved()['jobs'][0]['status'] == PAUSED
+
+
+def test_a_download_held_for_a_game_says_so_and_resuming_it_by_hand_runs_it(managers):
+    manager = managers()
+    manager.enqueue('wow', 'install')
+    manager.set_game_running(True)
+    job = manager.job('wow')
+    assert job.status == PAUSED and job.held
+    manager.enqueue('wowf', 'install')            # a new download waits for the game too
+    assert manager.job('wowf').held
+    manager.enqueue('wow', 'install')             # the Resume button on a held download
+    assert job.status == QUEUED and not job.held
+    assert manager._next() is job                 # it runs although the game still does
+
+
+def test_auto_resume_waits_when_the_folder_is_gone_such_as_an_unmounted_drive(managers, tmp_path):
+    import shutil
+    manager = managers()
+    manager.enqueue('wow', 'install')
+    manager.pause_all()
+    manager.library.create()
+    shutil.rmtree(tmp_path / 'games')
+    restored = managers(resume_downloads=True)
+    assert restored.job('wow').status == PAUSED
+    assert not (tmp_path / 'games').exists()
+
+
+def test_a_failed_queue_save_never_stops_the_downloads(managers, monkeypatch):
+    from waystone import downloads
+    manager = managers()
+    def full(path, value):
+        raise OSError(28, 'No space left on device')
+    monkeypatch.setattr(downloads, 'atomic_json', full)
+    job = manager.enqueue('wow', 'install')
+    assert manager._next() is job and job.status == RUNNING

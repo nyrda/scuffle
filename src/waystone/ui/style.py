@@ -131,6 +131,7 @@ QPushButton#primary[secondary="true"] {{ background: {RAISED}; color: {TEXT}; }}
 QPushButton#primary[secondary="true"]:hover {{ background: #2c3039; }}
 QPushButton#primary[secondary="true"]:disabled {{ background: #1d2026; color: {MUTED}; }}
 QPushButton#reorder {{ padding: 0; font-size: 16px; }}
+QPushButton#reorder:disabled {{ border-color: transparent; background: transparent; }}
 QPushButton#flat {{ background: transparent; color: {MUTED}; padding: 0 6px; min-height: 24px; }}
 QPushButton#flat:hover {{ color: {TEXT}; }}
 QPushButton#flat:disabled {{ color: #535863; background: transparent; border-color: transparent; }}
@@ -168,7 +169,7 @@ QLabel#problem {{ color: #f19a9a; font-size: 9.5pt; }}
 QLabel#caution {{ color: #f0c27a; font-size: 9.5pt; }}
 QLineEdit:read-only {{ background: transparent; border-color: #262a33; color: #c9ced6; }}
 QLineEdit[locked="true"] {{ color: {FAINT}; }}
-QSpinBox {{ padding-right: 26px; }}
+QSpinBox {{ padding-left: 19px; padding-right: 26px; }}   /* text where a dropdown's starts */
 QSpinBox::up-button, QSpinBox::down-button {{ width: 24px; border: none; background: transparent; }}
 QSpinBox::up-button {{ subcontrol-origin: border; subcontrol-position: top right; }}
 QSpinBox::down-button {{ subcontrol-origin: border; subcontrol-position: bottom right; }}

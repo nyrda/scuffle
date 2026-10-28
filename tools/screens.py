@@ -126,10 +126,16 @@ def main(output: Path) -> None:
     window.phases.clear()
     signed_in = window.signed_in
     window.signed_in = lambda: False
-    window.notify('Battle.net did not accept the saved sign-in.', 'error', client='wowf')
+    window.notify('Battle.net did not accept the saved sign-in.', 'error', client='wow')
     shot('08-error-banner')
-    window.clear_notice('wowf')
+    window.clear_notice('wow')
     window.signed_in = signed_in
+    # A start that failed while another client was selected shows in the list.
+    window.launch_failed.add('wowf')
+    window.notify('Forever did not start. Check its runtime and try again.', 'error', client='wowf')
+    shot('08b-error-elsewhere')
+    window.launch_failed.discard('wowf')
+    window.clear_notice('wowf')
     window.client_list.select('wow_classic_era_ptr')
     shot('09-test-client')
     window.settings.extra_clients = [c.code for c in ui.catalog.CLIENTS if c.test]
