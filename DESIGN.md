@@ -196,17 +196,19 @@ choose an installation folder.
 
 Settings live in the platform's configuration directory. Credentials live in
 the platform's data directory with owner-only permissions and DPAPI protection.
-Settings include the installation folder, region, locale, bandwidth limit,
-the clients listed, each client's launch options and, on Linux, the Proton build
-with its launch options. `extra_clients` holds the
-test and other clients chosen for the list, `hidden_clients` the clients left
-out of it, live ones too, and `show_other_clients` whether other public clients
-appear at all. A client with a download stays listed until the download is
-gone. Client codes the catalog does not know are kept, since discovery can find
-them again. An installed client the catalog does not offer now still gets a row
-in Settings, so it can be shown again after it was hidden. Entries that cannot be a product code are dropped when loading.
+Settings include the installation folder, region, locale, bandwidth limit, the
+clients listed, each client's launch options and, on Linux, the Proton build
+with its launch options. `extra_clients` holds the test and other clients chosen
+for the list, `hidden_clients` the clients left out of it, live ones too, and
+`show_other_clients` whether other public clients appear at all. A client with a
+download stays listed until the download is gone. Client codes the catalog does
+not know are kept, since discovery can find them again. An installed client the
+catalog does not offer now still gets a row in Settings, so it can be shown
+again after it was hidden. Entries that cannot be a product code are dropped
+when loading.
 
 The settings page has four sections: General for the folder, region and
 language, Clients for the three categories, Downloads for the speed limit, and
-Launch for the Proton build and the Linux launch options. `SettingsPage.add_launch_widget` and
-`add_download_row` add further settings to those sections.
+Launch for the Proton build and the Linux launch options.
+`SettingsPage.add_launch_widget` and `add_download_row` add further settings to
+those sections.
