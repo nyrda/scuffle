@@ -37,6 +37,13 @@ def updater(library: Library, code: str, args) -> Updater:
                    seed_from=getattr(args, 'seed_from', None), progress=progress)
 
 
+def client_code(code: str) -> str:
+    """Any product code. Discovery may have found one the built-in list lacks."""
+    if not catalog.is_product(code):
+        raise argparse.ArgumentTypeError(f'{code!r} is not a World of Warcraft product code')
+    return code
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog='waystone', description=__doc__)
     parser.add_argument('--root', type=Path, help='Installation folder, by default the saved one')
@@ -45,14 +52,14 @@ def main(argv=None):
     commands.add_parser('sign-in', help='Sign in to Battle.net through the browser')
     commands.add_parser('sign-out', help='Forget the saved Battle.net session')
     play = commands.add_parser('play', help='Renew the session and start a client')
-    play.add_argument('client', choices=sorted(catalog.BY_CODE))
+    play.add_argument('client', type=client_code)
     play.add_argument('--mode', help='Game mode, such as hardcore for Classic Era')
     play.add_argument('--wait', action='store_true', help='Wait until the game exits')
     adopt = commands.add_parser('adopt-wowupdater', help='Adopt a wowupdater installation in place')
     adopt.add_argument('source', type=Path)
     for name in ['install', 'update', 'verify']:
         command = commands.add_parser(name)
-        command.add_argument('client', choices=sorted(catalog.BY_CODE))
+        command.add_argument('client', type=client_code)
         command.add_argument('--region')
         command.add_argument('--locale')
         command.add_argument('--workers', type=int, default=16)
@@ -96,10 +103,16 @@ def main(argv=None):
         print(json.dumps({'adopted': str(library.root), 'clients': Library(library.root).installed()}))
         return
     if args.command == 'clients':
+        from . import discovery
+        catalog.apply((discovery.load(cache_dir(), settings.region) or {}).get('products'))
+        installed = library.installed() if library.exists() else []
+        codes = [c.code for c in catalog.clients()]
         rows = []
-        for client in catalog.CLIENTS:
+        for client in catalog.clients() + [catalog.get(code) for code in installed if code not in codes]:
             state = library.state(client.code) if library.exists() else None
-            rows.append({'client': client.code, 'label': client.label, 'test': client.test,
+            release = catalog.release(client.code)
+            rows.append({'client': client.code, 'label': client.label, 'category': client.category,
+                         'test': client.test, 'published': release.version if release else None,
                          'installed': state['version'] if state else None,
                          'folder': state['folder'] if state else None})
         print(json.dumps(rows, indent=2))

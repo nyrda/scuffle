@@ -4,12 +4,17 @@ Run inside the dev shell:
     QT_QPA_PLATFORM=offscreen PYTHONPATH=src python3 tools/screens.py OUTPUT_DIR
 
 States are simulated in memory. Nothing is installed, downloaded, launched or saved.
+The client catalog comes from tests/fixtures/catalog-us.json, so no state depends on
+what Blizzard publishes today.
 """
+import json
 from pathlib import Path
 import sys
+import time
 
 from PySide6.QtWidgets import QApplication
 
+from waystone import discovery
 from waystone.downloads import FAILED, PAUSED, QUEUED, RUNNING, Job
 from waystone.settings import Settings
 from waystone.ui import app as ui
@@ -20,6 +25,8 @@ SIZES = {'minimum': (900, 560), 'small': (960, 650), 'large': (1440, 900)}
 def main(output: Path) -> None:
     output.mkdir(parents=True, exist_ok=True)
     Settings.save = lambda self: None          # never write the user's settings
+    fixture = json.loads((Path(__file__).parent.parent / 'tests/fixtures/catalog-us.json').read_text())
+    discovery.load = lambda cache, region: fixture | {'region': region, 'checked_at': int(time.time())}
     application = QApplication(sys.argv)
     ui.prepare(application)
     window = ui.MainWindow()
@@ -29,12 +36,16 @@ def main(output: Path) -> None:
     window.populate()
     window.show()
 
-    def shot(name):
+    def shot(name, arrange=None):
         for size, (width, height) in SIZES.items():
             window.resize(width, height)
             window.refresh()
             for _ in range(3):
                 application.processEvents()
+            if arrange:             # after the layout, such as scrolling to the end
+                arrange()
+                for _ in range(3):
+                    application.processEvents()
             window.grab().save(str(output / f'{name}-{size}.png'))
 
     window.updates.clear()
@@ -108,7 +119,20 @@ def main(output: Path) -> None:
     window.populate()
     window.settings_page.load(window.settings, [], {'wow_classic_era_ptr': 'Queued'})
     window.settings_page.lock_folder('Finish or cancel the downloads to choose another folder.')
+    window.settings_page.show_section('clients')
     shot('10c-settings-installed-tests')
+    # The three categories, with the other public clients shown, one installed client and one download.
+    window.settings.show_other_clients = True
+    window.settings.extra_clients = ['wow_classic_era_ptr', 'wowlivetest']
+    window.settings_page.load(window.settings, ['wow'], {'wow_classic_era_ptr': 'Queued'})
+    window.populate()
+    shot('10d-settings-clients-other')
+    shot('10e-settings-clients-other-end', lambda: window.settings_page.scroll.verticalScrollBar().setValue(10_000))
+    window.settings_page.show_section('downloads')
+    shot('10f-settings-downloads')
+    window.settings_page.show_section('launch')
+    shot('10g-settings-launch')
+    window.settings_page.show_section('general')
     window.downloads.jobs.clear() if window.downloads else None
     window.settings.extra_clients = ['wow_classic_era_ptr']
     window.populate()
@@ -116,13 +140,26 @@ def main(output: Path) -> None:
     window.open_settings()
     window.open_folder_picker('/mnt/games/Waystone')
     # The folder tree loads in the background. Give it the time a person would see.
-    import time
     deadline = time.monotonic() + 2
     while time.monotonic() < deadline:
         application.processEvents()
         time.sleep(0.02)
     shot('10b-folder')
     window.show_client_page()
+    window.settings.show_other_clients = True
+    window.settings.extra_clients = ['wow_classic_era_ptr', 'wowlivetest']
+    window.populate()
+    window.client_list.select('wowlivetest')
+    shot('12-other-client')
+    hidden = window.settings.hidden_clients
+    window.settings.hidden_clients = [c.code for c in ui.catalog.clients()]
+    window.populate()
+    shot('13-every-client-hidden')
+    window.settings.hidden_clients = hidden
+    window.settings.show_other_clients = False
+    window.settings.extra_clients = ['wow_classic_era_ptr']
+    window.populate()
+    window.client_list.select('wow')
     from waystone.ui import pages
     pages.open_browser = lambda url: None
     window.signed_in = lambda: False             # the sign-in page only appears without a session

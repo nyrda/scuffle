@@ -94,7 +94,7 @@ QLabel#chip[tone="attention"] {{ color: #f0c27a; background: #33291a; }}
 QLabel#chip[tone="active"] {{ color: #a9c6ff; background: #1c2840; }}
 QLabel#chip[tone="danger"] {{ color: #f19a9a; background: #3a1f22; }}
 QLabel#key {{ color: {MUTED}; }}
-QLabel#cardtitle {{ font-size: 11pt; font-weight: 600; }}
+QLabel#cardtitle, QCheckBox#cardtitle {{ font-size: 11pt; font-weight: 600; }}
 QFrame#sidebar {{ background: {SURFACE}; border-right: 1px solid #20232a; }}
 QFrame#separator {{ background: #262a33; max-height: 1px; min-height: 1px; }}
 QFrame#card {{ background: {SURFACE}; border: 1px solid #23262d; border-radius: 10px; }}

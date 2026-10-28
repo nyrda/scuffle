@@ -865,3 +865,37 @@ def test_pausing_everything_never_starts_a_waiting_download(tmp_path):
     time.sleep(0.2)
     assert "wow" not in started and "wowf" in started
     assert {job.client: job.status for job in manager.jobs} == {"wowf": PAUSED, "wow": PAUSED}
+
+
+def test_a_test_build_starts_and_is_found_running_by_its_own_executable(tmp_path):
+    # PTRs ship WowT.exe and betas WowB.exe. Neither has a Wow.exe to start.
+    root = tmp_path / "install"
+    run_build(root, FixtureCDN(SyntheticBuild(executable_path="WowT.exe"), tmp_path / "cache"))
+    library = Library(root)
+    assert library.executable("wowf") == library.root / "_forever_/WowT.exe"
+    assert library.executable("wowf").is_file()
+    process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)",
+                                str(library.root / "_forever_/WowT.exe")], cwd=tmp_path)
+    try:
+        command = Path(f'/proc/{process.pid}/cmdline')
+        try:
+            visible = b'WowT.exe' in command.read_bytes()
+        except OSError:
+            visible = False
+        if not visible:
+            pytest.skip('The build sandbox does not expose the child process through /proc')
+        assert library.running("wowf") is True
+    finally:
+        process.terminate()
+        process.wait(timeout=5)
+
+
+def test_a_client_installed_from_discovery_is_listed_by_the_library(tmp_path):
+    root = tmp_path / "install"
+    run_build(root, FixtureCDN(SyntheticBuild(), tmp_path / "cache"))
+    clients = root / ".waystone/clients"
+    (clients / "wowe1").mkdir()
+    (clients / "wowe1/state.json").write_text((clients / "wowf/state.json").read_text())
+    (clients / "not-a-product").mkdir()
+    (clients / "not-a-product/state.json").write_text("{}")
+    assert Library(root).installed() == ["wowe1", "wowf"]

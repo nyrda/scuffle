@@ -20,3 +20,14 @@ collected anonymously on 28 October 2026. They contain no account data.
 Format references were cross-checked against CascLib and TACT.Net's primary
 source. These fixtures validate real record layouts and selected authentic
 pages. They do not establish hashes for omitted parts of the large manifests.
+
+# Version service fixtures
+
+Captured anonymously from Blizzard's public version service on 28 October 2026.
+
+* `version-summary.psv` is `https://us.version.battle.net/v2/summary`, cut to
+  its header, four products of other games and every World of Warcraft row.
+* `versions/<product>.psv` are unchanged `us.version.battle.net` versions
+  tables. `wow_classic_titan` publishes only a Chinese row.
+* `catalog-us.json` is what discovery saved for the US region that day. The
+  failure reasons are cut to the error type.
