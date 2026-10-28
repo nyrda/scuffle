@@ -31,3 +31,7 @@ Captured anonymously from Blizzard's public version service on 28 October 2026.
   tables. `wow_classic_titan` publishes only a Chinese row.
 * `catalog-us.json` is what discovery saved for the US region that day. The
   failure reasons are cut to the error type.
+* `battlenet-installs.json` is the `installs` table of Battle.net's public
+  `world_of_warcraft` catalog fragment, reduced to each install UID and its
+  product code. The catalog is the `catalogs` product on the same CDN, read
+  through its build configuration's `root` and the fragment it names.

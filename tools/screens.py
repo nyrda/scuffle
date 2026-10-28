@@ -31,6 +31,7 @@ def main(output: Path) -> None:
     ui.prepare(application)
     window = ui.MainWindow()
     window.check_updates = lambda: None
+    window.settings.region = 'us'               # the region the catalog fixture was captured for
     window.on_storage(window.library.storage() if window.library else {})
     window.settings.extra_clients = ['wow_classic_era_ptr']
     window.populate()
@@ -121,10 +122,10 @@ def main(output: Path) -> None:
     window.settings_page.lock_folder('Finish or cancel the downloads to choose another folder.')
     window.settings_page.show_section('clients')
     shot('10c-settings-installed-tests')
-    # The three categories, with the other public clients shown, one installed client and one download.
+    # The three categories, with the other public clients shown and one download.
     window.settings.show_other_clients = True
     window.settings.extra_clients = ['wow_classic_era_ptr', 'wowlivetest']
-    window.settings_page.load(window.settings, ['wow'], {'wow_classic_era_ptr': 'Queued'})
+    window.settings_page.load(window.settings, [], {'wow_classic_era_ptr': 'Queued'})
     window.populate()
     shot('10d-settings-clients-other')
     shot('10e-settings-clients-other-end', lambda: window.settings_page.scroll.verticalScrollBar().setValue(10_000))

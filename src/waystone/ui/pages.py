@@ -22,6 +22,7 @@ from .widgets import (Banner, ElidedLabel, FactsCard, Segmented, StorageCard, du
 PAGE_MARGINS = (32, 28, 32, 24)
 COLUMN_WIDTH = 780
 FIELD_WIDTH = 480
+ROW_WIDTH = 96 + 16 + FIELD_WIDTH      # a settings row: its name, the spacing and the capped field
 
 
 class Tinted(QWidget):
@@ -544,14 +545,14 @@ class SettingsPage(Page):
                 self.show_other.setObjectName('cardtitle')
                 self.show_other.toggled.connect(self.apply)
                 self.show_other.toggled.connect(lambda _: self.update_other())
-                grid = self.card(clients, self.show_other)
-                card_layout = grid.parentWidget().layout()
+                grid = self.card(clients, self.show_other, width=ROW_WIDTH)
+                card_layout = self.show_other.parentWidget().layout()
                 self.other_note = label(note, 'small', wrap=True)
                 card_layout.insertWidget(1, self.other_note)
                 self.other_status = label('', 'small', wrap=True)
                 card_layout.addWidget(self.other_status)
             else:
-                grid = self.card(clients, title, note)
+                grid = self.card(clients, title, note, width=ROW_WIDTH)
             grid.setVerticalSpacing(6)
             grid.setColumnStretch(0, 1)
             self.category_grids[category] = grid
@@ -621,7 +622,7 @@ class SettingsPage(Page):
         self.download_fields.append(field)
 
     @staticmethod
-    def card(parent: QVBoxLayout, title: str | QWidget, note: str = '') -> QGridLayout:
+    def card(parent: QVBoxLayout, title: str | QWidget, note: str = '', *, width: int = 0) -> QGridLayout:
         frame = QFrame()
         frame.setObjectName('card')
         layout = QVBoxLayout(frame)
@@ -634,7 +635,15 @@ class SettingsPage(Page):
         grid = QGridLayout()
         grid.setHorizontalSpacing(16)
         grid.setVerticalSpacing(8)
-        layout.addLayout(grid)
+        if width:
+            # Rows end at this width in a wide window, so a version stays near its name.
+            holder = QWidget()
+            holder.setMaximumWidth(width)
+            holder.setLayout(grid)
+            grid.setContentsMargins(0, 0, 0, 0)
+            layout.addWidget(holder)
+        else:
+            layout.addLayout(grid)
         parent.addWidget(frame)
         parent.addSpacing(8)
         return grid
@@ -686,6 +695,8 @@ class SettingsPage(Page):
         """Rows for these clients, one per client. Rows of clients still offered are kept."""
         codes = [c.code for c in clients]
         if codes == list(self.choices):
+            # The same rows, with versions and notes that can still have changed.
+            self.lock_clients(self.installed, self.downloading)
             return
         for code in [c for c in self.choices if c not in codes]:
             for widget in self.choices.pop(code)['widgets']:
@@ -756,7 +767,7 @@ class SettingsPage(Page):
             release = catalog.release(code)
             choice['version'].setText(release.version if release else '')
             client = catalog.get(code)
-            note = (self.downloading.get(code) or ('Installed' if code in self.installed else '')
+            note = (('Installed' if code in self.installed else '') or self.downloading.get(code, '')
                     or ('Not in this region' if catalog.checked() and not release else '')
                     or (('Older than live' if client.test else 'Old build') if catalog.stale(code) else ''))
             choice['note'].setText(note)

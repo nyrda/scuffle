@@ -183,11 +183,24 @@ class MainWindow(QMainWindow):
         return sidebar
 
     def kept_split(self) -> tuple[list[str], dict[str, str]]:
-        """Installed clients, and clients with a download job by the state shown for it."""
+        """Installed clients, and clients with a download job by the state shown for it.
+
+        A finished job stays in the download manager until the client's next one, but it
+        no longer keeps the client listed.
+        """
         installed = self.library.installed() if self.library else []
         names = {RUNNING: 'Downloading', QUEUED: 'Queued', PAUSED: 'Paused', FAILED: 'Install failed'}
         return installed, {job.client: names.get(job.status, 'Downloading')
-                           for job in (self.downloads.jobs if self.downloads else [])}
+                           for job in (self.downloads.jobs if self.downloads else []) if job.status != DONE}
+
+    def offered(self) -> list[catalog.Client]:
+        """The clients Settings has a row for. Installed or downloading clients the catalog does not
+        offer now, such as a product Blizzard stopped publishing, get one too, so they can be shown again."""
+        clients = catalog.clients(self.settings.locale)
+        codes = {c.code for c in clients}
+        installed, downloading = self.kept_split()
+        return clients + [catalog.get(code) for code in sorted(set(installed) | set(downloading))
+                          if code not in codes and catalog.is_product(code)]
 
     def listed(self) -> list[catalog.Client]:
         """The clients the list shows, by the settings and what is installed or downloading."""
@@ -372,7 +385,7 @@ class MainWindow(QMainWindow):
             hint = (hint + ' Other public clients are builds Blizzard publishes openly. '
                     'Many are old and may not connect.').strip()
         if catalog.stale(code):
-            hint = (hint + f' This build is older than {catalog.get(client.parent).label}.').strip()
+            hint = (hint + f' This build is older than the live {catalog.get(client.parent).label} build.').strip()
         if self.library:
             clients = [(catalog.get(c), size) for c, size in self.storage.get('clients', {}).items()
                        if catalog.is_product(c)]
@@ -390,7 +403,7 @@ class MainWindow(QMainWindow):
             busy_launch=launching, queued=bool(job and job.status == QUEUED),
             progress_text=progress_text, cancellable=downloading, paused=bool(job and job.status == PAUSED),
             modes=[(m.id, m.label) for m in client.modes], mode=self.settings.modes.get(code),
-            facts=self.facts(code), hint=hint, hideable=job is None)
+            facts=self.facts(code), hint=hint, hideable=code not in self.kept_split()[1])
         # Pause is a secondary action. Only starting something gets the accent color.
         secondary = primary in {'Pause', 'Queued'} or launching
         button = self.client_page.primary
@@ -501,7 +514,7 @@ class MainWindow(QMainWindow):
         if self.stack.currentWidget() is self.sign_in_page:
             self.settings_button.setChecked(False)
             return
-        self.settings_page.set_clients(catalog.clients(self.settings.locale))
+        self.settings_page.set_clients(self.offered())
         self.settings_page.show_catalog_state(self.catalog_state)
         self.settings_page.load(self.settings, *self.kept_split())
         if section:
@@ -575,7 +588,7 @@ class MainWindow(QMainWindow):
     def hide_client(self):
         code = self.selected()
         # A download keeps its client listed, so there is nothing to hide until it is gone.
-        if not code or (self.downloads and self.downloads.job(code)):
+        if not code or code in self.kept_split()[1]:
             return
         self.settings.unlisted(code)
         self.settings.save()
@@ -742,6 +755,7 @@ class MainWindow(QMainWindow):
 
     def on_job(self, job: Job):
         self.settings_page.lock_folder(self.folder_lock())
+        self.settings_page.set_clients(self.offered())
         self.settings_page.lock_clients(*self.kept_split())
         if job.status == DONE:
             self.clear_notice(job.client)      # an "update needed" notice is answered now
@@ -811,7 +825,7 @@ class MainWindow(QMainWindow):
         self.show_catalog()
 
     def show_catalog(self):
-        self.settings_page.set_clients(catalog.clients(self.settings.locale))
+        self.settings_page.set_clients(self.offered())
         self.settings_page.show_catalog_state(self.catalog_state)
         self.populate()
         self.refresh()

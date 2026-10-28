@@ -105,12 +105,12 @@ CLIENTS = (
 )
 
 # Other products Waystone has a name for. They are listed only once discovery finds
-# them public. Battle.net's catalog has no install UID for them, so it is the code,
-# as for most built-in clients.
+# them public. Their install UIDs come from the same Battle.net catalog, whose
+# installs table maps each UID to its product, such as wow_dark to wowlivetest.
 OTHERS = (
-    Client('wowlivetest', 'Dark Realm Test', 'wowlivetest', 'retail', 'DRT', parent='wow', category=OTHER),
-    Client('wowe1', 'Retail Event', 'wowe1', 'retail', 'EV', parent='wow', category=OTHER),
-    Client('wowz', 'Classic Submission', 'wowz', 'classic', 'SUB', parent='wow_classic_era', category=OTHER),
+    Client('wowlivetest', 'Dark Realm Test', 'wow_dark', 'retail', 'DRT', parent='wow', category=OTHER),
+    Client('wowe1', 'Retail Event', 'wow_event1', 'retail', 'EV', parent='wow', category=OTHER),
+    Client('wowz', 'Classic Submission', 'wow_submission', 'classic', 'SUB', parent='wow_classic_era', category=OTHER),
     Client('wow_cn_beta', 'Forever China Beta', 'wow_cn_beta', 'forever', 'CN', parent='wowf', category=OTHER),
 )
 
@@ -160,7 +160,10 @@ LINE_NAMES = {'wowf': 'Forever', 'wow_classic_era': 'Classic Era', 'wow_annivers
 
 
 def describe(code: str, version: str = '') -> Client:
-    """A client for a product Waystone has no name for, named by its code and version."""
+    """A client for a product Waystone has no name for, named by its code and version.
+
+    Its install UID is not known, so it is the code, as it is for most built-in clients.
+    """
     known = NAMED_OTHERS.get(code)
     if known:
         return known

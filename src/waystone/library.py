@@ -439,6 +439,15 @@ class Updater:
         folder = config.get('shared_container_default_subfolder', '')
         if not folder or managed_path(folder) != folder or '/' in folder:
             raise LibraryError(f'{self.entry.label} publishes an unusable folder name')
+        # Products come from what Blizzard publishes now, so one could name a folder another
+        # client already uses. Installing over it would mix two games' files.
+        for other in self.library.clients_dir.iterdir():
+            if other.name == self.code or not catalog.is_product(other.name):
+                continue
+            used = (self.library.state(other.name) or self.library.pending(other.name) or {}).get('folder', '')
+            if used.lower() == folder.lower():
+                raise LibraryError(f'{self.entry.label} would install into {folder}, '
+                                   f'which {catalog.get(other.name).label} already uses')
         if self.locale not in config.get('supported_locales', []):
             raise LibraryError(f'{self.entry.label} does not support the locale {self.locale}')
         self.snapshot.update(folder=folder, launch_arguments=list(config.get('launch_arguments') or []))

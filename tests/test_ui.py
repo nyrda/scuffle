@@ -685,3 +685,72 @@ def test_choosing_another_region_switches_to_that_regions_clients(qt, window, tm
     page.region.setCurrentIndex(page.region.findData('us'))
     assert 'wowlivetest' in page.choices and catalog.release('wow').version == '12.1.5.70575'
     catalog.apply(None)
+
+
+def test_a_finished_job_no_longer_keeps_its_client_listed_or_locked(qt, window, tmp_path, monkeypatch):
+    from waystone.downloads import DONE, Job
+    window.settings.root = str(tmp_path / 'games')
+    window.open_library()
+    installed(window, monkeypatch, ['wow'])
+    done = Job('wow', 'verify', status=DONE)
+    window.downloads.jobs.append(done)        # the manager keeps a finished job until the next one
+    window.on_job(done)
+    window.client_list.select('wow')
+    window.refresh()
+    assert window.client_page.hide_action.isEnabled()
+    window.open_settings('clients')
+    choice = window.settings_page.choices['wow']
+    assert choice['box'].isEnabled() and choice['note'].text() == 'Installed'
+    window.show_client_page()
+    window.hide_client()
+    assert window.settings.hidden_clients == ['wow'] and 'wow' not in window.client_list.rows
+    window.downloads.jobs.clear()
+
+
+def test_a_hidden_client_the_catalog_no_longer_offers_can_be_shown_again(qt, window, tmp_path, monkeypatch):
+    from waystone import catalog
+    window.settings.root = str(tmp_path / 'games')
+    window.settings.show_other_clients = True
+    window.open_library()
+    installed(window, monkeypatch, ['wowe1'])     # installed earlier, not found by discovery now
+    window.populate()
+    assert 'wowe1' in window.client_list.rows and 'wowe1' not in [c.code for c in catalog.clients()]
+    window.client_list.select('wowe1')
+    window.refresh()
+    window.hide_client()
+    assert 'wowe1' not in window.client_list.rows
+    window.open_settings('clients')
+    box = window.settings_page.choices['wowe1']['box']
+    assert box.isVisibleTo(window.settings_page) and not box.isChecked()
+    box.setChecked(True)
+    assert window.settings.hidden_clients == [] and 'wowe1' in window.client_list.rows
+
+
+def test_open_settings_rows_follow_a_new_build_with_the_same_clients(qt, window):
+    import json
+    from pathlib import Path
+    from waystone import catalog
+    snapshot = json.loads((Path(__file__).parent / 'fixtures/catalog-us.json').read_text())
+    window.on_catalog(window.settings.region, snapshot)
+    window.open_settings('clients')
+    row = window.settings_page.choices['wow_beta']
+    assert row['version'].text() == '12.0.1.66220' and row['note'].text() == 'Older than live'
+    snapshot['products']['wow_beta']['version'] = '12.1.9.71000'        # a new beta, the same products
+    window.on_catalog(window.settings.region, snapshot)
+    assert row is window.settings_page.choices['wow_beta']
+    assert row['version'].text() == '12.1.9.71000' and row['note'].text() == ''
+    catalog.apply(None)
+
+
+def test_a_short_fact_fills_the_free_cell_instead_of_a_row_of_its_own(qt):
+    from waystone.ui.widgets import FactsCard
+    card = FactsCard()
+    card.set_facts([('Version', '1.15.9.70576'), ('Region', 'Europe'), ('Language', 'English (US)'),
+                    ('Download size', 'Not known yet')])
+    position = {key.text(): card.grid.getItemPosition(card.grid.indexOf(key))[:2] for key, _ in card.cells}
+    assert position == {'Version': (0, 0), 'Region': (0, 2), 'Language': (1, 0), 'Download size': (1, 2)}
+    # A path keeps its full row.
+    card.set_facts([('Version', '1.15.9.70576'), ('Region', 'Europe'), ('Language', 'English (US)'),
+                    ('Folder', '/games/_classic_era_')])
+    key, value = card.cells[-1]
+    assert key.text() == 'Folder' and card.grid.getItemPosition(card.grid.indexOf(value)) == (2, 1, 1, 3)

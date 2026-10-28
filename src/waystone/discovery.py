@@ -9,6 +9,7 @@ cached, so the window starts with the last list and refreshes it in the backgrou
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import http.client
 import json
 from pathlib import Path
 import re
@@ -18,7 +19,7 @@ from typing import Callable
 import urllib.request
 
 from . import catalog
-from .ngdp.cdn import CDNClient, parse_psv
+from .ngdp.cdn import CDNClient, HTTPStatusError, parse_psv
 from .ngdp.formats import decode_blte, read_config, read_install
 
 SUMMARY = 'https://us.version.battle.net/v2/summary'
@@ -58,8 +59,18 @@ def parse_versions(data: bytes, region: str) -> dict | None:
     return None
 
 
+def passing(error: Exception) -> bool:
+    """A failure that says nothing about the product, such as a timeout. The next refresh asks again."""
+    if isinstance(error, HTTPStatusError):
+        return error.status == 429 or error.status >= 500
+    return isinstance(error, (OSError, http.client.HTTPException))
+
+
 def probe(code: str, region: str, cache: Path, *, factory: Callable = CDNClient) -> dict:
-    """Read a product's metadata as an install would. Anything that needs a key fails."""
+    """Read a product's metadata as an install would. Anything that needs a key fails.
+
+    A network failure gives no verdict, only 'retry', so the product is checked again.
+    """
     from .library import managed_path
     try:
         with factory(cache, region, code, retries=1, timeout=20) as client:
@@ -81,8 +92,9 @@ def probe(code: str, region: str, cache: Path, *, factory: Callable = CDNClient)
                 tags = {'Windows', 'x86_64', region.upper(), 'enUS' if 'enUS' in locales else locales[0]}
                 if not any(GAME.fullmatch(entry.path) for entry in read_install(manifest, tags)):
                     raise ValueError('no game executable')
-    except Exception as error:      # every failure means the same: not offered
-        return {'public': False, 'reason': f'{type(error).__name__}: {error}'[:200]}
+    except Exception as error:      # beyond the network, every failure means the same: not offered
+        reason = f'{type(error).__name__}: {error}'[:200]
+        return {'retry': True, 'reason': reason} if passing(error) else {'public': False, 'reason': reason}
     return {'public': True, 'locales': locales}
 
 
@@ -107,12 +119,16 @@ def refresh(region: str, cache: Path, previous: dict | None = None, *, get: Call
             if code in catalog.BY_CODE:
                 continue
             seen = earlier.get(code, {})
-            if seen.get('build_config') == row['build_config'] and 'public' in seen:
+            if seen.get('build_config') == row['build_config'] and 'public' in seen and not seen.get('retry'):
                 # The same build was checked before.
                 row.update({k: seen[k] for k in ('public', 'locales', 'reason') if k in seen})
             else:
                 unknown.append(code)
         for code, result in zip(unknown, pool.map(lambda code: check(code, region, cache), unknown)):
+            if result.get('retry'):
+                # Until it answers, the last verdict stands, so a public product does not drop out.
+                seen = earlier.get(code, {})
+                result = {k: seen[k] for k in ('public', 'locales') if k in seen} | result
             rows[code].update(result)
     return {'format': FORMAT, 'region': region, 'checked_at': int(time.time()), 'products': rows}
 

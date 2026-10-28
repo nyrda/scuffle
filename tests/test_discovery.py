@@ -188,3 +188,56 @@ def test_test_and_other_builds_behind_their_live_patch_are_stale():
     assert not catalog.stale('wowxptr')              # the same patch, an older build
     assert not catalog.stale('wow_classic_era_ptr')  # Era's PTR carries the anniversary build
     assert not catalog.stale('wow')
+
+
+def test_a_network_failure_is_no_verdict_and_the_product_is_checked_again(tmp_path):
+    answers = {code: (FIXTURES / f'versions/{code}.psv').read_bytes() for code in ['wow', 'wowe1']}
+    get, _ = service(answers)
+
+    class Unreachable(FakeCDN):
+        def discover(self):
+            raise TimeoutError('timed out')
+
+    def unreachable(code, region, cache):
+        return discovery.probe(code, region, cache, factory=Unreachable(tmp_path))
+    first = discovery.refresh('us', tmp_path, get=get, check=unreachable)
+    assert first['products']['wowe1'].get('retry') is True and 'public' not in first['products']['wowe1']
+    catalog.apply(first['products'])
+    assert 'wowe1' not in [c.code for c in catalog.clients()]
+    probed = []
+
+    def answers_now(code, region, cache):
+        probed.append(code)
+        return {'public': True, 'locales': ['enUS']}
+    second = discovery.refresh('us', tmp_path, first, get=get, check=answers_now)
+    assert probed == ['wowe1'] and second['products']['wowe1'] == {
+        'version': '9.0.1.35078', 'build_config': first['products']['wowe1']['build_config'],
+        'public': True, 'locales': ['enUS']}
+
+
+def test_a_public_product_whose_new_build_cannot_be_reached_stays_offered(tmp_path):
+    get, _ = service({code: (FIXTURES / f'versions/{code}.psv').read_bytes() for code in ['wow', 'wowe1']})
+    previous = snapshot()
+    previous['products']['wowe1']['build_config'] = 'f' * 32        # checked for an earlier build
+    result = discovery.refresh('us', tmp_path, previous, get=get,
+                               check=lambda *a: {'retry': True, 'reason': 'TimeoutError: timed out'})
+    wowe1 = result['products']['wowe1']
+    assert wowe1['public'] is True and wowe1['retry'] is True
+    probed = []
+    discovery.refresh('us', tmp_path, result, get=get, check=lambda code, *a: probed.append(code) or {'public': True})
+    assert probed == ['wowe1']
+
+
+def test_a_server_error_is_retried_and_a_missing_object_is_a_verdict():
+    from waystone.ngdp.cdn import HTTPStatusError, IntegrityError
+    assert discovery.passing(HTTPStatusError(503, 'https://cdn.invalid/x'))
+    assert discovery.passing(ConnectionResetError())
+    assert not discovery.passing(HTTPStatusError(404, 'https://cdn.invalid/x'))
+    assert not discovery.passing(IntegrityError('Configuration MD5 does not match its key'))
+
+
+def test_every_install_uid_is_the_one_battle_net_gives_its_product():
+    installs = json.loads((FIXTURES / 'battlenet-installs.json').read_text())
+    products = {product: uid for uid, product in installs.items()}
+    for client in catalog.CLIENTS + catalog.OTHERS:
+        assert products[client.code] == client.uid, client.code

@@ -355,6 +355,7 @@ class FactsCard(QFrame):
         self.texts: list[str] = []
 
     WIDE = {'Folder', 'Installs into', 'Download size'}
+    PATHS = {'Folder', 'Installs into'}
     PLACEHOLDERS = {'Never', 'Not known yet', 'Being calculated'}
 
     def set_facts(self, facts: list[tuple[str, str]]) -> None:
@@ -381,6 +382,8 @@ class FactsCard(QFrame):
         self.cells, self.names = [], names
         narrow = [f for f in facts if f[0] not in self.WIDE]
         wide = [f for f in facts if f[0] in self.WIDE]
+        if len(narrow) % 2 and wide and wide[0][0] not in self.PATHS:
+            narrow.append(wide.pop(0))      # a short value fills the gap instead of a row of its own
         for index, (name, text) in enumerate(narrow):
             row, column = divmod(index, 2)
             self._add(name, text, row, column * 2, 1)

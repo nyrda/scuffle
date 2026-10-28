@@ -867,27 +867,31 @@ def test_pausing_everything_never_starts_a_waiting_download(tmp_path):
     assert {job.client: job.status for job in manager.jobs} == {"wowf": PAUSED, "wow": PAUSED}
 
 
-def test_a_test_build_starts_and_is_found_running_by_its_own_executable(tmp_path):
+def test_a_test_build_starts_and_is_found_running_by_its_own_executable(tmp_path, monkeypatch):
     # PTRs ship WowT.exe and betas WowB.exe. Neither has a Wow.exe to start.
+    from waystone import system
     root = tmp_path / "install"
     run_build(root, FixtureCDN(SyntheticBuild(executable_path="WowT.exe"), tmp_path / "cache"))
     library = Library(root)
     assert library.executable("wowf") == library.root / "_forever_/WowT.exe"
     assert library.executable("wowf").is_file()
-    process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)",
-                                str(library.root / "_forever_/WowT.exe")], cwd=tmp_path)
-    try:
-        command = Path(f'/proc/{process.pid}/cmdline')
-        try:
-            visible = b'WowT.exe' in command.read_bytes()
-        except OSError:
-            visible = False
-        if not visible:
-            pytest.skip('The build sandbox does not expose the child process through /proc')
-        assert library.running("wowf") is True
-    finally:
-        process.terminate()
-        process.wait(timeout=5)
+    # The process list as Wine shows it, so the check does not depend on what /proc exposes here.
+    game = [(4242, f"C:\\windows\\system32\\start.exe {library.root / '_forever_/WowT.exe'}", str(tmp_path))]
+    monkeypatch.setattr(system, "running_executables", lambda: game)
+    assert library.running("wowf") is True
+    monkeypatch.setattr(system, "running_executables", lambda: [(4243, "python3 -c pass", str(tmp_path))])
+    assert library.running("wowf") is False
+
+
+def test_a_product_naming_another_clients_folder_is_not_installed_over_it(tmp_path):
+    root = tmp_path / "install"
+    forever = SyntheticBuild(changed=b"forever content")
+    run_build(root, FixtureCDN(forever, tmp_path / "forever-cache"))
+    event = SyntheticBuild("0.0.2.2", changed=b"event content", product="wowe1", folder="_forever_")
+    with pytest.raises(UpdateError, match="_forever_, which Forever already uses"):
+        run_build(root, FixtureCDN(event, tmp_path / "event-cache"), product="wowe1")
+    assert (root / "_forever_/Wow.exe").read_bytes() == forever.wow.decoded
+    assert Library(root).installed() == ["wowf"]
 
 
 def test_a_client_installed_from_discovery_is_listed_by_the_library(tmp_path):

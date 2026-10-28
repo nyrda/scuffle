@@ -31,10 +31,15 @@ Clients come in three categories.
 | Live | Forever, until the release channel exists | `wowf` | `wowf` | unless hidden |
 | Test | Retail PTR, Retail PTR 2, MoP Classic PTR, Classic Era PTR | `wowt`, `wowxptr`, `wow_classic_ptr`, `wow_classic_era_ptr` | install UID | when chosen or installed |
 | Test | Retail Beta, Forever Beta | `wow_beta`, `wow_classic_beta` | install UID | when chosen or installed |
-| Other | Dark Realm Test, Retail Event, Classic Submission, and any other public product | found by discovery | the product code | when shown, and chosen or installed |
+| Other | Dark Realm Test, Retail Event, Classic Submission, Forever China Beta | `wowlivetest`, `wowe1`, `wowz`, `wow_cn_beta`, found by discovery | install UID | when shown, and chosen or installed |
+| Other | any other public product | found by discovery | the product code | when shown, and chosen or installed |
 
 The live and test clients are built in. Their labels, install UIDs and modes come
-from Battle.net's catalog. Each client's folder name comes from its public
+from Battle.net's public catalog (the `catalogs` product on the CDN). Its
+`world_of_warcraft` fragment has an `installs` table that names each install
+UID's product, such as `wow_ptr` for `wowt`, `wow_classic_anniversary` for
+`wow_anniversary` and `wow_dark` for `wowlivetest`. The other clients Waystone
+has a name for take their UIDs from the same table. Each client's folder name comes from its public
 product configuration (`shared_container_default_subfolder`). Its `.flavor.info`
 holds the NGDP product code. Every client launches its own executable, such as
 `Wow.exe`, `WowT.exe` or `WowB.exe`, with `-launcherlogin -uid <install UID>`.
@@ -54,10 +59,18 @@ configuration and the install manifest must download and decode without a
 decryption key, and the manifest must hold a game executable. The vendor,
 development and NEV products (`wowv*`, `wowdev*`, `wownev*`) and
 `wowlivetest2` fail this check. `wow_cn_beta` passes it but supports only
-Simplified Chinese, so it is not offered. `wow_classic_titan` publishes only a
-Chinese build and is not listed. Unknown public products get a label from their
-version line, version and code, such as `Retail 9.0.1 (wowe1)`, and launch with
+Simplified Chinese, so it is offered only when the language is Chinese.
+`wow_classic_titan` publishes only a Chinese build and is not listed. Unknown
+public products get a label from their version line, version and code, such as
+`Classic 3.4.1 (wowq)`. The catalog has no UID for them, so they launch with
 their code as the install UID.
+
+A failed check is kept as a verdict only when it would fail again, such as a
+configuration that needs a key. A timeout, a connection error or a server error
+gives no verdict. The product is checked again on the next refresh, and one that
+was public before stays offered until then. Each client must install into a
+folder of its own, so an install whose published folder another client already
+uses is refused.
 
 The result is cached per region in the cache folder for six hours. The window
 starts with the cached list, or with the built-in clients when there is none,
@@ -142,7 +155,8 @@ test and other clients chosen for the list, `hidden_clients` the clients left
 out of it, live ones too, and `show_other_clients` whether other public clients
 appear at all. A client with a download stays listed until the download is
 gone. Client codes the catalog does not know are kept, since discovery can find
-them again. Entries that cannot be a product code are dropped when loading.
+them again. An installed client the catalog does not offer now still gets a row
+in Settings, so it can be shown again after it was hidden. Entries that cannot be a product code are dropped when loading.
 
 The settings page has four sections: General for the folder, region and
 language, Clients for the three categories, Downloads for the speed limit, and
