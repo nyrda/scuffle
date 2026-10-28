@@ -1,0 +1,792 @@
+"""The Waystone window."""
+from __future__ import annotations
+
+from datetime import datetime
+import os
+from pathlib import Path
+import shutil
+import signal
+import sys
+import threading
+import time
+
+from PySide6.QtCore import QObject, QPoint, QTimer, QUrl, Qt, Signal
+from PySide6.QtGui import QDesktopServices
+from PySide6.QtWidgets import (QApplication, QFrame, QGraphicsOpacityEffect, QHBoxLayout, QMainWindow, QPushButton, QStackedWidget,
+                               QStyleFactory, QVBoxLayout, QWidget)
+
+from .. import catalog
+from ..downloads import DONE, FAILED, PAUSED, QUEUED, RUNNING, DownloadManager, Job
+from ..launch import Launcher, LaunchError
+from ..library import Library, update_available
+from ..ngdp.cdn import CDNClient
+from ..settings import LOCALE_NAMES, MEGABYTE, REGIONS, Settings, cache_dir, data_dir
+from .pages import ClientPage, FolderPage, QueuePage, SettingsPage, SignInPage
+from .style import SPACING, dark_palette, make_images, size_text, stylesheet
+from .widgets import ClientList, DownloadBar, fixed, label, progress_variants
+
+
+class Bus(QObject):
+    """Signals from worker threads to the window."""
+    job_changed = Signal(object)
+    sign_in_requested = Signal(str)
+    updates_checked = Signal(dict)
+    launch_phase = Signal(str, str)      # client, phase text
+    task_finished = Signal(str, str)     # client or '' for sign-in, error text or ''
+    update_needed = Signal(str)
+    storage_ready = Signal(dict)
+
+
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.settings = Settings.load()
+        self.bus = Bus()
+        self.updates: dict[str, bool] = {}
+        self.phases: dict[str, str] = {}      # client -> Checking for updates, Signing in, Starting, Running
+        self.library = self.downloads = None
+        self._sign_in_result: list = []
+        self._sign_in_done = threading.Event()
+        self._signing_in = False
+        self.bus.job_changed.connect(self.on_job)
+        self.bus.sign_in_requested.connect(self.on_sign_in_requested)
+        self.bus.updates_checked.connect(self.on_updates)
+        self.bus.launch_phase.connect(self.on_phase)
+        self.bus.task_finished.connect(self.on_task_finished)
+        self.bus.update_needed.connect(self.on_update_needed)
+        self.bus.storage_ready.connect(self.on_storage)
+        self.storage: dict = {}
+        self.open_library()
+
+        self.setWindowTitle('Waystone')
+        self.resize(980, 620)
+        self.setMinimumSize(900, 560)
+        central = QWidget()
+        self.setCentralWidget(central)
+        layout = QHBoxLayout(central)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(self.build_sidebar())
+        right = QVBoxLayout()
+        right.setContentsMargins(0, 0, 0, 0)
+        right.setSpacing(0)
+        self.stack = QStackedWidget()
+        self.client_page = ClientPage()
+        self.client_page.primary_clicked.connect(self.primary_action)
+        self.client_page.cancel_clicked.connect(lambda: self.downloads.cancel(self.selected()))
+        self.client_page.verify_clicked.connect(self.verify)
+        self.client_page.open_folder_clicked.connect(self.open_folder)
+        self.client_page.mode_changed.connect(self.remember_mode)
+        self.settings_page = SettingsPage()
+        self.settings_page.saved.connect(self.on_settings_saved)
+        self.settings_page.closed.connect(self.show_client_page)
+        self.settings_page.choose_folder.connect(self.open_folder_picker)
+        self.sign_in_page = SignInPage()
+        self.sign_in_page.finished.connect(self.on_sign_in_finished)
+        self.folder_page = FolderPage()
+        self.folder_page.chosen.connect(self.on_folder_chosen)
+        self.folder_page.cancelled.connect(lambda: self.stack.setCurrentWidget(self.settings_page))
+        self.queue_page = QueuePage()
+        self.queue_page.closed.connect(self.show_client_page)
+        self.queue_page.pause.connect(lambda code: self.downloads.pause(code))
+        self.queue_page.resume.connect(self.retry_or_resume)
+        self.queue_page.cancel.connect(self.cancel_from_queue)
+        self.queue_page.limit_changed.connect(self.set_limit)
+        for page in [self.client_page, self.settings_page, self.sign_in_page, self.folder_page, self.queue_page]:
+            self.stack.addWidget(page)
+        right.addWidget(self.stack, 1)
+        self.download_bar = DownloadBar()
+        self.download_bar.pause_clicked.connect(lambda code: self.downloads.pause(code))
+        self.download_bar.resume_clicked.connect(lambda code: self.downloads.enqueue(code, self.downloads.job(code).kind))
+        self.download_bar.cancel_clicked.connect(lambda code: self.downloads.cancel(code))
+        self.download_bar.open_client.connect(self.open_client)
+        self.download_bar.limit_changed.connect(self.set_limit)
+        self.download_bar.show_queue.connect(self.open_queue)
+        self.download_bar.set_limit(self.settings.bandwidth_limit // MEGABYTE)
+        right.addWidget(self.download_bar)
+        layout.addLayout(right, 1)
+        self.banner = self.client_page.banner
+        self._tab_order: tuple = ()
+        self._focus_primary = False
+        self.messages: dict[str, tuple] = {}      # client, or '' for everything, -> banner arguments
+        self.client_page.banner.dismissed.connect(self.dismiss_notice)
+
+        self.populate()
+        self.refresh()
+        self.check_updates()
+        self.measure_storage()
+        if not self.library:
+            self.notify('Choose an installation folder before installing a client.', 'info',
+                        'Choose folder', lambda: (self.open_settings(), self.open_folder_picker(str(Path.home()))),
+                        client='')
+        timer = QTimer(self)
+        timer.timeout.connect(self.refresh)
+        timer.start(1000)
+        update_timer = QTimer(self)
+        update_timer.timeout.connect(self.check_updates)
+        update_timer.start(30 * 60 * 1000)
+
+
+    def open_library(self):
+        if not self.settings.root:
+            return
+        self.library = Library(self.settings.root)
+        self.downloads = DownloadManager(self.settings, self.library)
+        self.downloads.listeners.append(self.bus.job_changed.emit)
+
+    # Layout
+
+    def build_sidebar(self) -> QWidget:
+        sidebar = QFrame()
+        sidebar.setObjectName('sidebar')
+        sidebar.setFixedWidth(280)
+        side = QVBoxLayout(sidebar)
+        side.setContentsMargins(SPACING, 18, SPACING, 12)
+        side.setSpacing(0)
+        brand = label('WAYSTONE', 'brand')
+        brand.setContentsMargins(SPACING + 2, 0, 0, 6)
+        side.addWidget(brand)
+        self.client_list = ClientList()
+        self.client_list.selected.connect(lambda _: self.show_client_page())
+        side.addWidget(self.client_list, 1)
+        separator = QFrame()
+        separator.setObjectName('separator')
+        side.addWidget(separator)
+        side.addSpacing(6)
+        self.settings_button = fixed(QPushButton('Settings'))
+        self.settings_button.setObjectName('nav')
+        self.settings_button.setCheckable(True)
+        self.settings_button.clicked.connect(self.toggle_settings)
+        side.addWidget(self.settings_button)
+        side.addSpacing(6)
+        account = QHBoxLayout()
+        account.setContentsMargins(SPACING + 2, 0, 0, 0)
+        self.account = label('', 'small')
+        self.account_button = QPushButton('')
+        self.account_button.setObjectName('flat')
+        self.account_button.clicked.connect(self.toggle_sign_in)
+        account.addWidget(self.account, 1)
+        account.addWidget(self.account_button)
+        side.addLayout(account)
+        return sidebar
+
+    def kept(self) -> list[str]:
+        """Clients that stay in the list whatever is chosen: installed, or with a download."""
+        installed = self.library.installed() if self.library else []
+        return installed + [job.client for job in (self.downloads.jobs if self.downloads else [])]
+
+    def kept_split(self) -> tuple[list[str], dict[str, str]]:
+        """Installed clients, and clients with a download job by the state shown for it."""
+        installed = self.library.installed() if self.library else []
+        names = {RUNNING: 'Downloading', QUEUED: 'Queued', PAUSED: 'Paused', FAILED: 'Install failed'}
+        return installed, {job.client: names.get(job.status, 'Downloading')
+                           for job in (self.downloads.jobs if self.downloads else [])}
+
+    def populate(self):
+        clients = catalog.visible(self.settings.extra_clients, self.kept())
+        self.client_list.populate(clients, self.client_list.current() or self.settings.selected)
+
+    # State
+
+    def selected(self) -> str | None:
+        return self.client_list.current()
+
+    def launcher(self) -> Launcher:
+        return Launcher(self.settings, self.library)
+
+    def signed_in(self) -> bool:
+        from ..auth.vault import Vault
+        return Vault(data_dir() / 'session', None).has_session()
+
+    def status(self, code: str) -> tuple[str, str]:
+        """The short status of a client and its tone for the chip."""
+        job = self.downloads.job(code) if self.downloads else None
+        if self.phases.get(code) == 'Running':
+            return 'Running', 'active'        # a running game outweighs a file check beside it
+        if job and job.status == RUNNING:
+            verb = {'install': 'Installing', 'update': 'Updating', 'verify': 'Verifying',
+                    'repair': 'Repairing'}[job.kind]
+            return (f'{verb} {job.fraction:.0%}' if job.total_bytes else verb), 'active'
+        if job and job.status == QUEUED:
+            return 'Queued', 'active'
+        if job and job.status == PAUSED:
+            return f'Paused at {job.fraction:.0%}', 'attention'
+        if job and job.status == FAILED:
+            return {'install': 'Install failed', 'update': 'Update failed', 'verify': 'Needs repair',
+                    'repair': 'Repair failed'}[job.kind], 'danger'
+        if code in self.phases:
+            return self.phases[code], 'active'
+        state = self.library.state(code) if self.library else None
+        if not state:
+            return 'Not installed', ''
+        if self.updates.get(code):
+            return 'Update available', 'attention'
+        return 'Ready', 'good'
+
+    def free_space(self) -> int:
+        root = self.library.root
+        return shutil.disk_usage(root if root.exists() else root.parent).free
+
+    def facts(self, code: str) -> list[tuple[str, str]]:
+        state = self.library.state(code) if self.library else None
+        region = REGIONS.get((state or {}).get('region', self.settings.region), '')
+        language = LOCALE_NAMES.get((state or {}).get('locale', self.settings.locale), '')
+        if state:
+            day = lambda t: datetime.fromtimestamp(t).strftime('%Y-%m-%d') if t else 'Never'
+            facts = [('Version', state['version']), ('Size', size_text(state.get('encoded_bytes', 0))),
+                     ('Updated', day(state.get('updated_at_unix', 0))),
+                     ('Last played', day(self.settings.last_played.get(code, 0)))]
+            # Region and language matter only where a client differs from the settings.
+            if state.get('region', self.settings.region) != self.settings.region:
+                facts.append(('Region', region))
+            if state.get('locale', self.settings.locale) != self.settings.locale:
+                facts.append(('Language', language))
+            if isinstance(self.updates.get(code), str):
+                facts.append(('New version', self.updates[code]))
+            return facts
+        job = self.downloads.job(code) if self.downloads else None
+        if job and job.total_bytes:
+            size = size_text(job.total_bytes)
+        elif job and job.status == RUNNING:
+            size = 'Being calculated'
+        elif job and job.status == FAILED:
+            size = 'Not known yet'
+        else:
+            size = 'Not known yet'
+        return [('Region', region), ('Language', language), ('Download size', size)]
+
+    def refresh(self):
+        for code, row in self.client_list.rows.items():
+            text, _ = self.status(code)
+            state = self.library.state(code) if self.library else None
+            row.status.setText(f"Ready · {state['version']}" if text == 'Ready' else text)
+        signed = self.signed_in()
+        signing_in = self.stack.currentWidget() is self.sign_in_page
+        self.account.setText('Signing in…' if signing_in else
+                             '<span style="color:#7fcf8f">●</span> Signed in' if signed else 'Not signed in')
+        self.account_button.setText('Sign out' if signed else 'Sign in')
+        can_sign_in = bool(self.library and self.library.installed())
+        # A second sign-in, or a sign-out, during a sign-in would race for the one ticket.
+        # A launch uses the saved session, so it cannot be signed out of mid-launch either.
+        launching_any = any(phase != 'Running' for phase in self.phases.values())
+        self.account_button.setEnabled(can_sign_in and not signing_in and not self._signing_in
+                                       and not launching_any)
+        self.account_button.setToolTip('Install a client first. Signing in needs its version.' if not can_sign_in
+                                       else 'Available once the game has started' if launching_any
+                                       else 'Available after the sign-in' if signing_in or self._signing_in else '')
+        self.refresh_downloads()
+        code = self.selected()
+        if code is None:
+            return
+        self.refresh_client(code)
+        self.update_tab_order()
+
+    def update_tab_order(self):
+        """Tab follows the reading order: the list, the page, the sidebar footer, then the bar."""
+        page = self.stack.currentWidget()
+        chain = [self.client_list, *(page.focus_chain() if hasattr(page, 'focus_chain') else []),
+                 self.settings_button, self.account_button, self.download_bar.title,
+                 self.download_bar.toggle, self.download_bar.cancel, self.download_bar.queue]
+        key = tuple(id(widget) for widget in chain)
+        if key != self._tab_order:
+            self._tab_order = key
+            for first, second in zip(chain, chain[1:]):
+                QWidget.setTabOrder(first, second)
+
+    def refresh_client(self, code: str):
+        signed = self.signed_in()
+        self.settings.selected = code
+        self.show_notice()
+        client = catalog.get(code)
+        state = self.library.state(code) if self.library else None
+        job = self.downloads.job(code) if self.downloads else None
+        status, tone_name = self.status(code)
+        downloading = bool(job and job.status in {QUEUED, RUNNING, PAUSED})
+        launching = code in self.phases
+        failed = bool(job and job.status == FAILED)
+        if failed and job.kind == 'verify':
+            # A failed check is fixed by repairing, not by checking again.
+            primary = 'Repair'
+        elif failed:
+            primary = 'Try again'
+        elif downloading and job.status == QUEUED:
+            # Waiting is not something to pause. Cancel takes it out of the queue.
+            primary = 'Queued'
+        elif downloading:
+            primary = 'Resume' if job.status == PAUSED else 'Pause'
+        elif launching:
+            # The button names the same phase as the chip and the list.
+            phase = self.phases[code]
+            primary = 'Running' if phase == 'Running' else phase.split(' for ')[0] + '…'
+        elif not state:
+            primary = 'Install'
+        elif self.updates.get(code):
+            primary = 'Update'
+        else:
+            # Play signs in first when there is no session, so the button says so.
+            primary = 'Play' if signed else 'Sign in and play'
+        progress, progress_text = None, ['']
+        preparing = bool(downloading and job.status == RUNNING and not job.total_bytes)
+        if downloading:
+            # The same details as the download bar, without the percentage the chip already shows.
+            progress_text = [text.split(' · ', 1)[1] if text.startswith(f'{job.fraction:.0%} · ') else text
+                             for text in progress_variants(job)]
+            if job.total_bytes:
+                progress = job.fraction
+            # The job that really runs before this one: the current one, then waiting ones.
+            # Paused jobs are skipped by the queue, so they are not named.
+            line = [j for j in ([self.downloads.current()] + self.downloads.pending())
+                    if j and (j is self.downloads.current() or j.status == QUEUED)]
+            ahead = line[line.index(job) - 1] if job in line and line.index(job) > 0 else None
+            if job.status == QUEUED and ahead:
+                progress_text = [f'Starts after {catalog.get(ahead.client).label}', 'Waiting']
+        hint = ''
+        if not state and not job and self.library and self.library.installed():
+            hint = 'Content the installed clients already have is not downloaded again.'
+        if client.test:
+            hint = (hint + ' Test clients connect to Blizzard\'s test realms, which need account access.').strip()
+        if self.library:
+            clients = [(catalog.get(c), size) for c, size in self.storage.get('clients', {}).items()
+                       if c in catalog.BY_CODE]
+            self.client_page.storage.show_storage(str(self.library.root), self.storage.get('stored', 0),
+                                                  clients, self.free_space(),
+                                                  measuring=not self.storage and bool(self.library.installed()))
+        self.client_page.storage.setVisible(bool(self.library))
+        had_primary = self.client_page.primary.hasFocus()
+        self.client_page.show_client(
+            client, status=status, tone_name=tone_name, primary=primary,
+            primary_enabled=bool(self.library) and not launching and primary != 'Queued',
+            primary_tip='' if self.library else 'Choose an installation folder in Settings first.',
+            installed=bool(state),
+            busy=(launching and self.phases[code] != 'Running') or preparing, progress=progress,
+            busy_launch=launching, queued=bool(job and job.status == QUEUED),
+            progress_text=progress_text, cancellable=downloading, paused=bool(job and job.status == PAUSED),
+            modes=[(m.id, m.label) for m in client.modes], mode=self.settings.modes.get(code),
+            facts=self.facts(code), hint=hint)
+        # Pause is a secondary action. Only starting something gets the accent color.
+        secondary = primary in {'Pause', 'Queued'} or launching
+        button = self.client_page.primary
+        if button.property('secondary') != secondary:
+            button.setProperty('secondary', secondary)
+            button.style().unpolish(button)
+            button.style().polish(button)
+        # Focus on the main button survives it being disabled for a launch: the list holds it
+        # meanwhile, so Enter never lands on the ⋯ menu, and it returns afterwards.
+        focused = QApplication.focusWidget()
+        if self._focus_primary and button.isEnabled() and focused in (None, self.client_list, self.client_page.more):
+            self._focus_primary = False
+            button.setFocus()
+        elif not button.isEnabled() and (had_primary or focused is button):
+            self._focus_primary = True
+            self.client_list.setFocus()
+        elif focused is not None and self.client_page.isAncestorOf(focused) and \
+                not (focused.isVisible() and focused.isEnabled()):
+            # A control that just hid itself hands focus to the main button, or the list.
+            (button if button.isEnabled() else self.client_list).setFocus()
+
+    def align_download_bar(self):
+        holder = getattr(self.stack.currentWidget(), 'column_holder', None)
+        if holder is None or not holder.isVisible() or not self.download_bar.isVisible():
+            return
+        left = holder.mapTo(self, QPoint(0, 0)).x() - self.download_bar.mapTo(self, QPoint(0, 0)).x()
+        self.download_bar.align_to(left, self.download_bar.width() - left - holder.width())
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        QTimer.singleShot(0, self.align_download_bar)     # after the pages have their new widths
+
+    def refresh_downloads(self):
+        if not self.downloads:
+            self.download_bar.hide()
+            return
+        current = self.downloads.current()
+        waiting = self.downloads.pending()
+        jobs = ([current] if current else []) + waiting
+        # The client page shows its own download, so the bar shows the next one instead.
+        on_page = self.stack.currentWidget() is self.client_page
+        shown = [j for j in jobs if not (on_page and j.client == self.selected())]
+        job = shown[0] if shown else None
+        failures = sum(1 for j in self.downloads.jobs if j.status == FAILED)
+        if job:
+            # The count matches the Downloads page, which also lists failures.
+            self.download_bar.show_job(job, catalog.get(job.client).label, len(jobs) - 1 + failures)
+        self.download_bar.setVisible(job is not None and self.stack.currentWidget() is not self.queue_page)
+        self.align_download_bar()
+        failed = [j for j in self.downloads.jobs if j.status == FAILED]
+        # A failure stays listed with its reason until it is retried or removed.
+        jobs = jobs + failed
+        self.queue_page.show_jobs(jobs, {j.client: catalog.get(j.client).label for j in jobs})
+
+    # Messages
+
+    def notify(self, text: str, kind: str = 'error', action: str = '', callback=None, *, client: str | None = None):
+        """Show a message on one client's page, or on every page when client is ''."""
+        code = self.selected() if client is None else client
+        self.messages[code or ''] = (text, kind, action, callback)
+        self.show_notice()
+
+    def dismiss_notice(self):
+        current = self.selected()
+        self.messages.pop(current if current in self.messages else '', None)
+        # Dismissing a failed download also clears it from the list and brings back the usual
+        # action. Damage found by a check stays until it is repaired.
+        job = self.downloads.job(current) if self.downloads and current else None
+        if job and job.status == FAILED and job.kind != 'verify':
+            self.downloads.remove(current)
+            self.refresh()
+
+    def clear_notice(self, client: str | None = None):
+        self.messages.pop(self.selected() if client is None else client, None)
+        self.messages.pop('', None)
+        self.show_notice()
+
+    def show_notice(self):
+        message = self.messages.get(self.selected()) or self.messages.get('')
+        if message:
+            self.client_page.banner.show_message(*message)
+        else:
+            self.client_page.banner.hide()
+
+    # Navigation
+
+    def show_client_page(self):
+        self.settings_button.setChecked(False)
+        self.client_list.set_active(self.stack.currentWidget() is not self.sign_in_page)
+        if self.stack.currentWidget() is not self.sign_in_page:
+            # An unsaved settings draft stays until it is saved or discarded.
+            self.stack.setCurrentWidget(self.client_page)
+        self.refresh()
+
+    def open_client(self, code: str):
+        if self.stack.currentWidget() is self.sign_in_page:
+            return                  # the selection stays on the client being signed in for
+        self.client_list.select(code)
+        self.show_client_page()
+
+    def toggle_settings(self):
+        if self.stack.currentWidget() is self.settings_page:
+            self.show_client_page()
+        else:
+            self.open_settings()
+
+    def open_settings(self):
+        if self.stack.currentWidget() is self.sign_in_page:
+            self.settings_button.setChecked(False)
+            return
+        self.settings_page.load(self.settings, *self.kept_split())
+        self.settings_page.lock_folder(self.folder_lock())
+        self.stack.setCurrentWidget(self.settings_page)
+        self.settings_page.close_button.setFocus()  # so Esc closes it at once
+        self.settings_button.setChecked(True)
+        self.client_list.set_active(False)
+
+    def open_folder_picker(self, folder: str):
+        self.folder_page.start(folder)
+        self.stack.setCurrentWidget(self.folder_page)
+
+    def on_folder_chosen(self, folder: str):
+        self.settings_page.set_root(folder)
+        self.stack.setCurrentWidget(self.settings_page)
+
+    def open_queue(self):
+        if self.stack.currentWidget() is self.sign_in_page:
+            return                  # the sign-in finishes or is cancelled first
+        self.queue_page.set_limit(self.settings.bandwidth_limit // MEGABYTE)
+        self.settings_button.setChecked(False)
+        self.client_list.set_active(False)
+        self.stack.setCurrentWidget(self.queue_page)
+        self.queue_page.close_button.setFocus()     # so Esc closes it at once
+        self.refresh_downloads()
+
+    # Actions
+
+    def cancel_from_queue(self, code: str):
+        job = self.downloads.job(code)
+        if job and job.status == FAILED:
+            self.clear_notice(code)         # removing a failure also removes its message
+        self.downloads.cancel(code)
+        self.refresh()
+
+    def retry_or_resume(self, code: str):
+        job = self.downloads.job(code)
+        if job:
+            self.clear_notice(code)
+            self.downloads.enqueue(code, 'repair' if job.status == FAILED and job.kind == 'verify' else job.kind)
+
+    def primary_action(self):
+        code = self.selected()
+        job = self.downloads.job(code)
+        if job and job.status == FAILED:
+            self.clear_notice(code)
+            self.downloads.enqueue(code, 'repair' if job.kind == 'verify' else job.kind)
+        elif job and job.status in {QUEUED, RUNNING}:
+            self.downloads.pause(code)
+        elif job and job.status == PAUSED:
+            self.downloads.enqueue(code, job.kind)
+        elif not self.library.state(code):
+            self.downloads.enqueue(code, 'install')
+        elif self.updates.get(code):
+            self.downloads.enqueue(code, 'update')
+        else:
+            self.play(code)
+        self.refresh()
+
+    def verify(self):
+        self.downloads.enqueue(self.selected(), 'verify')
+        self.refresh()
+
+    def open_folder(self):
+        folder = self.library.game_dir(self.selected())
+        if folder:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+
+    def remember_mode(self, mode: str):
+        code = self.selected()
+        if code and mode:
+            self.settings.modes[code] = mode
+            self.settings.save()
+
+    def set_limit(self, megabytes: int):
+        self.settings.bandwidth_limit = megabytes * MEGABYTE
+        self.settings.save()
+        if self.downloads:
+            self.downloads.set_bandwidth_limit(self.settings.bandwidth_limit)
+
+    def play(self, code: str):
+        client = catalog.get(code)
+        mode = self.settings.modes.get(code) or (client.modes[0].id if client.modes else None)
+        self.clear_notice()
+        self.phases[code] = 'Checking for updates'
+        self.refresh()
+
+        def work():
+            try:
+                cdn = CDNClient(cache_dir(), self.library.state(code)['region'], code)
+                if update_available(self.library, code, cdn):
+                    self.bus.update_needed.emit(code)
+                    return
+                process = self.launcher().play(code, self.request_sign_in, mode=mode,
+                                               status=lambda text: self.bus.launch_phase.emit(code, text))
+                self.bus.launch_phase.emit(code, 'Running')
+                self.settings.last_played[code] = int(time.time())
+                process.wait()
+                self.bus.task_finished.emit(code, '')
+            except Exception as error:  # shown in the banner
+                self.bus.task_finished.emit(code, str(error))
+
+        threading.Thread(target=work, name='waystone-play', daemon=True).start()
+
+    def request_sign_in(self, url: str) -> bytes:
+        """Runs on a worker thread. Shows the sign-in page and waits for it."""
+        self._sign_in_done.clear()
+        self.bus.sign_in_requested.emit(url)
+        self._sign_in_done.wait()
+        if not self._sign_in_result or self._sign_in_result[0] is None:
+            raise LaunchError('Sign-in was cancelled')
+        return self._sign_in_result[0]
+
+    def on_sign_in_requested(self, url: str):
+        self.sign_in_page.start(url)
+        self.settings_button.setChecked(False)
+        self.stack.setCurrentWidget(self.sign_in_page)
+        self.client_list.set_active(False)
+        # The sign-in page finishes or is cancelled. Other pages wait until then.
+        self.lock_navigation(True)
+        self.sign_in_page.field.setFocus()
+        self.refresh()
+
+    def lock_navigation(self, locked: bool):
+        """Ignore the sidebar without greying it out, so the selection cannot change underneath."""
+        self.client_list.viewport().setAttribute(Qt.WA_TransparentForMouseEvents, locked)
+        # Dimmed, so ignored clicks are expected rather than puzzling.
+        if locked:
+            effect = QGraphicsOpacityEffect(self.client_list)
+            effect.setOpacity(0.55)
+            self.client_list.setGraphicsEffect(effect)
+        else:
+            self.client_list.setGraphicsEffect(None)
+        self.client_list.setFocusPolicy(Qt.NoFocus if locked else Qt.StrongFocus)
+        self.settings_button.setEnabled(not locked)
+
+    def on_sign_in_finished(self, ticket):
+        self._sign_in_result = [ticket]
+        self._sign_in_done.set()
+        self.stack.setCurrentWidget(self.client_page)
+        self.lock_navigation(False)
+        self.client_list.set_active(True)
+        self.refresh()
+
+    def toggle_sign_in(self):
+        launcher = self.launcher()
+        if launcher.signed_in():
+            launcher.vault.forget()
+            self.refresh()
+            return
+        state = self.library.state(self.library.installed()[0])
+        version = int(state['version'].rsplit('.', 1)[-1])
+        self._signing_in = True
+        self.refresh()
+
+        def work():
+            try:
+                launcher.sign_in(version, self.request_sign_in)
+                self.bus.task_finished.emit('', '')
+            except Exception as error:
+                self.bus.task_finished.emit('', str(error))
+
+        threading.Thread(target=work, name='waystone-sign-in', daemon=True).start()
+
+    def on_phase(self, code: str, text: str):
+        self.phases[code] = text
+        self.refresh()
+
+    def on_task_finished(self, code: str, message: str):
+        self.phases.pop(code, None)
+        if not code:
+            self._signing_in = False
+        self.refresh()
+        if not message or 'cancelled' in message.lower():
+            return
+        if code and not self.signed_in() and ('sign-in' in message.lower() or 'battle.net' in message.lower()):
+            # The primary button now reads "Sign in and play", which is the way back.
+            self.notify(message, 'error', client=code)
+        elif code:
+            self.notify(message, 'error', client=code)       # the main button below is the retry
+        else:
+            self.notify(message, client=code)
+
+    def on_update_needed(self, code: str):
+        self.phases.pop(code, None)
+        self.updates[code] = True
+        job = self.downloads.enqueue(code, 'update')
+        where = 'It starts after the current download.' if job.status == QUEUED and self.downloads.busy() \
+            else 'The update is running now.'
+        self.notify(f'{catalog.get(code).label} needs an update before it can start. {where}', 'info', client=code)
+        self.refresh()
+
+    def measure_storage(self):
+        if not self.library:
+            return
+        library = self.library
+
+        def work():
+            try:
+                self.bus.storage_ready.emit(library.storage())
+            except Exception:
+                pass
+
+        threading.Thread(target=work, name='waystone-storage', daemon=True).start()
+
+    def on_storage(self, storage: dict):
+        self.storage = storage
+        self.refresh()
+
+    def folder_lock(self) -> str:
+        """Why the installation folder cannot change now, or nothing."""
+        if self.downloads and (self.downloads.busy() or self.downloads.pending()):
+            return 'Finish or cancel the downloads to choose another folder.'
+        return ''
+
+    def on_job(self, job: Job):
+        self.settings_page.lock_folder(self.folder_lock())
+        self.settings_page.lock_clients(*self.kept_split())
+        if job.status == DONE:
+            self.clear_notice(job.client)      # an "update needed" notice is answered now
+        # A new job can bring a hidden test client into the list. A finished or removed one can
+        # take it out again.
+        if set(self.client_list.rows) != {c.code for c in catalog.visible(self.settings.extra_clients, self.kept())}:
+            self.populate()
+        if job.status == DONE and job.kind in {'install', 'update'}:
+            self.updates[job.client] = False
+            self.measure_storage()
+        if job.status == FAILED:
+            # The message shows on that client's own page, so it needs no name.
+            # Dismiss also clears a failed download. Found damage stays until it is repaired.
+            self.notify(job.error, 'error' if job.kind == 'verify' else 'failure', client=job.client)
+        self.refresh()
+
+    def check_updates(self):
+        if not self.library:
+            return
+        library = self.library
+
+        def work():
+            found = {}
+            for code in library.installed():
+                try:
+                    cdn = CDNClient(cache_dir(), library.state(code)['region'], code)
+                    if update_available(library, code, cdn):
+                        found[code] = cdn.version['VersionsName']
+                    else:
+                        found[code] = False
+                except Exception:
+                    continue
+            self.bus.updates_checked.emit(found)
+
+        threading.Thread(target=work, name='waystone-updates', daemon=True).start()
+
+    def on_updates(self, found: dict):
+        self.updates.update(found)
+        self.refresh()
+
+    def on_settings_saved(self):
+        if self.downloads:
+            self.downloads.set_bandwidth_limit(self.settings.bandwidth_limit)
+        self.download_bar.set_limit(self.settings.bandwidth_limit // MEGABYTE)
+        changed = self.settings.root and (not self.library or Path(self.settings.root).resolve() != self.library.root)
+        # The folder is locked while downloads exist, so a change always applies at once.
+        if changed and not self.folder_lock():
+            self.open_library()
+            self.measure_storage()
+            self.clear_notice('')
+        self.populate()
+        self.refresh()
+        self.check_updates()
+
+    def closeEvent(self, event):
+        if self.downloads and self.downloads.busy():
+            # Pausing keeps everything stored so far. The next start resumes it.
+            self.notify('Pausing downloads before closing…', 'info', client='')
+            self.stack.setCurrentWidget(self.client_page)
+            QApplication.processEvents()
+            self.downloads.pause_all()        # a waiting download must not start as the window closes
+            deadline = time.monotonic() + 30
+            while self.downloads.busy() and time.monotonic() < deadline:
+                QApplication.processEvents()
+                time.sleep(0.05)
+        self.settings.save()
+        event.accept()
+
+
+def prepare(application: QApplication) -> None:
+    """A fixed style, palette and stylesheet, so desktop themes such as Breeze do not mix in."""
+    application.setStyle(QStyleFactory.create('Fusion'))
+    application.setPalette(dark_palette())
+    application.setStyleSheet(stylesheet(make_images(cache_dir() / 'ui')))
+
+
+def close_on_signals(window: QMainWindow) -> None:
+    """Ctrl+C or a terminate request closes the window as its close button would.
+
+    Qt swallows the KeyboardInterrupt Python raises inside its callbacks, so without this
+    the terminal cannot stop the launcher. A second Ctrl+C quits at once.
+    """
+    def close(number, frame):
+        signal.signal(number, signal.SIG_DFL)
+        QTimer.singleShot(0, window.close)      # outside whatever callback the signal interrupted
+    signal.signal(signal.SIGINT, close)
+    signal.signal(signal.SIGTERM, close)
+
+
+def main():
+    # Qt Wayland reports harmless text-input focus mismatches on every focus change.
+    os.environ.setdefault('QT_LOGGING_RULES', 'qt.qpa.wayland.textinput=false')
+    # Waystone sets its own style. A desktop override such as Breeze only prints a warning.
+    os.environ.pop('QT_STYLE_OVERRIDE', None)
+    application = QApplication(sys.argv)
+    application.setApplicationName('Waystone')
+    prepare(application)
+    window = MainWindow()
+    close_on_signals(window)
+    window.show()
+    sys.exit(application.exec())

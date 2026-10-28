@@ -1,0 +1,80 @@
+{
+  "build": "1.60.1.70658",
+  "collected": "2026-10-28",
+  "encoding": {
+    "spec_count": 6898,
+    "root": {
+      "ckey": "579ff6827380708c193b45f18e38d965",
+      "decoded_bytes": 50526132,
+      "ekeys": [
+        "00870fa6719b8ec44b70ef5582b032cf"
+      ],
+      "page": 7074,
+      "page_offset": 30028963,
+      "entry_page_offset": 1102,
+      "page_md5": "afd2e45a6f6722b106a5ed7acc32b46c",
+      "index_descriptor_hex": "579f277f0624e872b106652d55861d97afd2e45a6f6722b106a5ed7acc32b46c"
+    },
+    "root_encoding": {
+      "ekey": "00870fa6719b8ec44b70ef5582b032cf",
+      "encoded_bytes": 38886128,
+      "espec_index": 6620,
+      "espec": "b:{256K*=z}",
+      "page": 28,
+      "entry_page_offset": 1650,
+      "page_offset": 86172387,
+      "page_md5": "ce32e2d256e81ce0550a0f876ffb83f4",
+      "index_descriptor_hex": "00851772c9746f3e9e9c2853dd3f65b8ce32e2d256e81ce0550a0f876ffb83f4"
+    }
+  },
+  "download_first8": [
+    {
+      "index": 0,
+      "ekey": "bb21c71165490dd2f63f8ca0d62cc57c",
+      "encoded_bytes": 1256,
+      "priority": 0
+    },
+    {
+      "index": 1,
+      "ekey": "4d17b04da3bd54871653eec2326e8314",
+      "encoded_bytes": 363220,
+      "priority": 0
+    },
+    {
+      "index": 2,
+      "ekey": "8701f9e78a30f8632f0e51391f2aa828",
+      "encoded_bytes": 12175,
+      "priority": 0
+    },
+    {
+      "index": 3,
+      "ekey": "63bfe0845e1cf5cff53496630281108b",
+      "encoded_bytes": 197200,
+      "priority": 0
+    },
+    {
+      "index": 4,
+      "ekey": "80781263c9e9f3d175bb34285c4ba914",
+      "encoded_bytes": 57935,
+      "priority": 0
+    },
+    {
+      "index": 5,
+      "ekey": "58486e078858a10d2f803882cd7fdaf2",
+      "encoded_bytes": 55658,
+      "priority": 0
+    },
+    {
+      "index": 6,
+      "ekey": "049a8ee5215ac822d1506d55bd4e6454",
+      "encoded_bytes": 174008,
+      "priority": 0
+    },
+    {
+      "index": 7,
+      "ekey": "d87c4bfd71c510a87a836b295ee5f185",
+      "encoded_bytes": 2011790,
+      "priority": 0
+    }
+  ]
+}

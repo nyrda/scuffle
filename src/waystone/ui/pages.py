@@ -1,0 +1,1102 @@
+"""The pages shown beside the client list."""
+from __future__ import annotations
+
+from pathlib import Path
+import shutil
+import sys
+
+from PySide6.QtCore import QDir, QEvent, QTimer, Qt, Signal
+from PySide6.QtGui import QColor, QKeySequence, QLinearGradient, QPainter, QShortcut
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QFileSystemModel, QFrame, QGridLayout,
+                               QHBoxLayout, QLabel, QLineEdit, QMenu, QProgressBar, QPushButton,
+                               QScrollArea, QSizePolicy, QSpacerItem, QToolButton, QTreeView, QVBoxLayout, QWidget)
+
+from .. import catalog
+from ..launch import looks_like_redirect, open_browser, parse_ticket
+from ..runtime.proton import find_protons
+from ..settings import LOCALE_NAMES, MEGABYTE, REGIONS, Settings
+from .style import BACKGROUND, FAMILY_NAMES, SPACING, client_color, size_text, tile
+from .widgets import (Banner, ElidedLabel, FactsCard, Segmented, StorageCard, duration_text, fixed, label,
+                      progress_variants, tone)
+
+PAGE_MARGINS = (32, 28, 32, 24)
+COLUMN_WIDTH = 780
+FIELD_WIDTH = 480
+
+
+class Tinted(QWidget):
+    """A page body with a faint band of the client's color behind the header."""
+
+    def __init__(self):
+        super().__init__()
+        self.color = None
+
+    def set_color(self, color: str | None):
+        if color != self.color:
+            self.color = color
+            self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), QColor(BACKGROUND))
+        if self.color:
+            # A header band that grows with the window, so tall windows look planned.
+            height = min(280, max(160, int(self.height() * 0.28)))
+            gradient = QLinearGradient(0, 0, 0, height)
+            top = QColor(self.color)
+            top.setAlpha(34)
+            bottom = QColor(self.color)
+            bottom.setAlpha(0)
+            gradient.setColorAt(0, top)
+            gradient.setColorAt(1, bottom)
+            painter.fillRect(0, 0, self.width(), height, gradient)
+        painter.end()
+
+
+GUTTER = 10          # the vertical scroll bar's width in the stylesheet
+
+
+def scrolling(page: QWidget, body: QWidget | None = None, margins=PAGE_MARGINS) -> QVBoxLayout:
+    """Give a page a scrolling body, so a short window never squeezes its rows."""
+    outer = QVBoxLayout(page)
+    outer.setContentsMargins(0, 0, 0, 0)
+    outer.setSpacing(0)
+    scroll = QScrollArea()
+    scroll.setWidgetResizable(True)
+    # The scroll area itself is not a keyboard stop.
+    scroll.setFocusPolicy(Qt.NoFocus)
+    # Scrolls sideways only below the window's minimum width, instead of clipping.
+    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+    body = body or QWidget()
+    body.setObjectName('content')
+    scroll.setWidget(body)
+    outer.addWidget(scroll, 1)
+    layout = QVBoxLayout(body)
+    left, top, right, bottom = margins
+
+    def keep_place(_minimum, maximum):
+        # Without a scroll bar the right margin takes its width, so content never shifts
+        # sideways, and every page has the same right edge.
+        layout.setContentsMargins(left, top, right + (0 if maximum > 0 else GUTTER), bottom)
+    scroll.verticalScrollBar().rangeChanged.connect(keep_place)
+    keep_place(0, 0)
+
+    def keep_focus_visible(*_):
+        # After a resize the focused control can end up outside the view. Keys still reach it.
+        focused = QApplication.focusWidget()
+        if focused is not None and body.isAncestorOf(focused):
+            scroll.ensureWidgetVisible(focused, 0, 24)
+    scroll.verticalScrollBar().rangeChanged.connect(lambda *_: QTimer.singleShot(0, keep_focus_visible))
+    return layout
+
+
+class FolderField(QLineEdit):
+    """A read-only path that opens the folder picker when clicked."""
+
+    clicked = Signal()
+
+    def mousePressEvent(self, event):
+        super().mousePressEvent(event)
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit()
+
+
+class Page(QWidget):
+    """A page beside the client list. Its column is centred on wide windows."""
+
+    WIDE = 1000
+
+    def __init__(self):
+        super().__init__()
+        self.setObjectName('page')
+        self._rows = []
+
+    def centre(self, inner: QVBoxLayout) -> QVBoxLayout:
+        self._rows.append(inner.row)
+        if not hasattr(self, 'column_holder'):
+            self.column_holder = inner.parentWidget()     # the download bar lines up with it
+        return inner
+
+    def fixed_top(self, layout: QVBoxLayout) -> None:
+        """Pages without a scrolling body take the same top gap as the others on tall windows."""
+        self._fixed_top = QWidget()
+        self._fixed_top.setFixedHeight(0)
+        layout.insertWidget(0, self._fixed_top)
+
+    def balance(self, outer: QVBoxLayout) -> None:
+        """On tall windows, share the spare height above and below the content, one part to two."""
+        self._top = top_inset(outer)
+        self._balanced = outer
+
+    def on_escape(self, handler) -> None:
+        shortcut = QShortcut(QKeySequence(Qt.Key_Escape), self)
+        shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        shortcut.activated.connect(handler)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        fixed = getattr(self, '_fixed_top', None)
+        if fixed is not None:
+            tall = (self.window().height() if self.window() is not self else self.height()) >= 820
+            # About what the balanced pages get above them on the same window.
+            spare = (self.window().height() if self.window() is not self else self.height()) - 820
+            fixed.setFixedHeight(min(TOP_INSET, max(0, 40 + spare // 3)) if tall else 0)
+        outer = getattr(self, '_balanced', None)
+        if outer is not None:
+            tall = (self.window().height() if self.window() is not self else self.height()) >= 820
+            outer.setStretch(0, 1 if tall else 0)
+            self._top.setVisible(tall)
+        wide = self.width() >= self.WIDE
+        for row in self._rows:
+            row.setStretch(0, 1 if wide else 0)
+            row.setStretch(2, 1 if wide else 0)
+
+
+WIDE_COLUMN = 1080   # the client page's column when its folder card sits beside it
+PRIMARY_HEIGHT = 40  # a primary button's height, for the buttons in a row beside one
+TOP_INSET = 140      # the most spare height that goes above a page's content
+
+
+def top_inset(outer: QVBoxLayout) -> QWidget:
+    """A gap above the content that grows on tall windows, up to TOP_INSET."""
+    gap = QWidget()
+    gap.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+    gap.setMaximumHeight(TOP_INSET)
+    gap.hide()
+    outer.insertWidget(0, gap)
+    return gap
+
+
+def column(parent_layout, *, width: int = COLUMN_WIDTH) -> QVBoxLayout:
+    """A left-aligned column that grows up to width and shrinks with the window."""
+    holder = QWidget()
+    holder.setMaximumWidth(width)
+    inner = QVBoxLayout(holder)
+    inner.setContentsMargins(0, 0, 0, 0)
+    inner.setSpacing(0)
+    row = QHBoxLayout()
+    row.setContentsMargins(0, 0, 0, 0)
+    # Stretches instead of an alignment flag, so wrapped text keeps its height.
+    row.addStretch(0)
+    row.addWidget(holder, 20)
+    row.addStretch(0)
+    parent_layout.addLayout(row)
+    inner.row = row            # lets a page centre the column on wide windows
+    return inner
+
+
+class ClientPage(Page):
+    PRIMARY_LABELS = ['Play', 'Sign in and play', 'Install', 'Update', 'Repair', 'Try again', 'Pause',
+                      'Resume', 'Queued', 'Checking…', 'Connecting…', 'Starting…', 'Running']
+    SIDE_BY_SIDE = 1400      # page width from which the folder card sits beside the client
+
+    primary_clicked = Signal()
+    cancel_clicked = Signal()
+    verify_clicked = Signal()
+    open_folder_clicked = Signal()
+    mode_changed = Signal(str)
+
+    def __init__(self):
+        super().__init__()
+        self.body = Tinted()
+        self.outer = outer = scrolling(self, self.body)
+        content = self.centre(column(outer))
+        self.column_holder = content.parentWidget()
+        self._side = False
+        self.grid = QGridLayout()
+        self.grid.setHorizontalSpacing(16)
+        self.grid.setVerticalSpacing(0)
+        content.addLayout(self.grid)
+        self.main = QWidget()
+        self.main_layout = main = QVBoxLayout(self.main)
+        main.setContentsMargins(0, 0, 0, 0)
+        main.setSpacing(0)
+
+        header = QHBoxLayout()
+        header.setSpacing(16)
+        self.icon = QLabel()
+        self.icon.setFixedSize(52, 52)
+        heading = QVBoxLayout()
+        heading.setSpacing(4)
+        self.title = ElidedLabel('', 'title')
+        meta = QHBoxLayout()
+        meta.setSpacing(10)
+        self.family = label('', 'muted')
+        self.chip = label('', 'chip')
+        meta.addWidget(self.family)
+        meta.addWidget(self.chip)
+        meta.addStretch()
+        heading.addWidget(self.title)
+        heading.addLayout(meta)
+        self.blurb = label('', 'muted', wrap=True)
+        heading.addWidget(self.blurb)
+        header.addWidget(self.icon, 0, Qt.AlignTop)
+        header.addLayout(heading, 1)
+        main.addLayout(header)
+
+        main.addSpacing(16)
+        self.banner = Banner()
+        main.addWidget(self.banner)
+
+        self.mode_row = QWidget()
+        mode_layout = QHBoxLayout(self.mode_row)
+        mode_layout.setContentsMargins(0, 16, 0, 0)
+        mode_layout.setSpacing(12)
+        mode_layout.addWidget(label('Game mode', 'muted'))
+        self.modes = Segmented()
+        self.modes.changed.connect(self.mode_changed.emit)
+        mode_layout.addWidget(self.modes)
+        mode_layout.addStretch()
+        main.addWidget(self.mode_row)
+
+        actions = QHBoxLayout()
+        actions.setContentsMargins(0, 18, 0, 0)
+        actions.setSpacing(SPACING)
+        self.primary = QPushButton('')
+        self.primary.setObjectName('primary')
+        self.primary.setFixedHeight(PRIMARY_HEIGHT)    # the focus ring must not change its height
+        self.primary.clicked.connect(self.primary_clicked.emit)
+        self._tall = False
+        self._primary_width = 0
+        self.cancel = QPushButton('Cancel')
+        self.cancel.setFixedSize(96, PRIMARY_HEIGHT)      # level with the main button
+        self.cancel.setToolTip('Stop this download. What is already stored stays for later.')
+        self.cancel.clicked.connect(self.cancel_clicked.emit)
+        self.more = QToolButton()
+        self.more.setObjectName('more')
+        self.more.setText('⋯')
+        self.more.setToolTip('More actions')
+        self.more.setFixedSize(PRIMARY_HEIGHT, PRIMARY_HEIGHT)
+        self.more.setPopupMode(QToolButton.InstantPopup)
+        menu = QMenu(self.more)
+        self.verify_action = menu.addAction('Verify files', self.verify_clicked.emit)
+        self.folder_action = menu.addAction('Open folder', self.open_folder_clicked.emit)
+        self.more.setMenu(menu)
+        actions.addWidget(self.primary)
+        actions.addWidget(self.cancel)
+        actions.addWidget(self.more)
+        # Progress sits beside the buttons that control it, instead of in a row of its own.
+        progress = QVBoxLayout()
+        progress.setContentsMargins(10, 0, 0, 0)
+        progress.setSpacing(6)
+        self.busy = QProgressBar()
+        self.busy.setRange(0, 0)
+        self.busy.setTextVisible(False)
+        self.phase = ElidedLabel('', 'small')
+        progress.addStretch()
+        progress.addWidget(self.busy)
+        progress.addWidget(self.phase)
+        progress.addStretch()
+        self.progress_row = QWidget()
+        self.progress_row.setLayout(progress)
+        self.progress_row.setFixedHeight(38)
+        self.progress_row.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        actions.addWidget(self.progress_row, 1)
+        actions.addStretch()
+        main.addLayout(actions)
+
+        self.facts_gap = QWidget()
+        self.facts_gap.setFixedHeight(22)
+        main.addWidget(self.facts_gap)
+        self.facts = FactsCard()
+        main.addWidget(self.facts)
+        self.storage = StorageCard()
+        self.hint = label('', 'small', wrap=True)
+        self.hint.setContentsMargins(2, 10, 0, 0)
+        main.addWidget(self.hint)
+        self.grid.addWidget(self.main, 0, 0)
+        self.storage_gap = QWidget()
+        self.storage_gap.setFixedHeight(14)
+        self.main_layout.insertWidget(self.main_layout.indexOf(self.hint), self.storage_gap)
+        self.main_layout.insertWidget(self.main_layout.indexOf(self.hint), self.storage)
+        # Spare height goes below the content, and on tall windows a little above it too.
+        self._top = top_inset(outer)
+        outer.addStretch(1)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        # Short windows tighten the gaps and leave the folder path to the settings,
+        # so the common states fit without scrolling.
+        # By the window, not the page, so a download bar appearing does not rearrange the page.
+        height = self.window().height() if self.window() is not self else self.height()
+        short, tall = height < 620, height >= 820
+        # Wide pages put the folder card beside the client instead of below it.
+        side = self.width() >= self.SIDE_BY_SIDE
+        if side != self._side:
+            self._side = side
+            self.main_layout.removeWidget(self.storage)
+            self.grid.removeWidget(self.storage)
+            if side:
+                self.grid.addWidget(self.storage, 0, 1, Qt.AlignTop)
+                self.grid.setColumnStretch(0, 3)
+                self.grid.setColumnStretch(1, 2)
+            else:
+                self.main_layout.insertWidget(self.main_layout.indexOf(self.hint), self.storage)
+                self.grid.setColumnStretch(1, 0)
+            self.storage_gap.setVisible(not side)
+            self.column_holder.setMaximumWidth(WIDE_COLUMN if side else COLUMN_WIDTH)
+        self.hint.setContentsMargins(2, 4 if short else 10, 0, 0)
+        self.facts_gap.setFixedHeight(12 if short else 22)
+        self.storage_gap.setFixedHeight(10 if short else 14)
+        self.storage.path.setVisible(not short)
+        # Tall windows give the header more presence, in step with the tinted band behind it.
+        if tall != self._tall:
+            self._tall = tall
+            self.outer.setStretch(0, 1 if tall else 0)
+            self._top.setVisible(tall)
+            size = 64 if tall else 52
+            self.icon.setFixedSize(size, size)
+            self.title.setObjectName('titlelarge' if tall else 'title')
+            self.title.style().unpolish(self.title)
+            self.title.style().polish(self.title)
+            if getattr(self, '_client', None):
+                self.icon.setPixmap(tile(self._client.short, client_color(self._client), size))
+
+    def focus_chain(self) -> list[QWidget]:
+        """The page's controls in reading order, for the window's tab order."""
+        widgets = [self.banner.action, self.banner.close_button, *self.modes.group.buttons(),
+                   self.primary, self.cancel, self.more]
+        return widgets
+
+    def show_client(self, client: catalog.Client, *, status: str, tone_name: str, primary: str,
+                    primary_enabled: bool, installed: bool, busy: bool, progress: float | None,
+                    primary_tip: str = '', busy_launch: bool = False, paused: bool = False, queued: bool = False,
+                    progress_text, cancellable: bool, modes: list, mode: str | None,
+                    facts: list, hint: str) -> None:
+        self._client = client
+        self.icon.setPixmap(tile(client.short, client_color(client), self.icon.width()))
+        self.body.set_color(client_color(client))
+        self.title.setText(client.label)
+        self.family.setText(FAMILY_NAMES[client.family] + (' · test client' if client.test else ''))
+        self.blurb.setText(client.blurb)
+        self.chip.setText(status)
+        tone(self.chip, tone_name)
+        # The mode does not change what is installed, so it appears once there is something to play.
+        self.mode_row.setVisible(bool(modes) and installed)
+        self.modes.set_options(modes, mode)
+        # The mode is read when Play starts, so it is fixed while a launch is under way.
+        self.modes.setEnabled(not busy_launch)
+        self.primary.setText(primary)
+        if not self._primary_width:
+            # One width for every label, so the buttons beside it never move between states.
+            self.primary.ensurePolished()
+            metrics = self.primary.fontMetrics()
+            self._primary_width = max(metrics.horizontalAdvance(text) for text in self.PRIMARY_LABELS) + 48
+            self.primary.setFixedWidth(self._primary_width)
+        self.primary.setEnabled(primary_enabled)
+        self.primary.setToolTip(primary_tip)
+        self.cancel.setVisible(cancellable)
+        self.cancel.setToolTip('Take it out of the queue' if queued else
+                               'Stop this download. What is already stored stays for later.')
+        self.more.setVisible(installed and not cancellable)
+        # Checking files while the game runs or starts would read files it has open.
+        self.verify_action.setEnabled(installed and not busy and not busy_launch and progress is None)
+        # A launch shows an indeterminate bar with its phase. A download shows its own progress.
+        self.progress_row.setVisible(busy or progress is not None or queued)
+        self.busy.setVisible(not queued)
+        if progress is None:
+            self.busy.setRange(0, 0)
+        else:
+            self.busy.setRange(0, 1000)
+            self.busy.setValue(int(progress * 1000))
+        variants = [progress_text] if isinstance(progress_text, str) else list(progress_text)
+        self.phase.set_variants(variants)
+        # Without text the bar centres on the buttons.
+        self.phase.setVisible(any(variants))
+        tone(self.busy, 'attention' if paused else '')
+        self.facts.set_facts(facts)
+        self.hint.setText(hint)
+        self.hint.setVisible(bool(hint))
+
+
+class SettingsPage(Page):
+    saved = Signal()
+    closed = Signal()
+    choose_folder = Signal(str)
+
+    def __init__(self):
+        super().__init__()
+        self.settings: Settings | None = None
+        body_layout = scrolling(self, margins=(PAGE_MARGINS[0], 4, PAGE_MARGINS[2], PAGE_MARGINS[3]))
+        # The title, the autosave note and Close stay above the scrolling cards.
+        header = QWidget()
+        header_layout = QVBoxLayout(header)
+        header_layout.setContentsMargins(PAGE_MARGINS[0], PAGE_MARGINS[1], PAGE_MARGINS[2] + GUTTER, 10)
+        self.layout().insertWidget(0, header)
+        self.fixed_top(self.layout())
+        content = self.centre(column(body_layout))
+        title_row = QHBoxLayout()
+        title_row.setSpacing(12)
+        title_block = QVBoxLayout()
+        title_block.setSpacing(2)
+        title_block.addWidget(label('Settings', 'pagetitle'))
+        self.saved_note = label('Changes save automatically.', 'small')
+        title_block.addWidget(self.saved_note)
+        title_row.addLayout(title_block)
+        title_row.addStretch()
+        self.close_button = close = fixed(QPushButton('Close'), 96)
+        close.setToolTip('Close the settings (Esc)')
+        close.clicked.connect(self.closed.emit)
+        title_row.addWidget(close)
+        self.centre(column(header_layout)).addLayout(title_row)
+        self.on_escape(self.closed.emit)
+
+        self.root = fixed(FolderField())
+        # Changed only through Choose…, so a half-typed path never becomes the folder.
+        self.root.setReadOnly(True)
+        self.root.setFocusPolicy(Qt.NoFocus)
+        self.root.setPlaceholderText('No folder chosen')
+        self.root.setCursor(Qt.PointingHandCursor)
+        self.root.setToolTip('Click to choose another folder')
+        self.root.clicked.connect(lambda: self.browse.isEnabled() and self.choose_root())
+        self.browse = fixed(QPushButton('Choose…'))
+        self.browse.clicked.connect(self.choose_root)
+        self.folder_locked = ''
+        folder = QHBoxLayout()
+        folder.setSpacing(SPACING)
+        folder.addWidget(self.root, 1)
+        folder.addWidget(self.browse)
+        self.free = label('', 'small', wrap=True)
+        grid = self.card(content, 'Installation folder',
+                         'All clients share this folder. Battle.net must not manage it.')
+        self.row(grid, 'Folder', folder)
+        grid.addWidget(self.free, grid.rowCount(), 1)
+
+        self.region = fixed(QComboBox())
+        for code, name in REGIONS.items():
+            self.region.addItem(name, code)
+        self.locale = fixed(QComboBox())
+        for code, name in LOCALE_NAMES.items():
+            self.locale.addItem(name, code)
+        self.limit = fixed(QComboBox())
+        grid = self.card(content, 'Game and downloads',
+                         'Region and language apply to new installs. Installed clients keep their own.')
+        pair = QHBoxLayout()
+        pair.setSpacing(16)
+        pair.addWidget(self.region, 2)
+        pair.addWidget(label('Language', 'key'))
+        pair.addWidget(self.locale, 3)       # language names run longer than regions
+        self.row(grid, 'Region', pair)
+        # The same split as the row above, so Speed limit is as wide as Region.
+        single = QHBoxLayout()
+        single.setSpacing(16)
+        single.addWidget(self.limit, 1)
+        ghost = label('Language', 'key')
+        policy = ghost.sizePolicy()
+        policy.setRetainSizeWhenHidden(True)
+        ghost.setSizePolicy(policy)
+        ghost.hide()
+        single.addWidget(ghost)
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        single.addWidget(spacer, 1)
+        self.row(grid, 'Speed limit', single)
+        # On Linux the game runs in Proton. One row here instead of a card of its own.
+        self.proton = None
+        if sys.platform != 'win32':
+            self.proton = fixed(QComboBox())
+            self.proton.setToolTip('Runs the game through umu-run. Builds from Steam and ProtonUp '
+                                   'are found automatically.')
+            self.row(grid, 'Proton', self.proton)
+
+        tests = [c for c in catalog.CLIENTS if c.test]
+        grid = self.card(content, 'Test clients',
+                         'Choose which appear in the list. Showing one does not install it. '
+                         'Installed or downloading ones always appear.')
+        self.extras: dict[str, QCheckBox] = {}
+        self.extra_notes: dict[str, QLabel] = {}
+        families = [f for f in FAMILY_NAMES if any(c.family == f for c in tests)]
+        # One column per game, each with its own rows, so a note under one box never
+        # spaces out the others.
+        columns = QHBoxLayout()
+        columns.setSpacing(16)
+        grid.addLayout(columns, 0, 0)
+        grid.setColumnStretch(0, 1)
+        for family in families:
+            family_column = QVBoxLayout()
+            family_column.setSpacing(8)
+            family_column.addWidget(label(FAMILY_NAMES[family].upper(), 'group'))
+            columns.addLayout(family_column, 1)
+            for client in [c for c in tests if c.family == family]:
+                box = QCheckBox(client.label.replace('World of Warcraft', 'Retail'))
+                box.toggled.connect(self.apply)
+                self.extras[client.code] = box
+                # Why a box is locked, on a line of its own so the columns stay narrow.
+                note = label('', 'small')
+                note.setContentsMargins(26, 0, 0, 2)
+                note.hide()
+                self.extra_notes[client.code] = note
+                cell = QVBoxLayout()
+                cell.setSpacing(0)
+                cell.addWidget(box)
+                cell.addWidget(note)
+                family_column.addLayout(cell)
+            family_column.addStretch()
+
+
+        body_layout.addStretch()
+
+        # Every choice applies at once. The folder applies when its field is left,
+        # since a half-typed path is not a folder.
+        self._loading = False
+        for widget in [self.region, self.locale, self.limit] + ([self.proton] if self.proton else []):
+            # Long entries such as Proton build names must not widen the page past a small window.
+            widget.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+            widget.setMinimumContentsLength(5)
+            widget.currentIndexChanged.connect(self.apply)
+        self.root.textChanged.connect(self.update_free)
+
+    @staticmethod
+    def card(parent: QVBoxLayout, title: str, note: str = '') -> QGridLayout:
+        frame = QFrame()
+        frame.setObjectName('card')
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(18, 12, 18, 14)
+        layout.setSpacing(4)
+        layout.addWidget(label(title, 'cardtitle'))
+        if note:
+            layout.addWidget(label(note, 'small', wrap=True))
+        layout.addSpacing(4)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(16)
+        grid.setVerticalSpacing(8)
+        layout.addLayout(grid)
+        parent.addWidget(frame)
+        parent.addSpacing(8)
+        return grid
+
+    @staticmethod
+    def row(grid: QGridLayout, name: str, field) -> None:
+        index = grid.rowCount()
+        key = label(name, 'key')
+        key.setFixedWidth(96)
+        grid.addWidget(key, index, 0, Qt.AlignVCenter)
+        # Fields stop at a readable width instead of spanning a wide window.
+        holder = QWidget()
+        holder.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        holder.setMaximumWidth(FIELD_WIDTH)
+        inner = QHBoxLayout(holder)
+        inner.setContentsMargins(0, 0, 0, 0)
+        if isinstance(field, QWidget):
+            inner.addWidget(field)
+        else:
+            inner.addLayout(field)
+        grid.addWidget(holder, index, 1)
+        grid.setColumnStretch(1, 1)
+        # Room past the capped fields goes to an empty last column, not to the labels.
+        grid.addItem(QSpacerItem(0, 0, QSizePolicy.Expanding, QSizePolicy.Minimum), index, 2)
+
+    def focus_chain(self) -> list[QWidget]:
+        """The page's controls in reading order, for the window's tab order."""
+        return [self.close_button, self.browse, self.region, self.locale, self.limit,
+                *([self.proton] if self.proton else []), *self.extras.values()]
+
+    def values(self) -> dict:
+        return {'root': self.root.text().strip(), 'region': self.region.currentData(),
+                'locale': self.locale.currentData(), 'limit': self.limit.currentData(),
+                'proton': self.proton.currentData() if self.proton else '',
+                'extra': sorted(code for code, box in self.extras.items() if box.isChecked())}
+
+    def lock_clients(self, installed, downloading=None) -> None:
+        """Installed or downloading test clients stay in the list, so their boxes are locked on."""
+        settings = self.settings
+        self._loading, was_loading = True, self._loading
+        downloading = downloading or {}
+        for code, box in self.extras.items():
+            kept = code in installed or code in downloading
+            box.setChecked(kept or bool(settings and code in settings.extra_clients))
+            box.setEnabled(not kept)
+            # Kept out of the label, so the three columns fit a narrow window.
+            box.setToolTip('Installed, so it always appears in the list.' if code in installed else
+                           f'{downloading[code]}, so it stays in the list.' if code in downloading else '')
+            note = 'Installed' if code in installed else downloading.get(code, '')
+            self.extra_notes[code].setText(note)
+            self.extra_notes[code].setVisible(bool(note))
+        self._loading = was_loading
+
+    def load(self, settings: Settings, installed: list[str], downloading=None) -> None:
+        self._loading = True
+        self.settings = settings
+        self.root.setText(settings.root)
+        self.root.setCursorPosition(0)
+        self.region.setCurrentIndex(max(0, self.region.findData(settings.region)))
+        self.locale.setCurrentIndex(max(0, self.locale.findData(settings.locale)))
+        self.lock_clients(installed, downloading)
+        current = settings.bandwidth_limit // MEGABYTE
+        self.limit.clear()
+        for value in sorted(set([0, 1, 2, 5, 10, 25, 50, 100, current])):
+            self.limit.addItem('No limit' if value == 0 else f'{value} MB/s', value)
+        self.limit.setCurrentIndex(self.limit.findData(current))
+        if self.proton is not None:
+            self.proton.clear()
+            self.proton.addItem('Newest installed build', '')
+            for proton in find_protons():
+                self.proton.addItem(proton.name, str(proton.path))
+            index = self.proton.findData(settings.proton)
+            if index < 0 and settings.proton:
+                self.proton.addItem(Path(settings.proton).name, settings.proton)
+                index = self.proton.count() - 1
+            self.proton.setCurrentIndex(max(index, 0))
+        self._loading = False
+        self.update_free()
+
+    def lock_folder(self, reason: str) -> None:
+        """Downloads write into the current folder, so it stays until they are done."""
+        self.folder_locked = reason
+        self.browse.setEnabled(not reason)
+        self.browse.setToolTip(reason or 'Choosing another folder does not move installed clients.')
+        self.root.setCursor(Qt.ArrowCursor if reason else Qt.PointingHandCursor)
+        self.root.setToolTip(reason or 'Click to choose another folder')
+        self.root.setProperty('locked', bool(reason))
+        self.root.style().unpolish(self.root)
+        self.root.style().polish(self.root)
+        self.update_free()
+
+    def update_free(self, *_):
+        text = self.root.text().strip()
+        root = Path(text) if text else None
+        probe = next((p for p in [root, *(root.parents if root else [])] if p and p.exists()), None)
+        parts = [f'{size_text(shutil.disk_usage(probe).free)} free on this drive'] if probe else []
+        if self.folder_locked:
+            parts.append(self.folder_locked)
+        self.free.setText(' · '.join(parts))
+        self.free.setVisible(bool(parts))
+
+    def choose_root(self):
+        self.choose_folder.emit(self.root.text() or str(Path.home()))
+
+    def set_root(self, folder: str):
+        self.root.setText(folder)
+        self.root.setCursorPosition(0)
+        self.apply()
+
+    def apply(self, *_):
+        if self._loading or self.settings is None:
+            return
+        values, s = self.values(), self.settings
+        # Without a folder yet, the other choices still save. The folder comes from Choose….
+        s.root = values['root'] or s.root
+        s.region, s.locale = values['region'], values['locale']
+        s.bandwidth_limit = int(values['limit']) * MEGABYTE
+        s.proton = values['proton']
+        # A locked box shows the client for another reason. The user's own choice for it stays.
+        locked = {code for code, box in self.extras.items() if not box.isEnabled()}
+        s.extra_clients = sorted({code for code in values['extra'] if code not in locked}
+                                 | {code for code in s.extra_clients if code in locked})
+        s.save()
+        self.saved_note.setText('Saved.')
+        QTimer.singleShot(1600, lambda: self.saved_note.setText('Changes save automatically.'))
+        self.saved.emit()
+
+
+class SignInPage(Page):
+    """Waits for the address Battle.net's sign-in page redirects to."""
+
+    finished = Signal(object)            # the ticket bytes, or None when cancelled
+
+    def __init__(self):
+        super().__init__()
+        self.on_escape(lambda: self.finish(None))
+        self.url = ''
+        self.active = False
+        self._before = ''
+        outer = scrolling(self)
+        self.balance(outer)
+        content = self.centre(column(outer))
+        content.addWidget(label('Sign in to Battle.net', 'pagetitle'))
+        content.addSpacing(6)
+        content.addWidget(label('Your browser opened Battle.net\'s own sign-in page. '
+                                'Waystone never sees your password.', 'muted', wrap=True))
+        content.addSpacing(20)
+        steps = QFrame()
+        steps.setObjectName('card')
+        steps_layout = QVBoxLayout(steps)
+        steps_layout.setContentsMargins(20, 16, 20, 16)
+        steps_layout.setSpacing(10)
+        for number, text in enumerate([
+                'Sign in on the page in your browser.',
+                'The browser then fails to open a page at http://localhost:0/?ST=…',
+                'Copy that whole address from the address bar and come back here.'], start=1):
+            row = QHBoxLayout()
+            row.setSpacing(12)
+            badge = label(str(number), 'tag')
+            badge.setFixedWidth(22)
+            badge.setAlignment(Qt.AlignCenter)
+            row.addWidget(badge, 0, Qt.AlignTop)
+            row.addWidget(label(text, wrap=True), 1)
+            steps_layout.addLayout(row)
+        content.addWidget(steps)
+        content.addSpacing(18)
+        content.addWidget(label('Address from the browser', 'key'))
+        content.addSpacing(6)
+        entry = QHBoxLayout()
+        entry.setSpacing(SPACING)
+        self.field = QLineEdit()
+        self.field.setFixedHeight(PRIMARY_HEIGHT)          # level with the Continue button beside it
+        self.field.setMaximumWidth(FIELD_WIDTH + 120)
+        self.field.setEchoMode(QLineEdit.Password)
+        self.field.setPlaceholderText('Paste the address here')
+        self.field.returnPressed.connect(lambda: self.take(self.field.text(), explicit=True))
+        submit = QPushButton('Continue')
+        submit.setObjectName('primary')
+        submit.setDefault(True)
+        submit.setFixedWidth(132)
+        submit.setEnabled(False)
+        self.field.textChanged.connect(lambda text: submit.setEnabled(bool(text.strip())))
+        submit.clicked.connect(lambda: self.take(self.field.text(), explicit=True))
+        entry.addWidget(self.field, 1)
+        entry.addWidget(submit)
+        entry.addStretch()
+        content.addLayout(entry)
+        content.addSpacing(12)
+        self.status = label('Waiting for the address.', 'small', wrap=True)
+        content.addWidget(self.status)
+        content.addSpacing(24)
+        buttons = QHBoxLayout()
+        reopen = fixed(QPushButton('Open the sign-in page again'))
+        reopen.clicked.connect(lambda: open_browser(self.url))
+        cancel = fixed(QPushButton('Cancel'), 96)
+        cancel.clicked.connect(lambda: self.finish(None))
+        buttons.addWidget(reopen)
+        buttons.addStretch()
+        buttons.addWidget(cancel)
+        content.addLayout(buttons)
+        outer.addStretch(1)
+        QApplication.clipboard().dataChanged.connect(self.check_clipboard)
+        QApplication.instance().applicationStateChanged.connect(lambda _: self.check_clipboard())
+
+    def start(self, url: str):
+        self.url, self.active = url, True
+        self.field.clear()
+        self.status.setText('Waiting for the address.')
+        self._before = QApplication.clipboard().text()
+        open_browser(url)
+
+    def check_clipboard(self):
+        # Wayland shares the clipboard only with the focused window, so this
+        # also runs when Waystone becomes active again.
+        if not self.active:
+            return
+        text = QApplication.clipboard().text()
+        if text != self._before and looks_like_redirect(text):
+            self.take(text)
+
+    def take(self, text: str, explicit: bool = False):
+        if not self.active:
+            return
+        try:
+            ticket = parse_ticket(text)
+        except ValueError as error:
+            if explicit:
+                self.status.setText(str(error))
+            return
+        self.finish(ticket)
+        if looks_like_redirect(QApplication.clipboard().text()):
+            # The ticket works only once, but do not leave it on the clipboard.
+            # Clearing triggers dataChanged, which finish() already disarmed.
+            QTimer.singleShot(0, QApplication.clipboard().clear)
+
+    def finish(self, ticket):
+        if not self.active:
+            return
+        self.active = False
+        self.field.clear()
+        self.finished.emit(ticket)
+
+
+class FolderPage(Page):
+    """Choose a folder inside the window. Tiling compositors place dialogs unpredictably."""
+
+    chosen = Signal(str)
+    cancelled = Signal()
+
+    def __init__(self):
+        super().__init__()
+        self.on_escape(self.cancelled.emit)
+        page = QVBoxLayout(self)
+        left, top, right, bottom = PAGE_MARGINS
+        page.setContentsMargins(left, top, right + GUTTER, bottom)
+        outer = self.centre(column(page))
+        page.setStretch(0, 1)
+        self.fixed_top(page)
+        outer.setSpacing(10)
+        self._target = ''
+        outer.addWidget(label('Choose the installation folder', 'pagetitle'))
+        outer.addWidget(label('Pick an empty folder for a new installation, or the folder Waystone already uses.',
+                              'muted', wrap=True))
+        self.path = fixed(QLineEdit())
+        self.path.setPlaceholderText('Type a path and press Enter, or pick a folder below')
+        self.path.returnPressed.connect(self.go_to_typed)
+        self.path.textEdited.connect(self._release)     # a path being typed is never replaced
+        self.path.textEdited.connect(lambda _: self.say(''))   # an old complaint no longer applies
+        outer.addWidget(self.path)
+        self.model = QFileSystemModel(self)
+        self.model.setFilter(QDir.AllDirs | QDir.NoDotAndDotDot | QDir.Drives)
+        self.model.setRootPath('')
+        # Folders load and sort in the background, so the current folder is revealed again
+        # whenever rows arrive, until the user takes over.
+        self._reveal_timer = QTimer(self)
+        self._reveal_timer.setSingleShot(True)
+        self._reveal_timer.setInterval(40)
+        self._reveal_timer.timeout.connect(self._reveal)
+        for signal in (self.model.directoryLoaded, self.model.rowsInserted, self.model.layoutChanged):
+            signal.connect(lambda *_: self._target and self._reveal_timer.start())
+        self.tree = QTreeView()
+        self.tree.setModel(self.model)
+        for index in range(1, self.model.columnCount()):
+            self.tree.hideColumn(index)
+        self.tree.setHeaderHidden(True)
+        self.tree.setObjectName('folders')
+        self.tree.pressed.connect(self._release)
+        self.tree.verticalScrollBar().sliderPressed.connect(self._release)
+        self.tree.viewport().installEventFilter(self)
+        self.tree.installEventFilter(self)
+        self.tree.selectionModel().currentChanged.connect(
+            lambda index, _: self.path.setText(self.model.filePath(index)))
+        outer.addWidget(self.tree, 1)
+        self.problem = label('', 'small', wrap=True)
+        self.problem.hide()             # shown with a message, so no gap is reserved for it
+        outer.addWidget(self.problem)
+        buttons = QHBoxLayout()
+        buttons.setSpacing(SPACING)
+        create = QPushButton('New folder')
+        create.setFixedHeight(PRIMARY_HEIGHT)
+        create.clicked.connect(self.new_folder)
+        cancel = QPushButton('Cancel')
+        cancel.setFixedSize(96, PRIMARY_HEIGHT)          # level with Use this folder
+        cancel.clicked.connect(self.cancelled.emit)
+        choose = QPushButton('Use this folder')
+        choose.setObjectName('primary')
+        choose.clicked.connect(self.choose)
+        buttons.addWidget(create)
+        buttons.addStretch()
+        buttons.addWidget(cancel)
+        buttons.addWidget(choose)
+        outer.addLayout(buttons)
+
+    def start(self, folder: str):
+        self.say('')
+        self.show_path(Path(folder).expanduser())
+
+    def show_path(self, path: Path):
+        existing = next((p for p in [path, *path.parents] if p.is_dir()), Path.home())
+        self._target, self._typed = str(existing), str(path)
+        self._reveal()
+        QTimer.singleShot(5000, self._release)
+
+    def _reveal(self):
+        if not self._target:
+            return
+        index = self.model.index(self._target)
+        self.tree.setCurrentIndex(index)
+        self.tree.scrollTo(index, QAbstractItemView.PositionAtCenter)
+        self.tree.expand(index)
+        self.path.setText(self._typed)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        # After the tree has its new height, so the selected folder stays in view.
+        QTimer.singleShot(0, lambda: self.tree.currentIndex().isValid() and
+                          self.tree.scrollTo(self.tree.currentIndex(), QAbstractItemView.EnsureVisible))
+
+    def _release(self, *_):
+        self._target = ''            # the user's own scrolling, clicks and typing are left alone
+        self._reveal_timer.stop()
+
+    def eventFilter(self, watched, event):
+        if event.type() in (QEvent.Wheel, QEvent.MouseButtonPress, QEvent.KeyPress):
+            self._release()
+        return super().eventFilter(watched, event)
+
+    def say(self, text: str) -> None:
+        self.problem.setText(text)
+        self.problem.setVisible(bool(text))
+
+    def go_to_typed(self):
+        self.say('')
+        self.show_path(Path(self.path.text()).expanduser())
+
+    def new_folder(self):
+        parent = Path(self.path.text()).expanduser()
+        if not parent.is_dir():
+            self.say('Choose an existing folder to create the new one in.')
+            return
+        name, n = 'Waystone', 1
+        while (parent / name).exists():
+            n += 1
+            name = f'Waystone {n}'
+        try:
+            (parent / name).mkdir()
+        except OSError as error:
+            self.say(f'Could not create the folder: {error.strerror}')
+            return
+        self.show_path(parent / name)
+
+    def choose(self):
+        path = Path(self.path.text()).expanduser()
+        if not path.is_absolute():
+            self.say('Enter a full path, such as /games/Waystone.')
+        elif path.exists() and not path.is_dir():
+            self.say('This is a file, not a folder.')
+        elif path.is_dir() and any(path.iterdir()) and not (path / '.waystone').is_dir():
+            self.say('This folder is not empty. Choose an empty folder, '
+                                 'create one with New folder, or pick the folder Waystone already uses.')
+        else:
+            self.chosen.emit(str(path))
+
+
+class QueuePage(Page):
+    """Every queued, running and paused job, with its controls."""
+
+    closed = Signal()
+    pause = Signal(str)
+    resume = Signal(str)
+    cancel = Signal(str)
+    limit_changed = Signal(int)
+
+    def set_limit(self, megabytes: int) -> None:
+        self.limit.blockSignals(True)
+        self.limit.clear()
+        for value in sorted(set([0, 1, 2, 5, 10, 25, 50, 100, megabytes])):
+            self.limit.addItem('No limit' if value == 0 else f'{value} MB/s', value)
+        self.limit.setCurrentIndex(self.limit.findData(megabytes))
+        self.limit.blockSignals(False)
+
+    def __init__(self):
+        super().__init__()
+        self.on_escape(self.closed.emit)
+        outer = scrolling(self)
+        self.balance(outer)
+        content = self.centre(column(outer))
+        title_row = QHBoxLayout()
+        title_row.setSpacing(12)
+        title_row.addWidget(label('Downloads', 'pagetitle'))
+        title_row.addStretch()
+        title_row.addWidget(label('Speed limit', 'key'))
+        self.limit = fixed(QComboBox(), 140)
+        self.limit.activated.connect(lambda _: self.limit_changed.emit(int(self.limit.currentData())))
+        title_row.addWidget(self.limit)
+        title_row.addSpacing(8)
+        self.close_button = close = fixed(QPushButton('Close'), 96)
+        close.setToolTip('Close the downloads (Esc)')
+        close.clicked.connect(self.closed.emit)
+        title_row.addWidget(close)
+        content.addLayout(title_row)
+        content.addSpacing(10)
+        self.rows = QVBoxLayout()
+        self.rows.setSpacing(10)
+        content.addLayout(self.rows)
+        self.empty = label('Nothing is queued.', 'muted')
+        content.addWidget(self.empty)
+        content.addSpacing(6)
+        self.summary = label('', 'small')
+        content.addWidget(self.summary)
+        outer.addStretch(1)
+        self.cards: dict[str, dict] = {}
+        self.order: list[str] = []
+
+    def focus_chain(self) -> list[QWidget]:
+        """The page's controls in reading order, for the window's tab order."""
+        buttons = [w for code in self.order for w in (self.cards[code]['toggle'], self.cards[code]['cancel'])]
+        return [self.limit, self.close_button, *buttons]
+
+    def show_jobs(self, jobs: list, labels: dict) -> None:
+        from ..downloads import FAILED, PAUSED, QUEUED, RUNNING
+        codes = [job.client for job in jobs]
+        if codes != self.order:
+            # Cards of jobs that remain are kept and only reordered, so keyboard focus on
+            # them survives another job finishing.
+            focused = QApplication.focusWidget()
+            lost_focus = False
+            for code in [c for c in self.cards if c not in codes]:
+                frame = self.cards.pop(code)['frame']
+                lost_focus = lost_focus or (focused is not None and frame.isAncestorOf(focused))
+                self.rows.removeWidget(frame)
+                frame.hide()
+                frame.setParent(None)
+                frame.deleteLater()
+            for code in codes:
+                if code not in self.cards:
+                    self.cards[code] = self._card(code)
+            for index, code in enumerate(codes):
+                self.rows.removeWidget(self.cards[code]['frame'])
+                self.rows.insertWidget(index, self.cards[code]['frame'])
+            self.order = codes
+            if lost_focus:
+                self.close_button.setFocus()
+        waiting = 0
+        for job in jobs:
+            card = self.cards[job.client]
+            verb = {'install': 'Install', 'update': 'Update', 'verify': 'Verify', 'repair': 'Repair'}[job.kind]
+            card['title'].setText(f'{verb} {labels[job.client]}')
+            if job.status == RUNNING:
+                state = 'Running'
+            elif job.status == PAUSED:
+                state = 'Paused'
+            elif job.status == FAILED:
+                state = f'Failed · {job.error}'
+            else:
+                waiting += 1
+                state = f'Waiting, number {waiting} in line'
+            details = [d for d in progress_variants(job) if d] if job.status in {RUNNING, PAUSED} else []
+            # The fullest line that fits: the state, then shorter and shorter details.
+            card['detail'].set_variants([f'{state} · {d}' for d in details] + details + [state])
+            # A running job without a known size gets the moving bar, as on the client page.
+            card['bar'].setVisible(job.status == RUNNING or (bool(job.total_bytes) and job.status != FAILED))
+            card['bar'].setRange(0, 0 if job.status == RUNNING and not job.total_bytes else 1000)
+            card['bar'].setValue(int(job.fraction * 1000))
+            tone(card['bar'], 'attention' if job.status == PAUSED else '')
+            # Paused and failed jobs both continue through resume. The manager picks the right kind.
+            card['paused'] = job.status in {PAUSED, FAILED}
+            retry = 'Repair' if job.kind == 'verify' else 'Try again'
+            card['toggle'].setText(retry if job.status == FAILED else 'Resume' if card['paused'] else 'Pause')
+            card['cancel'].setText('Remove' if job.status == FAILED else 'Cancel')
+            # A waiting job has nothing to pause. Cancel takes it out of the queue.
+            card['toggle'].setVisible(job.status != QUEUED)
+        self.empty.setVisible(not jobs)
+        active = [j for j in jobs if j.status != FAILED]
+        left = sum(j.total_bytes - j.done_bytes for j in active if j.total_bytes)
+        speed = sum(j.speed for j in active if j.status == RUNNING)
+        unsized = sum(1 for j in active if not j.total_bytes)
+        parts = [f"{len(active)} {'download' if len(active) == 1 else 'downloads'}"] if active else []
+        if left:
+            parts.append(f'{size_text(left)} to download')
+            # A time only when every size is known, worked out like the card's own.
+            if speed > 0 and not unsized:
+                parts.append(duration_text(left / speed))
+        if unsized and left:
+            parts.append(f'{unsized} not sized yet')
+        failed = len(jobs) - len(active)
+        if failed:
+            parts.append(f'{failed} failed')
+        self.summary.setText(' · '.join(parts))
+        self.summary.setVisible(bool(parts))
+
+    def _card(self, code: str) -> dict:
+        frame = QFrame()
+        frame.setObjectName('card')
+        layout = QHBoxLayout(frame)
+        layout.setContentsMargins(18, 12, 12, 12)
+        layout.setSpacing(12)
+        text = QVBoxLayout()
+        text.setSpacing(4)
+        # Shortened to fit, so a long error never pushes the buttons out of the card.
+        title, detail = ElidedLabel('', 'cardtitle'), ElidedLabel('', 'small')
+        bar = QProgressBar()
+        bar.setTextVisible(False)
+        bar.setRange(0, 1000)
+        bar.setMinimumWidth(40)
+        bar.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        text.addWidget(title)
+        text.addWidget(bar)
+        text.addWidget(detail)
+        layout.addLayout(text, 1)
+        toggle = fixed(QPushButton('Pause'), 84)
+        cancel = fixed(QPushButton('Cancel'), 84)
+        card = {'frame': frame, 'title': title, 'detail': detail, 'bar': bar, 'toggle': toggle, 'cancel': cancel,
+                'paused': False}
+        toggle.clicked.connect(lambda: (self.resume if card['paused'] else self.pause).emit(code))
+        cancel.clicked.connect(lambda: self.cancel.emit(code))
+        layout.addWidget(toggle)
+        layout.addWidget(cancel)
+        return card

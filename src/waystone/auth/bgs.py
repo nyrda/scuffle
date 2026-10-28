@@ -1,0 +1,246 @@
+"""Authenticate and renew the native session through BGS.
+
+Credentials stay in child pipes and process memory. Only protocol event names,
+status codes, and credential lengths are logged to stderr. No password or token
+is printed.
+"""
+from collections import deque
+import socket
+import ssl
+import struct
+import sys
+import time
+import urllib.parse
+
+from .protobuf import blob, fields, first, integer, varint
+
+PORT = 1119
+CONNECTION_SERVICE = 0x65446991
+AUTHENTICATION_SERVICE = 0xc02f8216
+RESPONSE_SERVICE = 254
+CONNECT = LOGON = LOGON_COMPLETE = 1
+VERIFY_AUTH_TOKEN = 2
+GENERATE_AUTH_TOKEN = 3
+EXTERNAL_CHALLENGE = 4
+WOW_TITLE = 0x576f57
+PLATFORM = 'Wn64'
+LOCALE = 'enUS'
+CHALLENGES = (b'web_auth_url', b'legal_form', b'authenticator')
+
+_sdk_version = integer(1, 8) + integer(2, 1) + integer(3, 0) + blob(4, '8.1.0')
+_protocol_version = integer(1, 3) + integer(2, 18) + integer(3, 2) + blob(4, '3.18.2-dd0d4dc339')
+SDK_INFO = blob(1, 'BGS C++ SDK') + blob(2, _sdk_version) + blob(3, _protocol_version)
+
+
+class CredentialRejected(RuntimeError):
+    """Battle.net refused the presented credential and wants a new sign-in."""
+
+
+def log(*parts):
+    print(*parts, file=sys.stderr, flush=True)
+
+
+class BGS:
+    def __init__(self, host):
+        context = ssl.create_default_context()
+        connection = socket.create_connection((host, PORT), timeout=10)
+        try:
+            self.socket = context.wrap_socket(connection, server_hostname=host)
+        except BaseException:
+            connection.close()
+            raise
+        self.socket.settimeout(15)
+        self.token = 0
+        self.pending = deque()
+        self.client_id = None
+
+    def exact(self, size):
+        result = bytearray()
+        while len(result) < size:
+            data = self.socket.recv(size - len(result))
+            if not data:
+                raise RuntimeError('Server closed the BGS connection')
+            result.extend(data)
+        return bytes(result)
+
+    def send(self, service, method, body):
+        self.token += 1
+        header = (integer(1, 0) + integer(2, method) + integer(3, self.token) +
+                  integer(5, len(body)) + varint(11 << 3 | 5) + struct.pack('<I', service))
+        if self.client_id:
+            header += blob(13, self.client_id)
+        self.socket.sendall(struct.pack('!H', len(header)) + header + body)
+        return self.token
+
+    def receive_wire(self):
+        size = struct.unpack('!H', self.exact(2))[0]
+        if size > 8192:
+            raise RuntimeError('Unexpected BGS header size')
+        header = fields(self.exact(size))
+        body_size = first(header, 5, 0)
+        if body_size > 1024 * 1024:
+            raise RuntimeError('Unexpected BGS payload size')
+        return header, fields(self.exact(body_size))
+
+    def receive(self):
+        return self.pending.popleft() if self.pending else self.receive_wire()
+
+    def response(self, token):
+        for _ in range(32):
+            header, body = self.receive_wire()
+            service = first(header, 1, 0)
+            if service == RESPONSE_SERVICE and first(header, 3) == token:
+                status = first(header, 6, 0)
+                if status:
+                    raise RuntimeError(f'BGS RPC rejected with status {status}')
+                return body
+            if service != RESPONSE_SERVICE:
+                # AuthenticationListener methods return NO_RESPONSE. Preserve
+                # them for the login loop when they arrive before the RPC reply.
+                self.pending.append((header, body))
+            log('unsolicited_packet', 'service', service, 'method', first(header, 2, 0))
+        raise RuntimeError('BGS response did not arrive')
+
+    def call(self, service, method, body):
+        return self.response(self.send(service, method, body))
+
+    def connect(self):
+        connected = self.call(CONNECTION_SERVICE, CONNECT, integer(3, 1) + blob(5, SDK_INFO))
+        self.client_id = first(connected, 9)
+        log('bgs_connected', 'connection_client_id_present', bool(self.client_id))
+
+    def request_logon(self, device, version, credential=None):
+        options = (blob(1, credential) if credential else b'') + blob(3, device)
+        request = (integer(1, WOW_TITLE) + blob(2, PLATFORM) + blob(3, LOCALE) +
+                   integer(4, version) + blob(10, options))
+        self.call(AUTHENTICATION_SERVICE, LOGON, request)
+        log('logon_request_accepted', 'with_credential', bool(credential))
+
+    def logon(self, credential, device, version):
+        self.request_logon(device, version, credential)
+        self.await_logon(credential)
+
+    def web_challenge(self, device, version):
+        """Start a logon without a credential and return the browser sign-in URL."""
+        self.request_logon(device, version)
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            header, body = self.receive()
+            method = first(header, 2, 0)
+            if method == EXTERNAL_CHALLENGE and first(body, 2) == b'web_auth_url':
+                url = first(body, 3, b'').decode(errors='replace')
+                parts = urllib.parse.urlsplit(url)
+                if parts.scheme != 'https' or not (parts.hostname or '').endswith('.battle.net'):
+                    raise RuntimeError('BGS offered a sign-in page outside battle.net')
+                return url
+            if method == LOGON_COMPLETE and isinstance(first(body, 1), int) and first(body, 1):
+                raise RuntimeError(f'BGS logon completed with status {first(body, 1)}')
+            log('login_notification', 'method', method)
+        raise RuntimeError('BGS offered no browser sign-in')
+
+    def verify_web_ticket(self, ticket):
+        """Complete a pending web challenge with the ticket from the sign-in page."""
+        self.call(AUTHENTICATION_SERVICE, VERIFY_AUTH_TOKEN, blob(1, ticket))
+        log('web_ticket_submitted')
+        # The RPC succeeds even for an invalid ticket. The server then answers
+        # with a new challenge or a failed OnLogonComplete instead.
+        try:
+            self.await_logon(ticket)
+        except CredentialRejected as error:
+            raise RuntimeError(f'Battle.net did not accept the sign-in ticket ({error}). '
+                               'Sign in again, since each ticket works only once') from None
+
+    def await_logon(self, credential):
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            header, body = self.receive()
+            method = first(header, 2, 0)
+            if method == LOGON_COMPLETE and isinstance(first(body, 1, 0), int) and first(body, 2):
+                status = first(body, 1, 0)
+                log('logon_complete', 'status', status)
+                if status:
+                    raise CredentialRejected(f'BGS logon completed with status {status}')
+                record = fields(first(body, 2))
+                log('login_ticket_present', bool(first(record, 7)),
+                    'login_ticket_echoes_input', first(record, 7) == credential)
+                return
+            if isinstance(first(body, 2), bytes) and first(body, 2) in CHALLENGES:
+                self.reject_challenge()
+            if method == LOGON_COMPLETE and isinstance(first(body, 1), int) and first(body, 1):
+                raise CredentialRejected(f'BGS login notification has status {first(body, 1)}')
+            log('login_notification', 'method', method)
+        raise RuntimeError('No successful BGS logon notification')
+
+    def reject_challenge(self):
+        # An invalid remembered ticket can produce both a web URL and an
+        # OnLogonComplete error. Report that rejection before treating the URL
+        # as evidence of a valid pending challenge.
+        self.socket.settimeout(2)
+        try:
+            for _ in range(8):
+                header, body = self.receive()
+                if first(header, 2) == LOGON_COMPLETE and isinstance(first(body, 1), int):
+                    status = first(body, 1)
+                    log('logon_complete_after_challenge', 'status', status)
+                    if status:
+                        raise CredentialRejected(f'BGS rejected the saved credential with status {status}')
+                    self.pending.appendleft((header, body))
+                    break
+        except socket.timeout:
+            pass
+        finally:
+            self.socket.settimeout(15)
+        raise CredentialRejected('BGS requires an interactive authentication challenge')
+
+    def generate_auth_token(self, title):
+        token = first(self.call(AUTHENTICATION_SERVICE, GENERATE_AUTH_TOKEN, integer(1, title)), 1)
+        if not isinstance(token, bytes) or not token:
+            raise RuntimeError('GenerateAuthToken returned no credential')
+        return token
+
+
+def login(vault, host, version, sign_in):
+    """Sign in through the browser and save a fresh broker credential.
+
+    sign_in receives the battle.net URL and returns the ticket from its redirect.
+    No connection stays open while the user signs in.
+    """
+    device = vault.device_id()
+    bgs = BGS(host)
+    try:
+        bgs.connect()
+        url = bgs.web_challenge(device, version)
+    finally:
+        bgs.socket.close()
+    ticket = sign_in(url)
+    bgs = BGS(host)
+    try:
+        bgs.connect()
+        bgs.web_challenge(device, version)
+        bgs.verify_web_ticket(ticket)
+        vault.save_session(bgs.generate_auth_token(WOW_TITLE))
+        log('unused_broker_credential_saved_protected')
+    finally:
+        bgs.socket.close()
+
+
+def renew(vault, host, version):
+    """Consume the saved broker credential, then save its successor and a game credential."""
+    credential = vault.load_session()
+    log('credential_loaded', 'bytes', len(credential))
+    bgs = BGS(host)
+    try:
+        bgs.connect()
+        device = vault.device_id()
+        log('logon_device_id', 'bytes', len(device))
+        bgs.logon(credential, device, version)
+        # Keep a distinct, unused SSO ticket for the next broker connection.
+        # LogonRecord.login_ticket can echo the already consumed input.
+        vault.save_session(bgs.generate_auth_token(WOW_TITLE))
+        log('unused_broker_credential_saved_protected')
+        token = bgs.generate_auth_token(WOW_TITLE)
+        log('wow_auth_token_generated', 'bytes', len(token))
+        vault.save_game_token(token)
+        log('game_credential_saved_protected')
+    finally:
+        bgs.socket.close()
