@@ -181,7 +181,7 @@ def test_stalled_host_fails_over_and_cools_down(client, monkeypatch, silent):
     assert client._urls(key)[0].startswith('https://one.example/')
 
 
-def test_socket_inactivity_timeout_is_bounded(client, monkeypatch):
+def test_a_new_connection_waits_the_full_timeout_for_its_first_byte(client, monkeypatch):
     created = []
     class HTTPS:
         def __init__(self, host, port, **kwargs):
@@ -191,7 +191,7 @@ def test_socket_inactivity_timeout_is_bounded(client, monkeypatch):
     monkeypatch.setattr(cdn.http.client, 'HTTPSConnection', HTTPS)
     with client._connection('https://one.example/object'):
         pass
-    assert created == [5]
+    assert created == [30] and client.stall_timeout == 5
 
 
 def test_throttle_time_is_not_mistaken_for_a_stalled_host(client, monkeypatch):

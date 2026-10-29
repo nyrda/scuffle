@@ -75,14 +75,20 @@ def sync_directory(path: Path) -> None:
         os.close(fd)
 
 
-def running_executables() -> list[tuple[int, str, str]]:
-    """List running processes as (pid, executable path or command line, cwd)."""
+def running_executables(names: set[str] | None = None) -> list[tuple[int, str, str]]:
+    """List running processes as (pid, executable path or command line, cwd).
+
+    With names, only processes whose command line contains one of them, in lower case,
+    which saves resolving every other process's folder.
+    """
     if WINDOWS:
         return _windows_processes()
     result = []
     for entry in Path('/proc').glob('[0-9]*'):
         try:
             command = (entry / 'cmdline').read_bytes().replace(b'\0', b' ').decode(errors='replace')
+            if names is not None and not any(name in command.lower() for name in names):
+                continue
             try:
                 cwd = str((entry / 'cwd').resolve())
             except OSError:
@@ -91,6 +97,30 @@ def running_executables() -> list[tuple[int, str, str]]:
         except OSError:
             continue
     return result
+
+
+def game_processes(executable: Path) -> list[int]:
+    """The processes running executable itself, not the launchers whose arguments name it.
+
+    Under Wine the process shows its Windows path, under whichever drive letter it was
+    started, so its name and folder identify it.
+    """
+    if WINDOWS:
+        return [pid for pid, image, _ in _windows_processes()
+                if Path(image).resolve() == Path(executable).resolve()]
+    return [int(entry.name) for entry in Path('/proc').glob('[0-9]*') if runs(int(entry.name), executable)]
+
+
+def runs(pid: int, executable: Path) -> bool:
+    """Whether process pid runs executable itself, by its first argument and its folder. Linux only."""
+    entry = Path(f'/proc/{pid}')
+    try:
+        first = (entry / 'cmdline').read_bytes().split(b'\0', 1)[0].decode(errors='replace')
+        if first.replace('\\', '/').rsplit('/', 1)[-1].lower() != executable.name.lower():
+            return False
+        return Path(first) == executable or Path((entry / 'cwd').resolve()) == Path(executable).parent.resolve()
+    except OSError:
+        return False
 
 
 def _windows_processes() -> list[tuple[int, str, str]]:

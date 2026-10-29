@@ -419,16 +419,22 @@ class Library:
         name = 'Wow.exe' if 'Wow.exe' in names or not names else names[0]
         return self.root / state['folder'] / name
 
-    def running(self, code: str) -> bool:
+    def running(self, code: str, processes: list | None = None) -> bool:
+        """processes is one listing from system.running_executables, shared by several checks."""
         path = self.executable(code)
         if path is None:
             return False
-        return self._executable_running(path)
+        return self._executable_running(path, processes)
 
-    def _executable_running(self, path: Path) -> bool:
+    def game_processes(self, code: str) -> list[int]:
+        """The client's game processes, for closing it. Empty when it does not run."""
+        path = self.executable(code)
+        return system.game_processes(path) if path else []
+
+    def _executable_running(self, path: Path, processes: list | None = None) -> bool:
         folder, name = path.parent, path.name.lower()
         executable = str(path).lower()
-        for _, command, cwd in system.running_executables():
+        for _, command, cwd in (system.running_executables() if processes is None else processes):
             text = command.lower()
             if name not in text:
                 continue
@@ -692,7 +698,7 @@ class Updater:
                                    f'which {catalog.get(other.name).label} already uses')
         if self.locale not in config.get('supported_locales', []):
             raise LibraryError(f'{self.entry.label} does not support the locale {self.locale}')
-        self.snapshot.update(folder=folder, launch_arguments=list(config.get('launch_arguments') or []))
+        self.snapshot.update(folder=folder)
         for key, path in [(version['BuildConfig'], build_path), (version['CDNConfig'], cdn_path)]:
             atomic_bytes(self.root / 'Data/config' / key[:2] / key[2:4] / key, path.read_bytes())
         key = self.client.runtime_keyring()
@@ -777,7 +783,8 @@ class Updater:
         missing = self.plan.totals()[2]
         if missing:
             self.emit('cdn_indexes', force=True, missing_objects=missing)
-            self.client.prepare_indexes(lambda done, count: self.emit('cdn_indexes', done=done, total=count))
+            self.client.prepare_indexes(lambda done, count: self.emit('cdn_indexes', force=done == count,
+                                                                         done=done, total=count))
             base_bytes = received = done_bytes
             def progress(amount):
                 nonlocal received

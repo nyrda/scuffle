@@ -10,12 +10,12 @@ import sys
 import threading
 import time
 
-from PySide6.QtCore import QObject, QPoint, QTimer, QUrl, Qt, Signal
+from PySide6.QtCore import QEvent, QObject, QPoint, QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QApplication, QFrame, QGraphicsOpacityEffect, QHBoxLayout, QMainWindow, QPushButton, QStackedWidget,
-                               QStyleFactory, QVBoxLayout, QWidget)
+                               QMenu, QStyleFactory, QVBoxLayout, QWidget)
 
-from .. import catalog, discovery
+from .. import catalog, discovery, system
 from ..downloads import DONE, FAILED, PAUSED, QUEUED, RUNNING, DownloadManager, Job
 from ..launch import Launcher, LaunchError
 from ..library import Library, LibraryError, update_available
@@ -25,6 +25,9 @@ from .client_options import ClientOptionsPage, summary as options_summary
 from .pages import ClientPage, FolderPage, QueuePage, SettingsPage, SignInPage, UninstallPage
 from .style import SPACING, dark_palette, make_images, size_text, stylesheet
 from .widgets import ClientList, DownloadBar, fixed, label, progress_variants
+
+
+CLOSE_GRACE = 20      # seconds a game gets to quit before Force quit is suggested
 
 
 class Bus(QObject):
@@ -37,6 +40,8 @@ class Bus(QObject):
     update_needed = Signal(str)
     storage_ready = Signal(dict)
     catalog_checked = Signal(str, object)   # region, what discovery found or None
+    game_closed = Signal(str, str, bool)    # client, what closing did or an error, forced
+    running_scanned = Signal(object, object)   # library, clients whose game runs
 
 
 class MainWindow(QMainWindow):
@@ -46,6 +51,10 @@ class MainWindow(QMainWindow):
         self.bus = Bus()
         self.updates: dict[str, bool] = {}
         self.phases: dict[str, str] = {}      # client -> Checking for updates, Signing in, Starting, Running
+        self.closing: dict[str, float] = {}   # client -> when it was asked to close
+        self._running: set[str] = set()       # clients whose game runs, whoever started it
+        self._running_at = float('-inf')
+        self._scanning = False
         self.library = self.downloads = None
         self._sign_in_result: list = []
         self._sign_in_done = threading.Event()
@@ -58,6 +67,10 @@ class MainWindow(QMainWindow):
         self.bus.update_needed.connect(self.on_update_needed)
         self.bus.storage_ready.connect(self.on_storage)
         self.bus.catalog_checked.connect(self.on_catalog)
+        self.bus.game_closed.connect(self.on_game_closed)
+        self.bus.running_scanned.connect(self.on_running_scanned)
+        # Shift turns Close game into Force quit while it is held.
+        QApplication.instance().installEventFilter(self)
         self.storage: dict = {}
         # The last list from the version service, so the window starts without waiting for it.
         catalog.apply((discovery.load(cache_dir(), self.settings.region) or {}).get('products'))
@@ -199,6 +212,19 @@ class MainWindow(QMainWindow):
         self.settings_button.clicked.connect(self.toggle_settings)
         side.addWidget(self.settings_button)
         side.addSpacing(6)
+        # Shown with several WoW accounts under the login. The choice saves the game's own question.
+        self.game_account_row = QWidget()
+        game_account = QHBoxLayout(self.game_account_row)
+        game_account.setContentsMargins(SPACING + 2, 0, 0, 0)
+        game_account.addWidget(label('WoW account', 'small'), 1)
+        self.game_account_button = QPushButton('')
+        self.game_account_button.setObjectName('flat')
+        self.game_account_button.setToolTip('The WoW account the game starts with. With Ask in the game, '
+                                            'the game shows its own choice.')
+        self.game_account_button.clicked.connect(self.choose_game_account)
+        game_account.addWidget(self.game_account_button)
+        self.game_account_row.hide()
+        side.addWidget(self.game_account_row)
         account = QHBoxLayout()
         account.setContentsMargins(SPACING + 2, 0, 0, 0)
         self.account = label('', 'small')
@@ -259,11 +285,96 @@ class MainWindow(QMainWindow):
         from ..auth.vault import Vault
         return Vault(data_dir() / 'session', None).has_session()
 
+    def game_accounts(self) -> dict | None:
+        """The WoW accounts of the signed-in login, as the last sign-in or launch listed them."""
+        from ..auth.vault import Vault
+        return Vault(data_dir() / 'session', None).accounts()
+
+    def show_game_account(self, signed: bool) -> None:
+        from ..launch import chosen_account
+        known = self.game_accounts() if signed else None
+        several = bool(known and len(known['game_accounts']) > 1)
+        self.game_account_row.setVisible(several)
+        if several:
+            chosen = chosen_account(self.settings, known)
+            self.game_account_button.setText(f"{chosen['name'] if chosen else 'Ask in the game'} ▾")
+
+    def choose_game_account(self) -> None:
+        menu = self.game_account_menu()
+        if menu is not None:
+            menu.exec(self.game_account_button.mapToGlobal(QPoint(0, self.game_account_button.height())))
+
+    def game_account_menu(self) -> QMenu | None:
+        from ..launch import chosen_account
+        known = self.game_accounts()
+        if not known:
+            return None
+        chosen = chosen_account(self.settings, known)
+        menu = QMenu(self.game_account_button)
+        ask = menu.addAction('Ask in the game')
+        ask.setCheckable(True)
+        ask.setChecked(chosen is None)
+        ask.triggered.connect(lambda: self.pick_game_account(known['owner'], None))
+        menu.addSeparator()
+        for account in known['game_accounts']:
+            action = menu.addAction(f"{account['name']} · {account['region']}")
+            action.setCheckable(True)
+            action.setChecked(chosen is not None and account['id'] == chosen['id'])
+            action.triggered.connect(lambda _=False, chosen=account['id']: self.pick_game_account(known['owner'], chosen))
+        return menu
+
+    def pick_game_account(self, owner: int, account: int | None) -> None:
+        """Save the WoW account for this Battle.net login. None lets the game ask again."""
+        if account is None:
+            self.settings.game_accounts.pop(str(owner), None)
+        else:
+            self.settings.game_accounts[str(owner)] = account
+        self.settings.save()
+        self.refresh()
+
+    def running_now(self) -> set[str]:
+        """Clients whose game runs, including one Waystone did not start.
+
+        Reading every process takes tens of milliseconds, so a worker refreshes this at most
+        every 2 s and the window shows the last result. Actions that need certainty check again.
+        """
+        if self.library and not self._scanning and time.monotonic() - self._running_at >= 2:
+            self._scanning = True
+            library = self.library
+
+            def work():
+                try:
+                    found = self.scan_running(library)
+                except Exception:   # a vanished folder or process; the next scan tries again
+                    found = None
+                self.bus.running_scanned.emit(library, found)
+            threading.Thread(target=work, name='waystone-running', daemon=True).start()
+        return self._running if self.library else set()
+
+    @staticmethod
+    def scan_running(library) -> set[str]:
+        installed = library.installed()
+        names = {path.name.lower() for path in map(library.executable, installed) if path}
+        processes = system.running_executables(names)
+        return {code for code in installed if library.running(code, processes)}
+
+    def on_running_scanned(self, library, found) -> None:
+        self._scanning = False
+        self._running_at = time.monotonic()
+        if library is self.library and found is not None and found != self._running:
+            self._running = found
+            self.refresh()
+
+    def game_running(self, code: str) -> bool:
+        """Running and past its start, so it can be closed."""
+        return self.phases.get(code) == 'Running' or (code not in self.phases and code in self.running_now())
+
     def status(self, code: str) -> tuple[str, str]:
         """The short status of a client and its tone for the chip."""
         job = self.downloads.job(code) if self.downloads else None
-        if self.phases.get(code) == 'Running':
-            return 'Running', 'active'        # a running game outweighs a file check beside it
+        if self.game_running(code):
+            # A running game outweighs a file check beside it.
+            return ('Closing' if code in self.closing else 'Running'), 'active'
         if code in self.launch_failed and code not in self.phases and code in self.messages:
             return 'Did not start', 'danger'
         if job and job.status == RUNNING:
@@ -335,6 +446,7 @@ class MainWindow(QMainWindow):
         self.account.setText('Signing in…' if signing_in else
                              '<span style="color:#7fcf8f">●</span> Signed in' if signed else 'Not signed in')
         self.account_button.setText('Sign out' if signed else 'Sign in')
+        self.show_game_account(signed and not signing_in)
         can_sign_in = bool(self.library and self.library.installed())
         # A second sign-in, or a sign-out, during a sign-in would race for the one ticket.
         # A launch uses the saved session, so it cannot be signed out of mid-launch either.
@@ -360,7 +472,7 @@ class MainWindow(QMainWindow):
         page = self.stack.currentWidget()
         chain = [self.client_list, self.client_list.empty_button,
                  *(page.focus_chain() if hasattr(page, 'focus_chain') else []),
-                 self.settings_button, self.account_button, self.download_bar.title,
+                 self.settings_button, self.game_account_button, self.account_button, self.download_bar.title,
                  self.download_bar.toggle, self.download_bar.cancel, self.download_bar.queue]
         key = tuple(id(widget) for widget in chain)
         if key != self._tab_order:
@@ -380,8 +492,13 @@ class MainWindow(QMainWindow):
         launching = code in self.phases
         failed = bool(job and job.status == FAILED)
         removing = bool(job and job.kind == 'uninstall' and job.status == RUNNING)
+        running = self.game_running(code)
+        force = running and bool(QApplication.queryKeyboardModifiers() & Qt.ShiftModifier)
         if removing:
             primary = 'Uninstalling…'
+        elif running:
+            # Before a failed update's retry, since the running game is what failed it.
+            primary = 'Force quit' if force else 'Closing…' if code in self.closing else 'Close game'
         elif failed and job.kind == 'verify':
             # A failed check is fixed by repairing, not by checking again.
             primary = 'Repair'
@@ -438,7 +555,8 @@ class MainWindow(QMainWindow):
         had_primary = self.client_page.primary.hasFocus()
         self.client_page.show_client(
             client, status=status, tone_name=tone_name, primary=primary,
-            primary_enabled=bool(self.library) and not launching and not removing and primary != 'Queued',
+            primary_enabled=bool(self.library) and not removing and primary != 'Queued'
+                            and ((force or code not in self.closing) if running else not launching),
             primary_tip=self.primary_tip(code),
             installed=bool(state),
             busy=(launching and self.phases[code] != 'Running') or preparing, progress=progress,
@@ -450,7 +568,7 @@ class MainWindow(QMainWindow):
         self.client_page.uninstall_action.setEnabled(bool(state) and not reason)
         self.client_page.uninstall_action.setToolTip(reason)
         # Pause is a secondary action. Only starting something gets the accent color.
-        secondary = primary in {'Pause', 'Queued'} or launching
+        secondary = primary in {'Pause', 'Queued'} or launching or running
         button = self.client_page.primary
         if button.property('secondary') != secondary:
             button.setProperty('secondary', secondary)
@@ -473,6 +591,9 @@ class MainWindow(QMainWindow):
     def primary_tip(self, code: str) -> str:
         if not self.library:
             return 'Choose an installation folder in Settings first.'
+        if self.game_running(code):
+            return ('Closes the game as its window\'s close button does. Hold Shift to force quit, '
+                    'which ends it at once, as when it hangs.')
         options = self.settings.client_launch.get(code)
         if options and options.active() and self.library.state(code):
             return f'Starts with your launch options: {options_summary(options)}'
@@ -653,6 +774,9 @@ class MainWindow(QMainWindow):
     def primary_action(self):
         code = self.selected()
         job = self.downloads.job(code)
+        if self.game_running(code):
+            self.close_game(code, force=bool(QApplication.queryKeyboardModifiers() & Qt.ShiftModifier))
+            return
         if job and job.status == FAILED:
             self.clear_notice(code)
             self.downloads.enqueue(code, 'repair' if job.kind == 'verify' else job.kind)
@@ -667,6 +791,53 @@ class MainWindow(QMainWindow):
         else:
             self.play(code)
         self.refresh()
+
+    def close_game(self, code: str, *, force: bool = False) -> None:
+        executable, processes = self.library.executable(code), self.library.game_processes(code)
+        if not force:
+            # The grace time counts from the click, however long the request itself takes.
+            asked = self.closing[code] = time.monotonic()
+            QTimer.singleShot(CLOSE_GRACE * 1000, self, lambda: self.close_overdue(code, asked))
+        self.refresh()
+
+        def work():
+            try:
+                result = self.launcher().runtime.close(executable, processes, force=force)
+            except Exception as error:  # shown in the banner
+                result = str(error) or 'The game could not be closed.'
+            self.bus.game_closed.emit(code, result, force)
+
+        threading.Thread(target=work, name='waystone-close', daemon=True).start()
+
+    def on_game_closed(self, code: str, result: str, force: bool) -> None:
+        from ..runtime.game import ASKED, NO_WINDOW, NOT_RUNNING
+        label = catalog.get(code).label
+        if result != ASKED or force:
+            self.closing.pop(code, None)   # an asked game quits in its own time, watched by close_overdue
+        if result == NO_WINDOW:
+            self.notify(f'{label} has no window to close. A game can hang like this while it quits. '
+                        'Hold Shift and press Force quit to end it.', 'error', client=code)
+        elif result not in (ASKED, NOT_RUNNING):
+            self.notify(result, 'error', client=code)
+        self._running_at = float('-inf')
+        self.refresh()
+
+    def close_overdue(self, code: str, asked: float) -> None:
+        if self.closing.get(code) != asked:
+            return
+        self.closing.pop(code, None)
+        self._running_at = float('-inf')
+        if self.game_running(code):
+            self.notify(f'{catalog.get(code).label} has not closed. Hold Shift and press Force quit to end it.',
+                        'error', client=code)
+        self.refresh()
+
+    def eventFilter(self, watched, event):
+        if event.type() in (QEvent.KeyPress, QEvent.KeyRelease) and event.key() == Qt.Key_Shift:
+            code = self.selected()
+            if code and self.game_running(code):
+                self.refresh_client(code)
+        return super().eventFilter(watched, event)
 
     def verify(self):
         self.downloads.enqueue(self.selected(), 'verify')
@@ -706,8 +877,8 @@ class MainWindow(QMainWindow):
         job = self.downloads.job(code) if self.downloads else None
         if job and job.status != DONE:
             return 'Finish or remove this client\'s job before uninstalling.'
-        if self.library.running(code):
-            return 'Close the client before uninstalling.'
+        if code in self.running_now():
+            return 'Close the client before uninstalling.'    # the uninstall checks again before it deletes
         if self.library.pending(code) is not None:
             return 'Finish the unfinished update before uninstalling.'
         return ''
@@ -845,6 +1016,8 @@ class MainWindow(QMainWindow):
 
     def on_task_finished(self, code: str, message: str):
         self.phases.pop(code, None)
+        self.closing.pop(code, None)
+        self._running_at = float('-inf')        # the game is gone, so the list should not wait to say so
         self.sync_game_downloads()
         if not code:
             self._signing_in = False
@@ -1012,6 +1185,8 @@ class MainWindow(QMainWindow):
             self.check_updates()
 
     def closeEvent(self, event):
+        # Every event in the application passes the filter, so it goes with the window.
+        QApplication.instance().removeEventFilter(self)
         if self.downloads:
             self.downloads.shutdown()
         if self.downloads and self.downloads.busy():

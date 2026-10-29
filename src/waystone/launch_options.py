@@ -126,21 +126,6 @@ def find_program(name: str) -> str | None:
     return shutil.which(name)
 
 
-def gpu_vendors() -> set[str]:
-    """PCI vendor IDs of the display adapters, such as 0x10de for NVIDIA."""
-    vendors = set()
-    for path in Path('/sys/class/drm').glob('card*/device/vendor'):
-        try:
-            vendors.add(path.read_text().strip().lower())
-        except OSError:
-            continue
-    return vendors
-
-
-def has_nvidia() -> bool:
-    return '0x10de' in gpu_vendors() or Path('/proc/driver/nvidia').exists()
-
-
 def vulkan_layer(prefix: str) -> bool:
     """Whether an implicit Vulkan layer, such as MangoHud's, is installed where the loader looks."""
     home = Path(os.environ.get('XDG_DATA_HOME') or Path.home() / '.local/share')
@@ -166,8 +151,6 @@ class LinuxOptions:
     mangohud: bool = False
     wayland: bool = False
     hdr: bool = False
-    nvapi: bool = True          # applies only with an NVIDIA GPU
-    ntsync: bool = True         # applies only to Proton builds that offer to turn it off
     log: bool = False
     environment: dict[str, str] = field(default_factory=dict)
     wrapper: str = ''
@@ -178,13 +161,18 @@ class LinuxOptions:
         if not isinstance(data, dict):
             problems.append('The Linux launch options were unreadable and were reset.')
             return options
-        for name in ['gamemode', 'mangohud', 'wayland', 'hdr', 'nvapi', 'ntsync', 'log']:
+        for name in ['gamemode', 'mangohud', 'wayland', 'hdr', 'log']:
             if name in data:
                 if isinstance(data[name], bool):
                     setattr(options, name, data[name])
                 else:
                     problems.append(f'The launch option {name} was not on or off and was reset.')
         options.environment = checked_environment(data.get('environment', {}), 'the Linux settings', problems)
+        # ntsync and NVAPI were switches before. Their off positions live on as the variables they set.
+        if data.get('ntsync') is False:
+            options.environment.setdefault('PROTON_NO_NTSYNC', '1')
+        if data.get('nvapi') is False:
+            options.environment.setdefault('PROTON_DISABLE_NVAPI', '1')
         wrapper = data.get('wrapper', '')
         try:
             if not isinstance(wrapper, str):
@@ -276,7 +264,7 @@ def expand_variables(value: str) -> str:
 
 
 def linux_environment(options: LinuxOptions, client: ClientOptions | None = None, *,
-                      nvidia: bool, log_dir: Path) -> dict[str, str]:
+                      log_dir: Path) -> dict[str, str]:
     """The variables the game's umu-run gets on top of Waystone's own. Later ones win."""
     variables = {}
     if options.mangohud:
@@ -287,11 +275,6 @@ def linux_environment(options: LinuxOptions, client: ClientOptions | None = None
         variables['PROTON_ENABLE_WAYLAND'] = '1'
     if options.hdr:
         variables['PROTON_ENABLE_HDR'] = '1'
-    if nvidia and not options.nvapi:
-        # Proton 9 and later give NVIDIA GPUs NVAPI by default, so only turning it off needs a variable.
-        variables['PROTON_DISABLE_NVAPI'] = '1'
-    if not options.ntsync:
-        variables['PROTON_NO_NTSYNC'] = '1'
     if options.log:
         variables.update(PROTON_LOG='1', PROTON_LOG_DIR=str(log_dir))
     # Paths such as ~/.config/MangoHud/wow.conf or $HOME/dxvk.conf work as in a shell.

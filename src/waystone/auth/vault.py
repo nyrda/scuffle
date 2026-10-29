@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 
 from .. import system
-from ..library import atomic_bytes
+from ..library import atomic_bytes, atomic_json
 
 
 class Vault:
@@ -21,6 +21,7 @@ class Vault:
         self.session = self.directory / 'session.dpapi'
         self.token = self.directory / 'game-token.dpapi'
         self.history = self.directory / 'history.jsonl'
+        self.account_list = self.directory / 'accounts.json'
 
     def _prepare(self) -> None:
         self.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -44,9 +45,40 @@ class Vault:
     def save_game_token(self, ticket: bytes) -> None:
         self._save(self.token, ticket)
 
+    def save_accounts(self, owner, accounts: list[dict] | None) -> None:
+        """Keep the WoW accounts of the signed-in Battle.net login, which owner identifies.
+
+        A failed lookup is not an empty list, so it keeps the last list of the same login.
+        """
+        known = self.accounts()
+        if accounts is None and known and known['owner'] == owner:
+            return
+        if accounts is None or not isinstance(owner, int):
+            self.account_list.unlink(missing_ok=True)
+            return
+        self._prepare()
+        atomic_json(self.account_list, {'owner': owner, 'game_accounts': accounts})
+        if not system.WINDOWS:
+            self.account_list.chmod(0o600)
+
+    def accounts(self) -> dict | None:
+        """The saved list as {'owner': id, 'game_accounts': [{'id', 'name', 'region'}]}, if readable."""
+        from .bgs import GAME_REGIONS, launch_name
+        try:
+            data = json.loads(self.account_list.read_text())
+            owner, listed = data['owner'], data['game_accounts']
+            usable = [{'id': a['id'], 'name': a['name'], 'region': a['region']} for a in listed
+                      if type(a['id']) is int and launch_name(a['name']) and a['region'] in GAME_REGIONS.values()]
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+        if type(owner) is not int or len(usable) != len(listed):
+            return None
+        return {'owner': owner, 'game_accounts': usable}
+
     def forget(self) -> None:
         self.session.unlink(missing_ok=True)
         self.token.unlink(missing_ok=True)
+        self.account_list.unlink(missing_ok=True)
         self.record('signed_out')
 
     def device_id(self) -> bytes:

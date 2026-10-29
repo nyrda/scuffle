@@ -312,3 +312,39 @@ def test_uninstall_worker_reports_database_errors(managers, monkeypatch):
     finally:
         manager.shutdown()
         worker.join(5)
+
+
+def test_a_long_stage_before_the_transfer_reports_its_count_until_bytes_move(managers, monkeypatch):
+    from waystone import downloads
+    manager = managers()
+    seen = []
+
+    class Updater:
+        def __init__(self, *args, progress, **kwargs):
+            self.progress = progress
+
+        def run(self):
+            self.progress({'stage': 'planned', 'objects': 9, 'encoded_bytes': 100, 'missing_objects': 1,
+                           'missing_bytes': 10})
+            self.progress({'stage': 'cdn_indexes', 'missing_objects': 1})
+            self.progress({'stage': 'cdn_indexes', 'done': 1200, 'total': 1411})
+            seen.append(manager.current().step)
+            self.progress({'stage': 'downloading', 'done': 8, 'total': 9, 'bytes': 90, 'total_bytes': 100})
+            seen.append(manager.current().step)
+            return {}
+
+        def close(self):
+            pass
+    monkeypatch.setattr(downloads, 'Updater', Updater)
+    monkeypatch.setattr(manager, 'client_factory', lambda *args: None)
+    monkeypatch.setattr(manager.library, 'cleanup', lambda **kwargs: {})
+    job = manager.enqueue('wow', 'install')
+    finished = threading.Event()
+    manager.listeners.append(lambda job: finished.set() if job.status in {DONE, FAILED} else None)
+    worker = threading.Thread(target=REAL_DOWNLOAD_RUN, args=(manager,), daemon=True)
+    worker.start()
+    assert finished.wait(5)
+    manager.shutdown()
+    worker.join(5)
+    assert job.status == DONE, job.error
+    assert seen == [(1200, 1411), None]

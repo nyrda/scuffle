@@ -3,14 +3,22 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import shutil
+import signal
 import subprocess
 
+from .. import system
 from .bridge import Bridge, NativeBridge, WineBridge, windows_path
 from .proton import Proton, wine_wrapper
 
 
 class RuntimeFailure(RuntimeError):
     pass
+
+
+# What closing a game did. The bridge's --close-game exits with 0, 3 or 4.
+ASKED, NO_WINDOW, NOT_RUNNING = 'asked', 'no window', 'not running'
+CLOSE_RESULTS = {0: ASKED, 3: NO_WINDOW, 4: NOT_RUNNING}
 
 
 class GameRuntime:
@@ -20,26 +28,44 @@ class GameRuntime:
         """Make the runtime usable before the first bridge call."""
 
     def start(self, executable: Path, arguments: list[str], token: Path, ack: Path, *,
-              environment: dict[str, str] | None = None, wrapper: list[str] = ()) -> subprocess.Popen:
-        """Start the game. The environment and wrapper commands apply on Linux only."""
+              environment: dict[str, str] | None = None, wrapper: list[str] = (),
+              account: tuple[str, str] | None = None) -> subprocess.Popen:
+        """Start the game. The environment and wrapper commands apply on Linux only.
+
+        account is the WoW account's name and region. Without one the game asks for it.
+        """
+        raise NotImplementedError
+
+    def close(self, executable: Path, processes: list[int], *, force: bool = False) -> str:
+        """Ask the game to close as its window's close button does, or end it at once with force."""
         raise NotImplementedError
 
 
-def _launch_arguments(bridge: Path, executable: Path, arguments: list[str], token: Path, ack: Path) -> list[str]:
+def _launch_arguments(bridge: Path, executable: Path, arguments: list[str], token: Path, ack: Path,
+                      account: tuple[str, str] | None = None) -> list[str]:
+    chosen = ['--game-account', *account] if account else []
     return [str(bridge), '--launch-protected-file', windows_path(token), windows_path(ack),
-            windows_path(executable), *arguments]
+            *chosen, windows_path(executable), *arguments]
 
 
 class WindowsRuntime(GameRuntime):
     def __init__(self, bridge: Path):
         self.bridge = NativeBridge(bridge)
 
-    def start(self, executable, arguments, token, ack, *, environment=None, wrapper=()):
-        command = _launch_arguments(self.bridge.executable, executable, arguments, token, ack)
+    def start(self, executable, arguments, token, ack, *, environment=None, wrapper=(), account=None):
+        command = _launch_arguments(self.bridge.executable, executable, arguments, token, ack, account)
         env = os.environ | {'WOW_BROKER_PIPE': '1'}
         return subprocess.Popen(command, env=env, cwd=executable.parent, stdin=subprocess.DEVNULL,
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                 creationflags=getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0))
+
+    def close(self, executable, processes, *, force=False):
+        command = [str(self.bridge.executable), '--close-game', str(executable), *(['--force'] if force else [])]
+        result = subprocess.run(command, env=os.environ | {'WOW_BROKER_PIPE': '1'}, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
+        if result.returncode not in CLOSE_RESULTS:
+            raise RuntimeFailure('The game could not be asked to close.')
+        return CLOSE_RESULTS[result.returncode]
 
 
 class LinuxRuntime(GameRuntime):
@@ -86,11 +112,68 @@ class LinuxRuntime(GameRuntime):
                    WOW_BROKER_PIPE='1')
         return env
 
-    def start(self, executable, arguments, token, ack, *, environment=None, wrapper=()):
+    def start(self, executable, arguments, token, ack, *, environment=None, wrapper=(), account=None):
         # Wrappers such as gamemoderun or gamescope go around umu-run, and so around the game.
         # Prefix creation and bridge calls never run through them.
         env = self.game_environment(environment)
         command = [*wrapper, str(self.umu),
-                   *_launch_arguments(self.bridge_executable, executable, arguments, token, ack)]
+                   *_launch_arguments(self.bridge_executable, executable, arguments, token, ack, account)]
         return subprocess.Popen(command, env=env, cwd=executable.parent, stdin=subprocess.DEVNULL,
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+
+    # The game's own Wine session lives in its container, whose wineserver only its mount
+    # namespace can reach. The bridge joins it there with the game's Wine and variables.
+    JOINED = ('WINEPREFIX', 'WINEDLLPATH', 'WINEDLLOVERRIDES', 'WINEFSYNC', 'WINEESYNC', 'PATH',
+              'LD_LIBRARY_PATH', 'DISPLAY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR')
+
+    def close(self, executable, processes, *, force=False):
+        if not processes:
+            return NOT_RUNNING
+        if force:
+            # Ends the game at once. Its bridge and umu-run then see it gone and exit too.
+            # A pidfd holds on to the very process, so a pid that a new process took over
+            # since the game was found fails the check and is never signalled.
+            for pid in processes:
+                try:
+                    handle = os.pidfd_open(pid)
+                except ProcessLookupError:
+                    continue
+                try:
+                    if system.runs(pid, executable):
+                        signal.pidfd_send_signal(handle, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                finally:
+                    os.close(handle)
+            return ASKED
+        nsenter = shutil.which('nsenter')
+        if nsenter is None:
+            raise RuntimeFailure('Closing the game needs nsenter from util-linux. Hold Shift to force quit.')
+        pid = processes[0]
+        try:
+            variables = Path(f'/proc/{pid}/environ').read_bytes().split(b'\0')
+            # The game runs Proton's wine preloader from files/lib/wine/<arch>. Its bin/wine is above.
+            loader = Path(os.readlink(f'/proc/{pid}/exe'))
+        except OSError:
+            return NOT_RUNNING
+        wine = next((folder / 'bin' / 'wine' for folder in loader.parents
+                     if Path(f'/proc/{pid}/root{folder}/bin/wine').is_file()), None)
+        if wine is None:
+            raise RuntimeFailure('The game\'s Wine was not found. Hold Shift to force quit.')
+        if not Path(f'/proc/{pid}/root{self.bridge_executable}').is_file():
+            # The container replaces some folders, such as /tmp.
+            raise RuntimeFailure('The game\'s container cannot see the Waystone bridge. Hold Shift to force quit.')
+        env = {name: value for name, _, value in (v.decode(errors='replace').partition('=') for v in variables)
+               if name in self.JOINED}
+        env.update(WINEDEBUG='-all', WOW_BROKER_PIPE='1')
+        command = [nsenter, '-t', str(pid), '-U', '-m', '--preserve-credentials', '--wd=/', '--',
+                   str(wine), str(self.bridge_executable), '--close-game', windows_path(executable)]
+        try:
+            result = subprocess.run(command, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL, timeout=60)
+        except subprocess.TimeoutExpired:
+            raise RuntimeFailure('The game did not answer. Hold Shift to force quit.') from None
+        if result.returncode not in CLOSE_RESULTS:
+            raise RuntimeFailure('The game could not be asked to close. Hold Shift to force quit.')
+        return CLOSE_RESULTS[result.returncode]
+

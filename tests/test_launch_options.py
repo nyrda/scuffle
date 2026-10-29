@@ -30,7 +30,7 @@ def test_settings_from_before_launch_options_load_with_the_defaults(config):
 
 def test_launch_options_survive_a_save_and_load(config):
     saved = Settings(root='/games')
-    saved.linux_launch = LinuxOptions(gamemode=True, mangohud=True, ntsync=False, log=True,
+    saved.linux_launch = LinuxOptions(gamemode=True, mangohud=True, log=True,
                                       environment={'DXVK_HUD': 'fps', 'QUOTED': '"kept"'},
                                       wrapper='gamescope -w 2560 -h 1440 -f --')
     saved.client_launch = {'wow': ClientOptions(graphics='-d3d11', window='-windowed', switches=['-console'],
@@ -83,13 +83,6 @@ def test_saved_values_keep_their_quotes_and_spaces_through_the_editor():
     variables = {'QUOTED': '"kept"', 'SINGLE': "'kept'", 'EMPTY': '""', 'SPACED': ' x ', 'PLAIN': 'a "b" c',
                  'NOTHING': ''}
     assert parse_environment(launch_options.format_environment(variables)) == (variables, [])
-
-
-@pytest.mark.parametrize('nvidia, nvapi, expected', [
-    (True, True, {}), (True, False, {'PROTON_DISABLE_NVAPI': '1'}), (False, False, {})])
-def test_nvapi_is_left_to_proton_unless_turned_off_on_an_nvidia_gpu(nvidia, nvapi, expected, tmp_path):
-    options = LinuxOptions(nvapi=nvapi)
-    assert launch_options.linux_environment(options, nvidia=nvidia, log_dir=tmp_path) == expected
 
 
 @pytest.mark.parametrize('text', ['-uid wow_beta', '-LauncherLogin', '-initialgamemode=chc', '--uid=x',
@@ -212,7 +205,7 @@ class Library:
         self.folder.mkdir(parents=True)
 
     def state(self, code):
-        return {'version': '1.15.8.66710', 'launch_arguments': ['-fromproductconfig']}
+        return {'version': '1.15.8.66710', 'launch_arguments': ['-launch']}     # an older record still names it
 
     def pending(self, code):
         return None
@@ -236,7 +229,6 @@ def test_the_game_runs_inside_the_wrappers_with_the_options_and_the_prefix_witho
     proton = tmp_path / 'GE-Proton'
     executable(proton / 'files/bin/wine', '#!/bin/sh\n')
     monkeypatch.setattr('waystone.runtime.game.wine_wrapper', lambda: [])
-    monkeypatch.setattr(launch, 'has_nvidia', lambda: False)
     monkeypatch.setattr(launch, 'renew', lambda *args: None)           # no Battle.net in a test
 
     settings = Settings()
@@ -265,7 +257,7 @@ def test_the_game_runs_inside_the_wrappers_with_the_options_and_the_prefix_witho
     assert game['argv'][0] == str(umu) and game['argv'][1:3] == [str(tmp_path / 'bridge.exe'),
                                                                   '--launch-protected-file']
     assert game['argv'][5].endswith('\\_classic_era_\\Wow.exe')
-    assert game['argv'][6:] == ['-launcherlogin', '-uid', 'wow_classic_era', '-fromproductconfig',
+    assert game['argv'][6:] == ['-launcherlogin', '-uid', 'wow_classic_era',
                                 '-d3d11', '-console', '-config', 'Era.wtf', '-initialgamemode=chc']
     env = game['env']
     assert env['MANGOHUD'] == '1' and env['DXVK_HUD'] == 'fps' and env['SHARED'] == 'client'
@@ -307,7 +299,6 @@ def test_a_game_that_does_not_start_points_at_the_launch_options_when_there_are_
         tmp_path, monkeypatch, options, hint):
     from types import SimpleNamespace
     monkeypatch.setattr(launch, 'renew', lambda *args: None)
-    monkeypatch.setattr(launch, 'has_nvidia', lambda: False)
 
     class Runtime:
         bridge = None
@@ -364,7 +355,7 @@ def test_paths_in_variables_expand_as_in_a_shell(monkeypatch, tmp_path):
     from waystone.launch_options import linux_environment
     monkeypatch.setenv('HOME', str(tmp_path))
     options = LinuxOptions(environment={'MANGOHUD_CONFIGFILE': '~/mango.conf', 'DXVK_CONFIG_FILE': '$HOME/dxvk.conf'})
-    variables = linux_environment(options, nvidia=False, log_dir=tmp_path)
+    variables = linux_environment(options, log_dir=tmp_path)
     assert variables['MANGOHUD_CONFIGFILE'] == f'{tmp_path}/mango.conf'
     assert variables['DXVK_CONFIG_FILE'] == f'{tmp_path}/dxvk.conf'
 
@@ -373,5 +364,16 @@ def test_an_unset_variable_expands_to_nothing_as_in_a_shell(monkeypatch, tmp_pat
     from waystone.launch_options import linux_environment
     monkeypatch.delenv('WAYSTONE_UNSET', raising=False)
     options = LinuxOptions(environment={'LD_LIBRARY_PATH': '/x:$WAYSTONE_UNSET', 'A': '${WAYSTONE_UNSET}b'})
-    variables = linux_environment(options, nvidia=False, log_dir=tmp_path)
+    variables = linux_environment(options, log_dir=tmp_path)
     assert variables['LD_LIBRARY_PATH'] == '/x:' and variables['A'] == 'b'
+
+
+def test_switches_turned_off_before_they_became_variables_stay_off(config):
+    config.write_text(json.dumps({'root': '/games', 'linux_launch': {
+        'ntsync': False, 'nvapi': False, 'environment': {'A': '1', 'PROTON_DISABLE_NVAPI': '0'}}}))
+    loaded = Settings.load()
+    # A variable the user set already wins.
+    assert loaded.linux_launch.environment == {'A': '1', 'PROTON_DISABLE_NVAPI': '0', 'PROTON_NO_NTSYNC': '1'}
+    assert not loaded.problems
+    config.write_text(json.dumps({'root': '/games', 'linux_launch': {'ntsync': True, 'nvapi': True}}))
+    assert Settings.load().linux_launch == LinuxOptions()

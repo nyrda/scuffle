@@ -17,15 +17,19 @@ from .protobuf import blob, fields, first, integer, varint
 PORT = 1119
 CONNECTION_SERVICE = 0x65446991
 AUTHENTICATION_SERVICE = 0xc02f8216
+ACCOUNT_SERVICE = 0x22dc2464         # bnet.protocol.account.v2.client.AccountService
 RESPONSE_SERVICE = 254
 CONNECT = LOGON = LOGON_COMPLETE = 1
 VERIFY_AUTH_TOKEN = 2
 GENERATE_AUTH_TOKEN = 3
 EXTERNAL_CHALLENGE = 4
+GET_GAME_ACCOUNT_INFO = 201
 WOW_TITLE = 0x576f57
 PLATFORM = 'Wn64'
 LOCALE = 'enUS'
 CHALLENGES = (b'web_auth_url', b'legal_form', b'authenticator')
+# Game account regions as the launch settings name them. Battle.net writes REGION=EU for region 2.
+GAME_REGIONS = {1: 'US', 2: 'EU', 3: 'KR', 4: 'TW', 5: 'CN'}
 
 _sdk_version = integer(1, 8) + integer(2, 1) + integer(3, 0) + blob(4, '8.1.0')
 _protocol_version = integer(1, 3) + integer(2, 18) + integer(3, 2) + blob(4, '3.18.2-dd0d4dc339')
@@ -38,6 +42,12 @@ class CredentialRejected(RuntimeError):
 
 def log(*parts):
     print(*parts, file=sys.stderr, flush=True)
+
+
+def launch_name(name) -> bool:
+    """Whether a game account name can go into the launch settings as it is."""
+    return (isinstance(name, str) and 0 < len(name) <= 64 and name.strip() == name
+            and all(32 <= ord(c) < 127 for c in name))
 
 
 class BGS:
@@ -118,7 +128,7 @@ class BGS:
 
     def logon(self, credential, device, version):
         self.request_logon(device, version, credential)
-        self.await_logon(credential)
+        return self.await_logon(credential)
 
     def web_challenge(self, device, version):
         """Start a logon without a credential and return the browser sign-in URL."""
@@ -145,7 +155,7 @@ class BGS:
         # The RPC succeeds even for an invalid ticket. The server then answers
         # with a new challenge or a failed OnLogonComplete instead.
         try:
-            self.await_logon(ticket)
+            return self.await_logon(ticket)
         except CredentialRejected as error:
             raise RuntimeError(f'Battle.net did not accept the sign-in ticket ({error}). '
                                'Sign in again, since each ticket works only once') from None
@@ -163,7 +173,7 @@ class BGS:
                 record = fields(first(body, 2))
                 log('login_ticket_present', bool(first(record, 7)),
                     'login_ticket_echoes_input', first(record, 7) == credential)
-                return
+                return record
             if isinstance(first(body, 2), bytes) and first(body, 2) in CHALLENGES:
                 self.reject_challenge()
             if method == LOGON_COMPLETE and isinstance(first(body, 1), int) and first(body, 1):
@@ -192,6 +202,30 @@ class BGS:
             self.socket.settimeout(15)
         raise CredentialRejected('BGS requires an interactive authentication challenge')
 
+    def game_accounts(self, record):
+        """The WoW accounts under this Battle.net login, named as the game knows them.
+
+        LogonRecord lists their handles. GetGameAccountInfo names each one, as the game's own
+        account choice does. None means the names could not be read, which is not an empty list.
+        """
+        accounts = []
+        try:
+            for handle in (value for number, _, value in record if number == 2):
+                items = fields(handle)
+                if first(items, 2) != WOW_TITLE:
+                    continue
+                info = fields(first(self.call(ACCOUNT_SERVICE, GET_GAME_ACCOUNT_INFO, blob(1, handle)), 1, b''))
+                name = first(info, 2, b'').decode(errors='replace')
+                identifier, region = first(items, 1), GAME_REGIONS.get(first(items, 3))
+                if not isinstance(identifier, int) or region is None or not launch_name(name):
+                    raise ValueError('unusable game account')
+                accounts.append({'id': identifier, 'name': name, 'region': region})
+        except (RuntimeError, ValueError, OSError) as error:
+            log('game_accounts_unavailable', type(error).__name__)
+            return None
+        log('game_accounts', 'count', len(accounts))
+        return accounts
+
     def generate_auth_token(self, title):
         token = first(self.call(AUTHENTICATION_SERVICE, GENERATE_AUTH_TOKEN, integer(1, title)), 1)
         if not isinstance(token, bytes) or not token:
@@ -217,9 +251,11 @@ def login(vault, host, version, sign_in):
     try:
         bgs.connect()
         bgs.web_challenge(device, version)
-        bgs.verify_web_ticket(ticket)
+        record = bgs.verify_web_ticket(ticket)
         vault.save_session(bgs.generate_auth_token(WOW_TITLE))
         log('unused_broker_credential_saved_protected')
+        # After the credential is saved, so a failed lookup never costs the sign-in.
+        vault.save_accounts(first(record, 1), bgs.game_accounts(record))
     finally:
         bgs.socket.close()
 
@@ -233,7 +269,7 @@ def renew(vault, host, version):
         bgs.connect()
         device = vault.device_id()
         log('logon_device_id', 'bytes', len(device))
-        bgs.logon(credential, device, version)
+        record = bgs.logon(credential, device, version)
         # Keep a distinct, unused SSO ticket for the next broker connection.
         # LogonRecord.login_ticket can echo the already consumed input.
         vault.save_session(bgs.generate_auth_token(WOW_TITLE))
@@ -242,5 +278,6 @@ def renew(vault, host, version):
         log('wow_auth_token_generated', 'bytes', len(token))
         vault.save_game_token(token)
         log('game_credential_saved_protected')
+        vault.save_accounts(first(record, 1), bgs.game_accounts(record))
     finally:
         bgs.socket.close()

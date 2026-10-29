@@ -51,6 +51,10 @@ nix run . -- --help  # the command line
 On first start, choose an installation folder in the settings. Waystone owns
 that folder. Do not let Battle.net manage it at the same time.
 
+While a game runs, its button reads **Close game**, which closes it as its
+window's close button does. Hold Shift and the button reads **Force quit**,
+which ends the game at once, for a game that hangs.
+
 On Linux, Waystone uses a Proton build and `umu-run` from the usual places,
 such as `~/.steam/root/compatibilitytools.d`. Pick another Proton build in the
 settings. All clients share one Wine prefix in `~/.local/share/waystone/prefix`.
@@ -69,9 +73,8 @@ On Linux the **Launch** card in the settings sets what runs around every client:
 - GameMode runs the game through `gamemoderun`.
 - MangoHud sets `MANGOHUD=1`, which works through umu's container.
 - An option that cannot work with the chosen Proton build or this machine,
-  such as Wayland, HDR or ntsync, is greyed out and shown off. Its choice is
+  such as Wayland or HDR, is greyed out and shown off. Its choice is
   kept for a build or tool that has it.
-- NVIDIA Reflex appears only on a machine with an NVIDIA GPU.
 - The Proton log goes to `~/.local/share/waystone/logs/steam-battlenet.log`.
 - Environment variables are `NAME=value` lines. A client's own variables win.
 - A wrapper command goes before `umu-run`, as in Steam. For example
@@ -89,6 +92,11 @@ sign in again only when Battle.net ends the session. The session is stored with
 DPAPI under `~/.local/share/waystone/session` with owner-only permissions.
 Waystone never reads the Battle.net app's own saved login, so both stay signed
 in.
+
+If your Battle.net login has several WoW accounts, the game asks which one to
+use. The sidebar then shows a choice next to **Signed in**. Pick an account
+there and the game starts with it. **Ask in the game** brings the game's
+question back. With one account the game never asks.
 
 ## Downloads
 

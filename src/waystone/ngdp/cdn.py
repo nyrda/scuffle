@@ -255,8 +255,10 @@ class CDNClient:
         self.throttle = throttle or Throttle()
         if timeout <= 0 or stall_timeout <= 0:
             raise ValueError("Timeouts must be positive")
-        self.timeout, self.retries, self.backoff = min(timeout, stall_timeout), retries, backoff
-        self.stall_timeout = stall_timeout
+        # A CDN edge can take several seconds to fetch an uncached range from its origin,
+        # so the first byte gets timeout. Once the body flows, silence for stall_timeout fails over.
+        self.timeout, self.retries, self.backoff = timeout, retries, backoff
+        self.stall_timeout = min(timeout, stall_timeout)
         self._transfer = threading.local()
         self._mirror_turn = itertools.count()
         self.metadata_base = metadata_base or f"https://{region}.version.battle.net/v2/products/{product}"
@@ -350,8 +352,14 @@ class CDNClient:
             progress(0)
         request_started = time.monotonic()
         with self._connection(url) as (connection, target):
+            if getattr(connection, "sock", None) is not None:
+                connection.sock.settimeout(self.timeout)     # a pooled connection still has the body's
             connection.request("GET", target, headers=headers)
+            # Kept before getresponse, which detaches it for a Connection: close response.
+            sock = getattr(connection, "sock", None)
             response = connection.getresponse()
+            if sock is not None:
+                sock.settimeout(self.stall_timeout)
             if response.status not in (200, 206):
                 raise HTTPStatusError(response.status, url)
             if response.getheader("Content-Encoding", "identity").lower() != "identity":
@@ -686,6 +694,8 @@ class CDNClient:
         try:
             db.execute("PRAGMA journal_mode=WAL")
             db.execute("PRAGMA synchronous=FULL")
+            # The log shrinks back after a large import instead of keeping its peak size.
+            db.execute("PRAGMA journal_size_limit=67108864")
             with db:
                 yield db
         finally:
@@ -795,33 +805,83 @@ class CDNClient:
         finally:
             temporary.unlink(missing_ok=True)
 
-    def _import_index(self, key: str, *, group: bool = False, loose: bool = False) -> int:
-        key = _key(key)
-        tag = ("group:" if group else "loose:" if loose else "archive:") + key
-        with self._database() as db:
-            if db.execute("SELECT 1 FROM imported WHERE key=?", (tag,)).fetchone():
-                return 0
+    def _index_tag(self, key: str, *, group: bool = False, loose: bool = False) -> str:
+        return ("group:" if group else "loose:" if loose else "archive:") + key
+
+    def _index_rows(self, key: str, path: Path, *, group: bool = False,
+                    loose: bool = False) -> Iterator[tuple[bytes, str, int, int]]:
+        for ekey, location in parse_index(path, key, archive="" if loose else key,
+                                          archives=self._archives if group else None,
+                                          expected_offsets=6 if group else 0 if loose else 4):
+            yield ekey, location.archive, location.offset, location.size
+
+    def _fetch_index(self, key: str, *, group: bool = False, loose: bool = False) -> Path:
         path = self.cache / "indexes" / (key + ".index")
         def verify(index):
             # Exhaustion validates every page before the file enters the cache.
-            for _ in parse_index(index, key, archive="" if loose else key,
-                                 archives=self._archives if group else None,
-                                 expected_offsets=6 if group else 0 if loose else 4):
+            for _ in self._index_rows(key, index, group=group, loose=loose):
                 pass
-        self._download(self._urls(key, suffix=".index"), path,
-                       limit=512 * 1024 * 1024, validator=verify, resume=False)
+        return self._download(self._urls(key, suffix=".index"), path,
+                              limit=512 * 1024 * 1024, validator=verify, resume=False)
+
+    def _import_index(self, key: str, *, group: bool = False, loose: bool = False) -> int:
+        key = _key(key)
+        tag = self._index_tag(key, group=group, loose=loose)
+        with self._database() as db:
+            if db.execute("SELECT 1 FROM imported WHERE key=?", (tag,)).fetchone():
+                return 0
+        path = self._fetch_index(key, group=group, loose=loose)
         count = 0
         with self._database() as db:
-            rows = ((ekey, location.archive, location.offset, location.size)
-                    for ekey, location in parse_index(path, key, archive="" if loose else key,
-                                                      archives=self._archives if group else None,
-                                                      expected_offsets=6 if group else 0 if loose else 4))
+            rows = self._index_rows(key, path, group=group, loose=loose)
             # One validated index is one transaction. Interrupted imports resume.
             while batch := list(itertools.islice(rows, 4096)):
                 db.executemany("INSERT OR IGNORE INTO objects VALUES (?,?,?,?)", batch)
                 count += len(batch)
             db.execute("INSERT OR IGNORE INTO imported VALUES (?)", (tag,))
         return count
+
+    def _import_archive_indexes(self, progress: Callable[[int, int], None] | None) -> None:
+        """Import every archive's own index, for builds whose archive-group index is not published.
+
+        Inserting a thousand indexes one by one rewrites most of the table's pages each time.
+        Their rows are appended to a staging file instead, then sorted into the table at once.
+        Indexes download in parallel, and only this thread writes.
+        """
+        staging = self._db_path.with_name(self._db_path.stem + ".staging.sqlite3")
+        with self._database() as db:
+            done = {row[0] for row in db.execute("SELECT key FROM imported")}
+        staged = sqlite3.connect(staging, timeout=120)
+        try:
+            staged.execute("PRAGMA synchronous=FULL")
+            with staged:
+                staged.execute("CREATE TABLE IF NOT EXISTS objects (ekey BLOB NOT NULL, archive TEXT NOT NULL, offset INTEGER NOT NULL, size INTEGER NOT NULL)")
+                staged.execute("CREATE TABLE IF NOT EXISTS imported (key TEXT PRIMARY KEY) WITHOUT ROWID")
+            done |= {row[0] for row in staged.execute("SELECT key FROM imported")}
+            missing = [key for key in self._archives if self._index_tag(key) not in done]
+            total = len(self._archives)
+            if progress:
+                progress(total - len(missing), total)      # also when an earlier run staged them all
+            with ThreadPoolExecutor(max_workers=self.workers) as executor:
+                futures = {executor.submit(self._fetch_index, key): key for key in missing}
+                for count, future in enumerate(as_completed(futures), total - len(missing) + 1):
+                    key = futures[future]
+                    path = future.result()
+                    # A staged index and its tag commit together, so an interrupted import resumes.
+                    with staged:
+                        staged.executemany("INSERT INTO objects VALUES (?,?,?,?)", self._index_rows(key, path))
+                        staged.execute("INSERT OR IGNORE INTO imported VALUES (?)", (self._index_tag(key),))
+                    if progress:
+                        progress(count, total)
+        finally:
+            staged.close()
+        with self._database() as db:
+            db.execute("ATTACH DATABASE ? AS staging", (str(staging),))
+            # Sorted rows append to the table's end. Merging again after a crash changes nothing.
+            db.execute("INSERT OR IGNORE INTO objects SELECT ekey,archive,offset,size FROM staging.objects ORDER BY ekey")
+            db.execute("INSERT OR IGNORE INTO imported SELECT key FROM staging.imported")
+        for suffix in ("", "-journal"):
+            staging.with_name(staging.name + suffix).unlink(missing_ok=True)
 
     def prepare_indexes(self, progress: Callable[[int, int], None] | None = None) -> None:
         """Load loose and grouped/archive indexes, resuming validated imports."""
@@ -833,21 +893,18 @@ class CDNClient:
             for key in self._archive_config.get("file-index", []):
                 self._import_index(key, loose=True)
             groups = self._archive_config.get("archive-group", [])
+            imported = False
             if groups:
                 try:
                     self._import_index(groups[0], group=True)
-                    self._prepared = True
-                    return
+                    imported = True
                 except HTTPStatusError as error:
                     if error.status not in (403, 404):
                         raise
-            total = len(self._archives)
-            with ThreadPoolExecutor(max_workers=self.workers) as executor:
-                futures = {executor.submit(self._import_index, key): key for key in self._archives}
-                for done, future in enumerate(as_completed(futures), 1):
-                    future.result()
-                    if progress:
-                        progress(done, total)
+            if not imported:
+                self._import_archive_indexes(progress)
+            with self._database() as db:
+                db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             self._prepared = True
 
     def locate(self, ekey: bytes) -> Location | None:

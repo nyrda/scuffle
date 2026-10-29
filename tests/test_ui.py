@@ -1,6 +1,7 @@
 """Check the sign-in page's clipboard handling with a real Qt clipboard."""
 import os
 import sys
+import time
 
 import pytest
 
@@ -105,7 +106,7 @@ def test_clicking_the_selected_client_leaves_the_settings(qt, window):
 def test_queue_controls_survive_progress_updates(qt):
     from waystone.downloads import RUNNING, Job
     queue = pages.QueuePage()
-    job = Job('wow', 'install', status=RUNNING, done_bytes=1, total_bytes=100)
+    job = Job('wow', 'install', status=RUNNING, stage='downloading', done_bytes=1, total_bytes=100)
     queue.show_jobs([job], {'wow': 'World of Warcraft'})
     pause = queue.cards['wow']['toggle']
     job.done_bytes = 2
@@ -119,7 +120,7 @@ def test_narrow_download_bar_keeps_its_progress_and_shortens_the_details_whole(q
     from waystone.downloads import RUNNING, Job
     from waystone.ui.widgets import DownloadBar
     bar = DownloadBar()
-    job = Job('wow_classic', 'install', status=RUNNING, done_bytes=46_200_000_000,
+    job = Job('wow_classic', 'install', status=RUNNING, stage='downloading', done_bytes=46_200_000_000,
               total_bytes=75_800_000_000, speed=22_600_000)
     bar.show_job(job, 'Mists of Pandaria Classic', waiting=1)
     bar.resize(480, 64)
@@ -286,6 +287,9 @@ def test_progress_after_the_transfer_names_the_stage_instead_of_a_time(qt):
     assert progress_variants(job) == ['Writing game files…']
     job.stage, job.total_bytes = 'seeding_cdn_index', 0
     assert progress_variants(job) == ['Fetching download indexes…']
+    # Known sizes stay out of a long step before the transfer, which counts what it does instead.
+    job.stage, job.total_bytes, job.done_bytes, job.step = 'cdn_indexes', 91_200_000_000, 90_800_000_000, (1200, 1411)
+    assert progress_variants(job) == ['Fetching download indexes · 1,200 of 1,411', 'Fetching download indexes…']
 
 
 def test_files_cannot_be_checked_while_the_game_runs(qt, window, tmp_path, monkeypatch):
@@ -852,14 +856,13 @@ def test_an_option_that_cannot_work_here_shows_off_and_keeps_its_choice(qt, styl
     window.settings.linux_launch = LinuxOptions(gamemode=True, wayland=True)
     window.open_settings()
     launch = window.settings_page.launch
-    # No gamemoderun, and a Proton build without Wayland or an ntsync switch.
-    for name, note in [('gamemode', 'gamemoderun was not found'), ('wayland', 'Not in this Proton build'),
-                       ('ntsync', 'Not adjustable')]:
+    # No gamemoderun, and a Proton build without Wayland.
+    for name, note in [('gamemode', 'gamemoderun was not found'), ('wayland', 'Not in this Proton build')]:
         box = launch.boxes[name]
         assert not box.isChecked() and not box.isEnabled() and note in launch.notes[name].text()
     launch.boxes['log'].setChecked(True)
     saved = Settings.load().linux_launch
-    assert saved.log and saved.gamemode and saved.wayland and saved.ntsync
+    assert saved.log and saved.gamemode and saved.wayland
     # Once gamemoderun is installed, the saved choice shows again.
     (programs_on_path / 'gamemoderun').write_text('#!/bin/sh\n')
     (programs_on_path / 'gamemoderun').chmod(0o755)
@@ -1390,7 +1393,8 @@ def test_uninstall_menu_is_only_available_for_idle_installed_clients(qt, window,
     if blocker == 'running':
         window.phases['wow'] = 'Running'
     elif blocker == 'external_running':
-        monkeypatch.setattr(window.library, 'running', lambda code: code == 'wow')
+        monkeypatch.setattr(window.library, 'running', lambda code, processes=None: code == 'wow')
+        window._running = window.scan_running(window.library)
     elif blocker in {'queued', 'paused', 'failed'}:
         window.downloads.jobs.append(Job('wow', 'update', status=blocker))
     elif blocker == 'pending':
@@ -1478,3 +1482,86 @@ def test_uninstall_completion_refreshes_storage_and_not_installed_notice(qt, win
     assert measured == [True] and window.status(code)[0] == 'Not installed'
     assert 'uninstalled' in window.client_page.banner.text.text()
     assert 'Waystone-backup-wow-test' in window.client_page.banner.text.text()
+
+
+def test_the_wow_account_choice_shows_only_with_several_accounts_and_is_saved(qt, window, tmp_path):
+    from waystone.auth.vault import Vault
+    from waystone.settings import Settings
+    vault = Vault(tmp_path / 'data_dir' / 'session', bridge=None)
+    vault.directory.mkdir(parents=True)
+    vault.session.write_bytes(b'protected')
+    main, second = {'id': 11, 'name': 'WANDERER', 'region': 'EU'}, {'id': 12, 'name': 'WoW1', 'region': 'EU'}
+    vault.save_accounts(5, [main])
+    window.refresh()
+    assert window.game_account_row.isHidden()
+    vault.save_accounts(5, [main, second])
+    window.refresh()
+    assert not window.game_account_row.isHidden()
+    assert 'Ask in the game' in window.game_account_button.text()
+    actions = {action.text(): action for action in window.game_account_menu().actions()}
+    assert actions['Ask in the game'].isChecked()
+    actions['WoW1 · EU'].trigger()
+    assert Settings.load().game_accounts == {'5': 12} and 'WoW1' in window.game_account_button.text()
+    actions = {action.text(): action for action in window.game_account_menu().actions()}
+    assert actions['WoW1 · EU'].isChecked() and not actions['Ask in the game'].isChecked()
+    actions['Ask in the game'].trigger()
+    assert Settings.load().game_accounts == {}
+    # Signed out, the choice stays for the same login and the list is gone.
+    vault.forget()
+    window.refresh()
+    assert window.game_account_row.isHidden()
+
+
+def test_a_running_game_closes_and_shift_turns_the_button_into_force_quit(qt, window, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication
+    from waystone.runtime.game import ASKED, NO_WINDOW
+    from waystone.ui import app as ui
+    window.settings.root = str(tmp_path / 'games')
+    window.open_library()
+    window.downloads.shutdown()
+    installed(window, monkeypatch, ['wow'])
+    # A game Waystone did not start counts too, such as one left from an earlier window.
+    monkeypatch.setattr(window.library, 'running', lambda code, processes=None: code == 'wow')
+    monkeypatch.setattr(window.library, 'game_processes', lambda code: [4242])
+    window._running = window.scan_running(window.library)      # as the background scan finds it
+    results, calls = [NO_WINDOW, ASKED], []
+
+    def close(executable, processes, *, force=False):
+        calls.append((processes, force))
+        return results.pop(0)
+    monkeypatch.setattr(window, 'launcher', lambda: SimpleNamespace(runtime=SimpleNamespace(close=close)))
+    shift = {'held': False}
+    monkeypatch.setattr(QApplication, 'queryKeyboardModifiers',
+                        staticmethod(lambda: Qt.ShiftModifier if shift['held'] else Qt.NoModifier))
+    window.populate()
+    window.client_list.select('wow')
+    window.refresh()
+    page = window.client_page
+    assert page.primary.text() == 'Close game' and page.primary.isEnabled()
+    assert 'Running' in window.client_list.rows['wow'].status.text()
+
+    def click_and_wait(count):
+        page.primary.click()
+        deadline = time.monotonic() + 5
+        while len(calls) < count:
+            qt.processEvents()
+            assert time.monotonic() < deadline
+        qt.processEvents()
+    # A hung game has no window to close, so the banner points at Force quit.
+    click_and_wait(1)
+    assert calls[-1] == ([4242], False) and 'Force quit' in page.banner.text.text()
+    shift['held'] = True
+    window.refresh()
+    assert page.primary.text() == 'Force quit' and page.primary.isEnabled()
+    click_and_wait(2)
+    assert calls[-1] == ([4242], True)
+    shift['held'] = False
+    window.closing['wow'] = time.monotonic()
+    window.refresh()
+    assert page.primary.text() == 'Closing…' and not page.primary.isEnabled()
+    # A game that has not quit after the grace time gets the same hint.
+    monkeypatch.setattr(ui, 'CLOSE_GRACE', 0)
+    window.close_overdue('wow', window.closing['wow'])
+    assert 'wow' not in window.closing and 'Force quit' in page.banner.text.text()

@@ -33,6 +33,7 @@ class Job:
     result: dict = field(default_factory=dict)
     cancel_requested: bool = False
     held: bool = False            # paused by Waystone while a game runs, not by the user
+    step: tuple[int, int] | None = None   # done and total of a stage that is not the transfer
     keep_settings: bool = True
 
     @property
@@ -362,8 +363,10 @@ class DownloadManager:
             stage = event['stage']
             if stage != job.stage:
                 rate = RateSmoother()
-                job.speed = 0.0
+                job.speed, job.step = 0.0, None
             job.stage = stage
+            if 'total' in event and 'total_bytes' not in event:
+                job.step = event['done'], event['total']
             if 'total_bytes' in event:
                 job.done_bytes, job.total_bytes = event['bytes'], event['total_bytes']
                 job.speed = rate.update(event.get('received', job.done_bytes)) if stage == 'downloading' else 0.0

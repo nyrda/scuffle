@@ -34,8 +34,8 @@
         dependencies = [ python.pkgs.pyside6 ];
         makeWrapperArgs = [
           "--set" "WAYSTONE_BRIDGE" "${bridge}/libexec/wow_auth_bridge.exe"
-          # NixOS needs the Nix build of umu-launcher for its FHS container.
-          "--prefix" "PATH" ":" (pkgs.lib.makeBinPath [ pkgs.umu-launcher ])
+          # NixOS needs the Nix build of umu-launcher for its FHS container. nsenter closes a game in it.
+          "--prefix" "PATH" ":" (pkgs.lib.makeBinPath [ pkgs.umu-launcher pkgs.util-linux ])
         ];
         nativeCheckInputs = [ python.pkgs.pytestCheckHook ];
         pythonImportsCheck = [ "waystone.library" "waystone.launch" "waystone.cli" ];

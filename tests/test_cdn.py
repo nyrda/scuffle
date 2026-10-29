@@ -9,6 +9,7 @@ import socket
 import struct
 import tempfile
 import threading
+import time
 import os
 import unittest
 from unittest import mock
@@ -261,6 +262,51 @@ class CDNTests(unittest.TestCase):
             with self.assertRaisesRegex(IntegrityError, "ignored archive Range"):
                 client.get_range(Location(archive, 4, 5))
 
+    def test_a_slow_first_byte_waits_while_a_stalled_body_fails_fast(self):
+        # A CDN edge fetching an uncached range from its origin answers late but then streams.
+        archive = "34" * 16
+        path = f"/tpr/wow/data/34/34/{archive}"
+        def late(handler):
+            time.sleep(0.6)
+            handler.send_response(206)
+            handler.send_header("Content-Range", "bytes 4-8/16")
+            handler.send_header("Content-Length", "5")
+            handler.end_headers()
+            handler.wfile.write(b"45678")
+        def stalled(handler):
+            handler.send_response(206)
+            handler.send_header("Content-Range", "bytes 4-8/16")
+            handler.send_header("Content-Length", "5")
+            handler.end_headers()
+            handler.wfile.write(b"45")
+            handler.wfile.flush()
+            time.sleep(1.5)
+        routes = {path: late}
+        with server(routes) as (root, seen):
+            client = self.client(root, stall_timeout=0.3)
+            self.assertEqual(client.get_range(Location(archive, 4, 5)), b"45678")
+            routes[path] = stalled
+            started = time.monotonic()
+            with self.assertRaises(TimeoutError):
+                client.get_range(Location(archive, 4, 5))
+            self.assertLess(time.monotonic() - started, 1.4)   # both tries gave up after the stall time
+            # A response that closes its connection hands the socket over, with the same limit.
+            def closing(handler):
+                handler.close_connection = True
+                handler.send_response(206)
+                handler.send_header("Connection", "close")
+                handler.send_header("Content-Range", "bytes 4-8/16")
+                handler.send_header("Content-Length", "5")
+                handler.end_headers()
+                handler.wfile.write(b"45")
+                handler.wfile.flush()
+                time.sleep(1.5)
+            routes[path] = closing
+            started = time.monotonic()
+            with self.assertRaises(TimeoutError):
+                client.get_range(Location(archive, 4, 5))
+            self.assertLess(time.monotonic() - started, 1.4)
+
     def test_short_range_rejected(self):
         archive = "12" * 16
         path = f"/tpr/wow/data/12/12/{archive}"
@@ -388,6 +434,36 @@ class CDNTests(unittest.TestCase):
             with self.assertRaises(HTTPStatusError) as caught:
                 failed.prepare_indexes()
             self.assertEqual(caught.exception.status, 403)
+
+    def test_archive_indexes_import_once_a_failed_one_answers_and_leave_no_staging(self):
+        objects = [blte(f"object {n}".encode()) for n in range(3)]
+        archives = [index_file([(ekey, len(data), 0)]) for ekey, data in objects]
+        routes = {f"/tpr/wow/data/{key[:2]}/{key[2:4]}/{key}.index": data for key, data in archives}
+        failing = next(iter(routes))
+        answer = routes[failing]
+        def forbidden(handler):
+            handler.send_response(403)
+            handler.send_header("Content-Length", "0")
+            handler.end_headers()
+        routes[failing] = forbidden
+        config = {"archives": [key for key, _ in archives]}
+        with server(routes) as (root, _):
+            client = self.client(root)
+            client.configure_archives(config)
+            with self.assertRaises(HTTPStatusError):
+                client.prepare_indexes()
+            # Indexes that did arrive wait in staging. Lookups only see a complete import.
+            with client._database() as db:
+                self.assertEqual(db.execute("SELECT COUNT(*) FROM objects").fetchone()[0], 0)
+            routes[failing] = answer
+            second = self.client(root)
+            second.configure_archives(config)
+            counts = []
+            second.prepare_indexes(lambda done, total: counts.append((done, total)))
+            self.assertEqual(counts[-1], (3, 3))
+            for (ekey, data), (archive, _) in zip(objects, archives):
+                self.assertEqual(second.locate(ekey), Location(archive, 0, len(data)))
+        self.assertEqual([path.name for path in (self.cache / "indexes").glob("*staging*")], [])
 
     def test_required_asset_403_is_not_ignored(self):
         ekey, encoded = blte(b"required asset")

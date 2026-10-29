@@ -70,6 +70,21 @@ def main(output: Path) -> None:
     window.updates.clear()
     window.client_list.select('wow')
     shot('01-installed-ready')
+    # Signed in with two WoW accounts: the game asks until one is picked in the sidebar.
+    signed_in, game_accounts = window.signed_in, window.game_accounts
+    window.signed_in = lambda: True
+    window.game_accounts = lambda: {'owner': 1, 'game_accounts': [
+        {'id': 11, 'name': 'WANDERER', 'region': 'EU'}, {'id': 12, 'name': 'WoW1', 'region': 'EU'}]}
+    shot('01d-two-accounts-ask')
+    window.settings.game_accounts = {'1': 11}
+    shot('01e-two-accounts-chosen')
+    menu = window.game_account_menu()
+    menu.popup(window.game_account_button.mapToGlobal(window.game_account_button.rect().bottomLeft()))
+    application.processEvents()
+    menu.grab().save(str(output / '01f-account-menu.png'))
+    menu.close()
+    window.settings.game_accounts = {}
+    window.signed_in, window.game_accounts = signed_in, game_accounts
     window.storage['clients']['wow'] = 92_400_000_000
     window.open_uninstall()
     shot('01b-uninstall-confirmation')

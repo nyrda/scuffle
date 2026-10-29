@@ -135,10 +135,6 @@ class LaunchSettings(QWidget):
         ('mangohud', 'MangoHud', 'Shows the MangoHud overlay with frame rate and frame times.'),
         ('wayland', 'Wayland', 'Runs the game as a native Wayland window instead of through XWayland.'),
         ('hdr', 'HDR', 'Lets the game output HDR. Needs Wayland or gamescope and an HDR display.'),
-        ('nvapi', 'NVIDIA Reflex', 'Gives the game NVIDIA\'s NVAPI, which it uses for Reflex. On is Proton\'s '
-                                   'default. Turn it off if the game fails to start.'),
-        ('ntsync', 'ntsync', 'Uses the kernel\'s ntsync driver for faster thread synchronization. '
-                             'Turn it off only to rule it out when the game misbehaves.'),
         ('log', 'Proton log', 'Writes a detailed Proton log. It grows quickly, so turn it off again '
                               'once you have it.'),
     ]
@@ -166,12 +162,9 @@ class LaunchSettings(QWidget):
         toggles.setVerticalSpacing(2)
         self.boxes: dict[str, QCheckBox] = {}
         self.notes: dict[str, QWidget] = {}
-        # Only an NVIDIA GPU has NVAPI to offer. The choice stays saved for one.
-        self.nvidia = options_module.has_nvidia()
-        shown = [t for t in self.TOGGLES if t[0] != 'nvapi' or self.nvidia]
         # What the user chose. A greyed out box shows off, and its choice waits here for a build that has it.
         self.choices: dict[str, bool] = {}
-        for index, (name, text, tip) in enumerate(shown):
+        for index, (name, text, tip) in enumerate(self.TOGGLES):
             box = QCheckBox(text)
             box.setToolTip(tip)
             box.toggled.connect(lambda checked, name=name: self._toggled(name, checked))
@@ -337,8 +330,6 @@ class LaunchSettings(QWidget):
                         else 'MangoHud was not found',
             'wayland': '' if reads('PROTON_ENABLE_WAYLAND') else 'Not in this Proton build',
             'hdr': '' if reads('PROTON_ENABLE_HDR') else 'Not in this Proton build',
-            'ntsync': 'Not adjustable in this build' if not reads('PROTON_NO_NTSYNC')
-                      else '' if Path('/dev/ntsync').exists() else 'The kernel has no ntsync',
         }
         for option, box in self.boxes.items():
             reason = reasons.get(option, '')

@@ -64,6 +64,8 @@ class Settings:
     selected: str = 'wow'
     modes: dict[str, str] = field(default_factory=dict)
     last_played: dict[str, int] = field(default_factory=dict)   # client -> Unix time
+    # Battle.net login -> the id of the WoW account the game starts with. Without one the game asks.
+    game_accounts: dict[str, int] = field(default_factory=dict)
     # Launch options. The Linux ones apply to every client, and each client can add its own.
     linux_launch: LinuxOptions = field(default_factory=LinuxOptions)
     client_launch: dict[str, ClientOptions] = field(default_factory=dict)
@@ -131,6 +133,9 @@ class Settings:
             value = getattr(self, name)
             setattr(self, name, max(low, min(high, value)) if type(value) is int else default)
         self.pause_while_playing = self.pause_while_playing is True
+        accounts = self.game_accounts if isinstance(self.game_accounts, dict) else {}
+        self.game_accounts = {owner: chosen for owner, chosen in accounts.items()
+                              if isinstance(owner, str) and owner.isdigit() and type(chosen) is int}
         self.resume_downloads = self.resume_downloads is True
         from . import catalog
         malformed = [code for code in self.extra_clients + self.hidden_clients if not catalog.is_product(code)]

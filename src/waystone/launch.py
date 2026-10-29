@@ -15,7 +15,7 @@ import webbrowser
 from . import catalog, system
 from .auth.bgs import CredentialRejected, login, renew
 from .auth.vault import Vault
-from .launch_options import ClientOptions, OptionError, has_nvidia, linux_environment, wrapper_command
+from .launch_options import ClientOptions, OptionError, linux_environment, wrapper_command
 from .library import Library, LibraryError
 from .runtime.game import GameRuntime, LinuxRuntime, WindowsRuntime
 from .runtime.proton import Proton, find_protons, find_umu
@@ -107,8 +107,24 @@ def launch_plan(settings: Settings, code: str, *, windows: bool = system.WINDOWS
         wrapper = wrapper_command(settings.linux_launch)
     except OptionError as error:
         raise LaunchError(f'{error} Change it in Settings.') from None
-    environment = linux_environment(settings.linux_launch, options, nvidia=has_nvidia(), log_dir=log_dir())
+    environment = linux_environment(settings.linux_launch, options, log_dir=log_dir())
     return LaunchPlan(arguments, environment, wrapper)
+
+
+def chosen_account(settings: Settings, known: dict | None) -> dict | None:
+    """The WoW account the game starts with, or None to let the game ask.
+
+    A sole account needs no choice. Of several, only the saved choice counts, so an account
+    that is gone or a different Battle.net login falls back to the game's own question.
+    """
+    if not known:
+        return None
+    accounts = known['game_accounts']
+    saved = settings.game_accounts.get(str(known['owner']))
+    if saved is None and len(accounts) == 1:
+        return accounts[0]
+    # A chosen account that is gone never turns into the one left.
+    return next((account for account in accounts if account['id'] == saved), None)
 
 
 class Launcher:
@@ -154,7 +170,9 @@ class Launcher:
             raise LaunchError(f'{entry.label} is already running')
         executable = self.library.executable(code)
         plan = launch_plan(self.settings, code)
-        arguments = entry.launch_arguments(mode, [*(state.get('launch_arguments') or []), *plan.arguments])
+        # The product config's own launch_arguments are not passed. Several clients publish -launch,
+        # which current games reject with a command line error before their window opens.
+        arguments = entry.launch_arguments(mode, plan.arguments)
         version = int(state['version'].rsplit('.', 1)[-1])
         status = status or (lambda text: None)
         with self.vault.locked():
@@ -162,8 +180,10 @@ class Launcher:
             self.renew(version, sign_in)
             status('Starting')
             ack = self.vault.directory / f'.launch-{os.getpid()}-{time.time_ns()}.ack'
+            account = chosen_account(self.settings, self.vault.accounts())
             process = self.runtime.start(executable, arguments, self.vault.token, ack,
-                                         environment=plan.environment, wrapper=plan.wrapper)
+                                         environment=plan.environment, wrapper=plan.wrapper,
+                                         account=(account['name'], account['region']) if account else None)
             try:
                 deadline = time.monotonic() + STARTUP_TIMEOUT
                 while time.monotonic() < deadline:

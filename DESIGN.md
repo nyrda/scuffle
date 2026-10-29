@@ -129,6 +129,35 @@ Content is addressed by encoding key. A key needed by several clients is
 stored once. Cleanup removes keys no installed client references and compacts
 the affected segments.
 
+### CDN requests
+
+Every region row names its CDN hosts. For EU every WoW product currently names
+only `level3.blizzard.com`, so failing over to another host is often not
+possible. A CDN edge that has not cached a range first fetches it from its
+origin, which can take several seconds. Content less popular than Retail's,
+such as Forever's, often takes this path.
+
+- A request waits up to 30 seconds for its first byte.
+- Once the body flows, 5 seconds of silence, or less than 1 KB/s, count as a
+  stall. The request then fails over to the next host or retries.
+- Every object is verified against its key, so any advertised host is safe.
+
+### Archive indexes
+
+A download looks up which CDN archive holds each object. Blizzard often does
+not publish a build's archive-group index, and Forever's builds list about 1400
+archives. Waystone then fetches every archive's own index, about 7 million
+locations in all.
+
+- Indexes download in parallel and are verified before they are cached.
+- One thread appends each index's rows to a staging file, committed with its
+  tag, so an interrupted import resumes.
+- Once all are staged, the rows are sorted into the lookup table in one
+  transaction and the staging file is deleted. Inserting them index by index
+  rewrote most of the table every time. That took minutes and grew the SQLite
+  log to 20 GB.
+- The client shows how many indexes are done.
+
 ## Components
 
 | Module | Responsibility |
@@ -162,6 +191,31 @@ reads its ticket only from `HKCU\Software\Blizzard Entertainment\Battle.net\Laun
 so Waystone writes `WEB_TOKEN` and `ACCOUNT_TS` there right before launch.
 Waystone never reads or uses Battle.net's own saved login.
 
+### WoW account
+
+One Battle.net login can hold several WoW accounts. The game asks which one to
+use unless `GAME_ACCOUNT` names it, as the Battle.net app writes it with
+`REGION`, for example `GAME_ACCOUNT=WANDERER` and `REGION=EU`.
+
+- The logon's `LogonRecord` lists the login's game account handles. For each
+  WoW handle, `GetGameAccountInfo` (method 201 of
+  `bnet.protocol.account.v2.client.AccountService`, hash `0x22dc2464`) returns
+  the name the game knows the account by. This is the same call the game's own
+  account choice makes.
+- The lookup runs after the session and game tickets are saved, so a failure
+  never costs a sign-in or a launch. A failed lookup keeps the last list of the
+  same login. It is never treated as an empty list.
+- The list is kept in `accounts.json` beside the session and removed on sign
+  out. The choice is kept in the settings by the login's account id and names
+  the WoW account by its id, never by its place in the list.
+- A sole account is passed without asking. With several, the sidebar shows the
+  choice beside "Signed in". Its default is "Ask in the game", which leaves the
+  game's own question. A chosen account that is gone, or another login, falls
+  back to that question and never to another account.
+- The bridge gets `--game-account <name> <region>` before the game's path and
+  writes both values next to the ticket. Without it, the bridge removes
+  `GAME_ACCOUNT`, so a choice from an earlier start cannot linger.
+
 The device fingerprint is derived from a 64-byte seed under
 `HKCU\...\Battle.net\Identity`. Waystone creates it if the prefix has none and
 keeps it afterwards. See [docs/device-id.md](docs/device-id.md).
@@ -179,6 +233,30 @@ The bridge does DPAPI protection, the device fingerprint, the registry write
 and the game start. The game runs in its own runtime and never joins another
 client's container.
 
+### Closing a game
+
+While a game runs, its main button reads **Close game**. Holding Shift turns it
+into **Force quit**. A game that Waystone did not start, for example one left
+from an earlier window, counts too. A worker lists the processes at most every
+2 seconds, so the window never waits for it.
+
+- Close asks the game's visible windows to close, as their close button does.
+  The bridge's `--close-game <path>` finds the game by its file, comparing the
+  volume and file index, because Wine shows one file under different drive
+  letters and several clients name their executable `Wow.exe`. It exits with
+  0 when it asked, 3 when the game runs without a window, and 4 when none runs.
+- On Linux the game's `wineserver` lives in its pressure-vessel container. The
+  bridge joins it through `nsenter` into the game's user and mount namespaces,
+  with the game's own Wine and its Wine and display variables. umu's own
+  re-entry needs `UMU_CONTAINER_NSENTER` at the start, which would make a
+  second client join the first one's container.
+- Force quit sends `SIGKILL` to the game process. It is found by its first
+  argument and its folder, so the bridge and `umu-run`, which name the game in
+  their arguments, are left alone. They exit when the game is gone. On Windows
+  the bridge ends the process.
+- A game without a window, as when it hangs while quitting, or one that has
+  not quit after 20 seconds, gets a banner that points at Force quit.
+
 ## Launch options
 
 Each client has its own game arguments, stored by client code. They apply on
@@ -190,8 +268,10 @@ Windows paths. Waystone sets `-launcherlogin`, `-uid` and `-initialgamemode`
 itself, so the extra arguments may not contain them. Extra arguments that
 repeat or contradict a toggle are passed as typed, since a word may be another
 argument's value, and the page points them out. The game gets
-`-launcherlogin -uid <uid>`, the product configuration's arguments, the user's
-arguments and then the game mode.
+`-launcherlogin -uid <uid>`, the user's arguments and then the game mode. The
+product configuration's `launch_arguments` are left out. Several clients,
+among them Classic, Classic Era and their PTRs, publish `-launch`, and current
+games stop on it with "CommandLine Parse Error" before their window opens.
 
 On Linux, global options shape the game process:
 
@@ -201,8 +281,6 @@ On Linux, global options shape the game process:
 | MangoHud | `MANGOHUD=1` | pressure-vessel imports the host's MangoHud Vulkan layer. The `mangohud` wrapper's `LD_PRELOAD` would only reach umu-run |
 | Wayland | `PROTON_ENABLE_WAYLAND=1` | offered when the chosen Proton build reads it |
 | HDR | `PROTON_ENABLE_HDR=1` | offered when the chosen Proton build reads it |
-| NVIDIA Reflex | `PROTON_DISABLE_NVAPI=1` when off | shown only with an NVIDIA GPU. Proton 9 and later give NVIDIA GPUs NVAPI by default, and current builds no longer read `PROTON_ENABLE_NVAPI`. The game uses NVAPI for Reflex. It has no DLSS |
-| ntsync | `PROTON_NO_NTSYNC=1` when off | on by default in builds that offer the switch, and needs `/dev/ntsync` |
 | Proton log | `PROTON_LOG=1`, `PROTON_LOG_DIR=<data>/logs` | Proton writes `steam-battlenet.log`. Waystone's quiet `WINEDEBUG` is left out so Proton picks its channels |
 
 The game command is the user's wrapper command, `gamemoderun`, `umu-run`, the
@@ -215,8 +293,8 @@ is renewed, so a missing wrapper never spends a sign-in. On Windows only the
 arguments apply.
 
 An option that cannot work with the chosen build or on this machine is greyed
-out and shown off in the settings, while its saved choice is kept. Wayland, HDR
-and ntsync variables are harmless to a build that does not read them, and the
+out and shown off in the settings, while its saved choice is kept. Wayland and
+HDR variables are harmless to a build that does not read them, and the
 game starts without GameMode when `gamemoderun` is missing, so a setting the
 user cannot change never blocks a launch. When the game does not start and any
 launch option is set, the message says the options may be the cause, since the

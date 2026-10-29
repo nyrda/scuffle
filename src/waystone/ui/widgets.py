@@ -48,8 +48,8 @@ STAGES = {
     'materializing': 'Writing game files…', 'cleaning_up': 'Removing unused content…',
     'verifying': 'Checking files…', 'complete': 'Finishing…',
 }
-# Stages after the transfer, when sizes and time left no longer mean anything.
-FINISHING = {'download_complete', 'materializing', 'cleaning_up', 'complete', 'verifying'}
+# The stages that move bytes. Before and after them, sizes and time left mean nothing.
+TRANSFER = {'downloading', 'seeding'}
 
 
 def stage_text(stage: str) -> str:
@@ -60,8 +60,13 @@ def progress_variants(job) -> list[str]:
     """A running or paused job's details, from the fullest to the shortest line."""
     from ..downloads import QUEUED, RUNNING
     running = job.status == RUNNING
-    if running and (job.stage in FINISHING or not job.total_bytes):
-        return [stage_text(job.stage)]
+    if running and (job.stage not in TRANSFER or not job.total_bytes):
+        text = stage_text(job.stage)
+        if job.step:
+            # Fetching a thousand indexes takes minutes, so it counts them.
+            done, total = job.step
+            return [f'{text.removesuffix("…")} · {done:,} of {total:,}', text]
+        return [text]
     if job.status == QUEUED:
         return ['Starts when the current download is done', 'Waiting']
     if not job.total_bytes:
