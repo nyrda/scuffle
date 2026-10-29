@@ -122,6 +122,72 @@ os._exit(0)
         recovered.publish()
 
 
+def test_a_crash_before_a_batch_commits_loses_no_appended_object(tmp_path):
+    root = tmp_path / "install"
+    objects = [blte(f"batched {i}".encode()) for i in range(5)]
+    script = r'''
+import os,sys
+from pathlib import Path
+from waystone.ngdp.store import CascStore
+store=CascStore(Path(sys.argv[1]))
+for pair in sys.argv[2:]:
+    key,data=(bytes.fromhex(x) for x in pair.split(":"))
+    store.put(key,data)
+assert store._db.in_transaction
+os._exit(0)
+'''
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = os.pathsep.join(sys.path)
+    subprocess.run([sys.executable, "-c", script, str(root), *(f"{k.hex()}:{d.hex()}" for k, d in objects)],
+                   check=True, env=environment)
+    with CascStore(root) as recovered:
+        assert [recovered.read(key) for key, _ in objects] == [data for _, data in objects]
+        end = (recovered.data_dir / "data.000").stat().st_size
+        key, data = blte(b"appended after recovery")
+        recovered.put(key, data)
+        assert recovered._location(key)[1] == end
+
+
+def test_a_failed_append_rolls_back_alone_and_leaves_no_bytes(tmp_path, monkeypatch):
+    from waystone.ngdp import store as store_module
+    root = tmp_path / "install"
+    (first, first_data), (failed, failed_data), (last, last_data) = (blte(f"object {i}".encode()) for i in range(3))
+    with CascStore(root) as store:
+        store.put(first, first_data)
+        real_copy = store_module.shutil.copyfileobj
+
+        def broken(source, target, length):
+            target.write(b"half")
+            raise OSError("disk went away")
+        monkeypatch.setattr(store_module.shutil, "copyfileobj", broken)
+        with pytest.raises(OSError, match="disk went away"):
+            store.put(failed, failed_data)
+        monkeypatch.setattr(store_module.shutil, "copyfileobj", real_copy)
+        store.put(last, last_data)
+        assert store._location(last)[1] == len(first_data) + 30
+    with CascStore(root) as store:
+        assert store.read(first) == first_data and store.read(last) == last_data
+        assert not store.has(failed)
+        assert (store.data_dir / "data.000").stat().st_size == len(first_data) + len(last_data) + 60
+
+
+def test_seed_reads_reject_a_corrupt_candidate(tmp_path):
+    root = tmp_path / "source"
+    (good, good_data), (bad, bad_data) = blte(b"intact"), blte(b"damaged on disk")
+    with CascStore(root) as store:
+        store.put(good, good_data)
+        store.put(bad, bad_data)
+        store.publish()
+    with (root / "Data/data/data.000").open("r+b") as stream:
+        stream.seek(-1, os.SEEK_END)
+        stream.write(bytes([bad_data[-1] ^ 1]))
+    with CascSource(root) as source:
+        assert source.read(good) == good_data
+        with pytest.raises(StoreError, match="chunk checksum"):
+            source.read(bad)
+        assert source.read(good) == good_data
+
+
 def test_detects_loss_of_previously_durable_data(tmp_path):
     root = tmp_path / "install"
     key, data = blte(b"durable")
@@ -519,7 +585,10 @@ def test_recovery_preserves_legacy_tail_until_explicit_header_upgrade(tmp_path):
 
 
 @pytest.mark.parametrize("after_commit", [False, True])
-def test_interruption_during_commit_preserves_exact_committed_outcome(tmp_path, after_commit):
+def test_interruption_during_a_batch_commit_keeps_catalogue_and_data_in_agreement(tmp_path, monkeypatch,
+                                                                                   after_commit):
+    from waystone.ngdp import store as store_module
+    monkeypatch.setattr(store_module, "COMMIT_OBJECTS", 1)       # this put commits its batch
     root = tmp_path / "install"
     key, data = blte(b"commit completion before signal delivery")
     with CascStore(root) as store:
@@ -542,20 +611,11 @@ def test_interruption_during_commit_preserves_exact_committed_outcome(tmp_path, 
         store._db = InterruptedCommit()
         with pytest.raises(KeyboardInterrupt, match="controlled commit interruption"):
             store.put(key, data)
-        path = store.data_dir / "data.000"
-        assert store.has(key) is after_commit
-        assert path.stat().st_size == (len(data) + 30 if after_commit else 0)
-        if after_commit:
-            assert store.verify(key)
-    # Exercise the caller's close/checkpoint after catching the signal, then
-    # prove that the resulting durable catalogue and data agree on reopen.
+        # Either way the object is whole and recorded. An unfinished commit finishes at close.
+        assert store.has(key) and store.verify(key)
+        assert (store.data_dir / "data.000").stat().st_size == len(data) + 30
     with CascStore(root) as store:
-        assert store.has(key) is after_commit
-        if after_commit:
-            assert store.read(key) == data
-        else:
-            store.put(key, data)
-            assert store.read(key) == data
+        assert store.read(key) == data
 
 
 def test_checkpoint_does_not_mark_a_short_pending_segment_durable(tmp_path):
@@ -706,9 +766,11 @@ def test_recovery_preserves_native_growth_and_known_appends_after_unknown_gaps(t
     assert store.count == 1
     store.put(appended_key, appended)
     assert store._location(appended_key) == (1, len(before_second), len(appended))
-    # Simulate process exit before close/checkpoint. Recovery must validate the
-    # committed known location beyond the unrecognized native prefix, rather
-    # than losing it when an orphan scan cannot traverse that prefix.
+    # Simulate process exit after the batch committed but before close/checkpoint.
+    # Recovery must validate the committed known location beyond the unrecognized
+    # native prefix, rather than losing it when an orphan scan cannot traverse that
+    # prefix. An uncommitted batch there is lost and fetched again.
+    store._commit()
     store._db.close()
     store._lock_file.close()
     store._closed = True

@@ -22,6 +22,7 @@ import sqlite3
 import struct
 import tempfile
 import threading
+import time
 from typing import BinaryIO, Iterable, Iterator
 
 from .. import system
@@ -32,6 +33,10 @@ STATE_DIR = ".waystone"
 SEGMENT_BITS = 30
 SEGMENT_SIZE = 1 << SEGMENT_BITS
 SPAN_HEADER_SIZE = 30
+# Appends commit their catalogue rows in batches. A crash before a commit loses no
+# object: recovery finds complete spans after the last durable checkpoint.
+COMMIT_OBJECTS = 256
+COMMIT_SECONDS = 1.0
 _INDEX_NAME = re.compile(r"^([0-9a-fA-F]{2})([0-9a-fA-F]{8})\.idx$")
 _DATA_NAME = re.compile(r"^data\.([0-9]{3,4})$")
 _OFFSET_SALTS = (
@@ -289,9 +294,10 @@ def _index_entries(path: Path, bucket: int, *, strict_sorted: bool = False) -> I
 class CascStore:
     """Own encoded objects under ``root/Data/data`` with bounded crash recovery.
 
-    ``put`` checks objects and commits the catalogue without a disk sync per
-    object.  Call ``checkpoint`` every batch; ``publish`` and ``close`` do so
-    automatically. Recovery checks only the tail after each durable checkpoint.
+    ``put`` checks objects and commits the catalogue in batches, without a disk
+    sync.  Call ``checkpoint`` every batch; ``publish`` and ``close`` do so
+    automatically. Recovery checks only the tail after each durable checkpoint,
+    and records the complete spans an unfinished batch left there.
     """
 
     def __init__(self, root: Path):
@@ -301,6 +307,8 @@ class CascStore:
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self._mutex = threading.RLock()
+        self._appending: tuple[int, BinaryIO] | None = None    # the open segment that takes appends
+        self._uncommitted, self._uncommitted_since = 0, 0.0
         self._lock_file = (self.state_dir / "store.lock").open("a+b")
         database = self.state_dir / "store.sqlite"
         self.inventory_path = database
@@ -484,6 +492,25 @@ class CascStore:
     def _path(self, segment: int) -> Path:
         return self.data_dir / f"data.{segment:03d}"
 
+    def _append_file(self, segment: int) -> BinaryIO:
+        """The segment's file, kept open between appends. Opening it per object is slow on Windows."""
+        if self._appending and self._appending[0] == segment:
+            return self._appending[1]
+        self._close_append()
+        path = self._path(segment)
+        target = path.open("r+b" if path.exists() else "w+b")
+        self._appending = segment, target
+        return target
+
+    def _close_append(self) -> None:
+        if self._appending:
+            self._appending[1].close()
+            self._appending = None
+
+    def _commit(self) -> None:
+        self._db.commit()
+        self._uncommitted = 0
+
     def _record(self, ekey: bytes, segment: int, offset: int, size: int) -> None:
         existing = self._db.execute("SELECT ekey FROM objects WHERE prefix=?", (ekey[:9],)).fetchone()
         if existing and existing[0] != ekey:
@@ -620,35 +647,46 @@ class CascStore:
                     segment, offset = segment + 1, 0
                 if segment > 1023:
                     raise StoreError("CASC segment namespace is exhausted")
-                path = self._path(segment)
-                with path.open("r+b" if path.exists() else "w+b") as target:
-                    target.seek(0, os.SEEK_END)
-                    if target.tell() != offset:
-                        raise StoreError("CASC append position disagrees with catalogue")
+                target = self._append_file(segment)
+                target.seek(0, os.SEEK_END)
+                if target.tell() != offset:
+                    raise StoreError("CASC append position disagrees with catalogue")
+                if not self._db.in_transaction:
+                    self._db.execute("BEGIN")
+                    self._uncommitted_since = time.monotonic()
+                # One object's rows roll back alone. The batch around it stays.
+                self._db.execute("SAVEPOINT put")
+                try:
+                    target.write(_span_header(ekey, size, offset, segment))
+                    shutil.copyfileobj(stream, target, 1024 * 1024)
+                    target.flush()
+                    if target.tell() != offset + SPAN_HEADER_SIZE + size:
+                        raise StoreError("source changed while copying")
+                    self._record(ekey, segment, offset, size)
+                    self._db.execute("INSERT INTO segments VALUES(?,0,?) ON CONFLICT(segment) DO UPDATE SET tail_end=excluded.tail_end",
+                                     (segment, target.tell()))
+                    self._db.execute("RELEASE put")
+                except BaseException:
                     try:
-                        target.write(_span_header(ekey, size, offset, segment))
-                        shutil.copyfileobj(stream, target, 1024 * 1024)
-                        target.flush()
-                        if target.tell() != offset + SPAN_HEADER_SIZE + size:
-                            raise StoreError("source changed while copying")
-                        self._record(ekey, segment, offset, size)
-                        self._db.execute("INSERT INTO segments VALUES(?,0,?) ON CONFLICT(segment) DO UPDATE SET tail_end=excluded.tail_end",
-                                         (segment, target.tell()))
-                        self._db.commit()
-                    except BaseException:
-                        self._db.rollback()
-                        # A signal can arrive after SQLite committed but before
-                        # commit() returned to Python. Preserve that committed
-                        # span; otherwise close/checkpoint could make its
-                        # truncated inventory entry appear durable. If querying
-                        # the commit outcome itself fails, leave the bytes for
-                        # startup recovery rather than guessing and truncating.
-                        persisted = self._db.execute(
-                            "SELECT segment,offset,size FROM objects WHERE ekey=?", (ekey,)
-                        ).fetchone()
-                        if persisted != (segment, offset, size):
-                            target.truncate(offset)
-                        raise
+                        self._db.execute("ROLLBACK TO put")
+                        self._db.execute("RELEASE put")
+                    except sqlite3.Error:
+                        # SQLite already rolled back the batch, or the savepoint was released
+                        # before a signal arrived. Startup recovery finds the batch's spans.
+                        pass
+                    # A signal can arrive after the rows were recorded. Keep that span, as
+                    # the batch commits it. Otherwise its bytes are unclaimed and go.
+                    persisted = self._db.execute(
+                        "SELECT segment,offset,size FROM objects WHERE ekey=?", (ekey,)
+                    ).fetchone()
+                    if persisted != (segment, offset, size):
+                        target.truncate(offset)
+                    self._close_append()
+                    raise
+            self._uncommitted += 1
+            if (self._uncommitted >= COMMIT_OBJECTS
+                    or time.monotonic() - self._uncommitted_since >= COMMIT_SECONDS):
+                self._commit()
 
     def _location(self, ekey: bytes) -> tuple[int, int, int]:
         with self._mutex:
@@ -701,6 +739,8 @@ class CascStore:
     __iter__ = iter_entries
 
     def _checkpoint(self) -> None:
+        self._commit()
+        self._close_append()
         for segment, tail_end in self._db.execute("SELECT segment,tail_end FROM segments WHERE tail_end>durable_end"):
             with self._path(segment).open("rb") as stream:
                 if os.fstat(stream.fileno()).st_size < tail_end:
@@ -967,6 +1007,7 @@ class CascSource:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         self.inventory_path = cache_path
         self._mutex = threading.RLock()
+        self._reading: tuple[int, BinaryIO] | None = None      # bulk reads come in physical order
         self._db = sqlite3.connect(cache_path, check_same_thread=False)
         self._db.executescript("""
             CREATE TABLE IF NOT EXISTS entries(prefix BLOB PRIMARY KEY,segment INTEGER,offset INTEGER,size INTEGER) WITHOUT ROWID;
@@ -1042,10 +1083,27 @@ class CascSource:
             return False
 
     def read(self, ekey: bytes) -> bytes:
-        path, offset, size = self._location(ekey, chunks=True)
-        with path.open("rb") as stream:
-            stream.seek(offset)
-            return _read_exact(stream, size)
+        """Read a candidate once and check its key and chunks in memory."""
+        with self._mutex:
+            row = self._db.execute("SELECT segment,offset,size FROM entries WHERE prefix=?", (_key(ekey)[:9],)).fetchone()
+            if row is None:
+                raise KeyError(ekey.hex())
+            segment, offset, size = row
+            if not (self._reading and self._reading[0] == segment):
+                self._close_reading()
+                self._reading = segment, (self.data_dir / f"data.{segment:03d}").open("rb")
+            stream = self._reading[1]
+            if offset + size + SPAN_HEADER_SIZE > os.fstat(stream.fileno()).st_size:
+                raise StoreError("source span exceeds data segment")
+            stream.seek(offset + SPAN_HEADER_SIZE)
+            data = _read_exact(stream, size)
+        _verify_blte(io.BytesIO(data), size, ekey)
+        return data
+
+    def _close_reading(self) -> None:
+        if self._reading:
+            self._reading[1].close()
+            self._reading = None
 
     get = read
 
@@ -1067,6 +1125,8 @@ class CascSource:
         return self._db.execute("SELECT count(*) FROM entries").fetchone()[0]
 
     def close(self) -> None:
+        with self._mutex:
+            self._close_reading()
         self._db.close()
         if self._temporary:
             self._temporary.cleanup()

@@ -129,6 +129,24 @@ Content is addressed by encoding key. A key needed by several clients is
 stored once. Cleanup removes keys no installed client references and compacts
 the affected segments.
 
+### Storing objects
+
+A client has about a million objects of about 80 KB, so per-object costs set
+the speed of downloads and seeding, especially on Windows, where opening a file
+and committing to SQLite cost more.
+
+- Each object is verified, appended to the newest segment and recorded under a
+  SQLite savepoint, so a failed object rolls back alone and its bytes are cut.
+- The segment taking appends stays open between objects.
+- Records commit every 256 objects or every second. A checkpoint every few
+  hundred objects syncs the segments and marks them durable.
+- After a crash, recovery checks the segment tails past the last checkpoint and
+  records every complete span an unfinished batch left there. A batch appended
+  after bytes the game wrote into a segment cannot be found that way. It is lost
+  and fetched again.
+- A seed object is read once and checked in memory, from a segment file that
+  stays open, since seeding reads in physical order.
+
 ### CDN requests
 
 Every region row names its CDN hosts. For EU every WoW product currently names
