@@ -245,8 +245,9 @@ use unless `GAME_ACCOUNT` names it, as the Battle.net app writes it with
   game's own question. A chosen account that is gone, or another login, falls
   back to that question and never to another account.
 - The bridge gets `--game-account <name> <region>` before the game's path and
-  writes both values next to the ticket. Without it, the bridge removes
-  `GAME_ACCOUNT`, so a choice from an earlier start cannot linger.
+  writes both values next to the ticket, as Waystone does itself on Windows.
+  Without a choice `GAME_ACCOUNT` is removed, so one from an earlier start
+  cannot linger.
 
 The device fingerprint is derived from a 64-byte seed under
 `HKCU\...\Battle.net\Identity`. Waystone creates it if the prefix has none and
@@ -257,7 +258,7 @@ keeps it afterwards. See [docs/device-id.md](docs/device-id.md).
 | | Linux | Windows |
 | --- | --- | --- |
 | Game | Proton through `umu-run`, found at the standard paths | native |
-| Bridge | the Windows bridge inside the Wine prefix | the same bridge, run directly |
+| Bridge | the Windows bridge inside the Wine prefix | none, Waystone does its work in `runtime/windows.py` |
 | Prefix | one Waystone prefix, shared by all clients | none |
 | Registry | the prefix's `HKCU` | the user's `HKCU` |
 
@@ -265,10 +266,18 @@ The bridge does DPAPI protection, the device fingerprint, the registry write
 and the game start. The game runs in its own runtime and never joins another
 client's container.
 
-A packaged Waystone runs the bridge from a copy in `bin` inside its data folder.
-The bridge waits for the game, and the one-file Windows build deletes the folder
-it unpacked into when Waystone exits. The copy's name carries its content hash,
-so an update never replaces a bridge that a running game still uses.
+Smart App Control and other Windows code integrity policies block unsigned
+programs, and the bridge is one. On Windows Waystone therefore does the same
+work itself through `ctypes` and `winreg`, following `bridge/*.c` field for
+field. CPUID runs from a few bytes of machine code, since Python has no way to
+issue the instruction. Under Wine the C bridge and the Python port produced the
+same fingerprint bytes, and each decrypted what the other protected.
+
+A packaged Waystone that ships the bridge runs it from a copy in `bin` inside
+its data folder, since a packaged build's own folder can go away when Waystone
+exits while the bridge still waits for the game. The copy's name carries its
+content hash, so an update never replaces a bridge that a running game still
+uses.
 
 ### Closing a game
 
@@ -282,6 +291,7 @@ from an earlier window, counts too. A worker lists the processes at most every
   volume and file index, because Wine shows one file under different drive
   letters and several clients name their executable `Wow.exe`. It exits with
   0 when it asked, 3 when the game runs without a window, and 4 when none runs.
+  On Windows Waystone makes the same comparison itself.
 - On Linux the game's `wineserver` lives in its pressure-vessel container. The
   bridge joins it through `nsenter` into the game's user and mount namespaces,
   with the game's own Wine and its Wine and display variables. umu's own
@@ -290,7 +300,8 @@ from an earlier window, counts too. A worker lists the processes at most every
 - Force quit sends `SIGKILL` to the game process. It is found by its first
   argument and its folder, so the bridge and `umu-run`, which name the game in
   their arguments, are left alone. They exit when the game is gone. On Windows
-  the bridge ends the process.
+  Waystone ends the process through the handle it checked the file with, so
+  its ID cannot pass to another process in between.
 - A game without a window, as when it hangs while quitting, or one that has
   not quit after 20 seconds, gets a banner that points at Force quit.
 

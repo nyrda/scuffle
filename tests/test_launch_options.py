@@ -156,18 +156,6 @@ def test_wrapper_programs_are_found_on_path_and_gamemode_runs_closest_to_umu(pro
     assert launch_options.wrapper_command(LinuxOptions(gamemode=True)) == []
 
 
-def test_the_windows_runtime_starts_the_game_without_wrappers_or_variables(tmp_path, monkeypatch):
-    from waystone.runtime import game
-    started = {}
-    monkeypatch.setattr(game.subprocess, 'Popen', lambda command, env, **kwargs: started.update(
-        command=command, env=env))
-    runtime = game.WindowsRuntime(tmp_path / 'bridge.exe')
-    runtime.start(tmp_path / 'Wow.exe', ['-console'], tmp_path / 'token', tmp_path / 'ack',
-                  environment={'DXVK_HUD': 'fps'}, wrapper=['gamemoderun'])
-    assert started['command'][0] == str(tmp_path / 'bridge.exe') and started['command'][-1] == '-console'
-    assert 'gamemoderun' not in started['command'] and 'DXVK_HUD' not in started['env']
-
-
 def test_windows_gets_the_arguments_only(programs):
     settings = Settings()
     settings.linux_launch = LinuxOptions(gamemode=True, mangohud=True, wrapper='not-installed --')

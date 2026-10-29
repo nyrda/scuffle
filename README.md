@@ -8,8 +8,8 @@ This project is not affiliated with or endorsed by Blizzard Entertainment.
 Downloads come from Blizzard's public CDN. Signing in uses Battle.net's own
 sign-in page in your browser.
 
-Status: Linux works. The Windows build starts and its bridge runs, but
-installing and launching a game has not been tested on Windows yet. See
+Status: Linux works. On Windows the packaged build installs, updates,
+verifies and uninstalls clients, signs in, and starts and closes games. See
 [DESIGN.md](DESIGN.md) for the architecture.
 
 ## Clients
@@ -155,19 +155,23 @@ each source file and writes its report under `.pytest_cache/uninstall-mutations`
 
 ## Windows package
 
-`dist/Waystone.exe` is a single file with Python, Qt and the bridge inside.
-PyInstaller cannot cross-compile, so it is built on a Windows machine over SSH:
+`dist/Waystone.exe` is a single file with Python and Qt inside. Windows needs
+no bridge, since Waystone does its work there itself. PyInstaller cannot
+cross-compile, so the file is built on a Windows machine over SSH:
 
 ```sh
 packaging/windows/remote-build.sh <ssh host>
 ```
 
-The script cross-builds the bridge with Nix, copies the working tree with its
-uncommitted changes to `waystone-build` in the remote home folder, runs
-`packaging/windows/build.ps1` there and fetches the result. The Windows machine
-needs Python 3.14 from python.org with the `py` launcher. On a Windows checkout,
-`packaging/windows/build.ps1 -Bridge <path to wow_auth_bridge.exe>` builds the
-same file directly.
+The script copies the working tree with its uncommitted changes to
+`waystone-build` in the remote home folder, runs `packaging/windows/build.ps1`
+there and fetches the result. The Windows machine needs Python 3.14 from
+python.org with the `py` launcher. On a Windows checkout,
+`packaging/windows/build.ps1` builds the same file directly.
+
+The file is not signed yet. Smart App Control, which Windows 11 turns on for
+many new installations, can block an unsigned program, sometimes only on its
+first start. Public releases need a code signing certificate.
 
 Build tools come from `packaging/windows/requirements.txt`, pinned with hashes.
 After changing `requirements.in`, regenerate it with the command at its top.

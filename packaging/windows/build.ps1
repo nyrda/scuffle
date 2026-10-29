@@ -3,13 +3,11 @@
 Build dist\Waystone.exe, the one-file Windows package.
 
 .DESCRIPTION
-Runs on Windows from a checkout. The bridge is a Windows program that the Nix
-flake cross-builds on Linux, so it comes in as a path. Build tools are installed
-from the hashed requirements.txt into a virtual environment, which is reused
-while the requirements stay the same.
+Runs on Windows from a checkout. Build tools are installed from the hashed
+requirements.txt into a virtual environment, which is reused while the
+requirements stay the same.
 #>
 param(
-    [Parameter(Mandatory)] [string] $Bridge,
     [string] $Python = '3.14',
     [string] $Venv = ''
 )
@@ -25,7 +23,6 @@ $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $work = Join-Path $root 'build\windows'
 $requirements = Join-Path $PSScriptRoot 'requirements.txt'
 if (-not $Venv) { $Venv = Join-Path $work 'venv' }
-$Bridge = (Resolve-Path $Bridge).Path
 New-Item -ItemType Directory -Force $work | Out-Null
 
 $stamp = Join-Path $Venv 'requirements.sha256'
@@ -42,7 +39,6 @@ $python = Join-Path $Venv 'Scripts\python.exe'
 $icon = Join-Path $work 'Waystone.ico'
 Invoke-Native $python (Join-Path $root 'packaging\make_icon.py') (Join-Path $root 'src\waystone\ui\icon.svg') $icon
 
-$env:WAYSTONE_BRIDGE_BUILD = $Bridge
 $env:WAYSTONE_ICON = $icon
 Invoke-Native $python -m PyInstaller --noconfirm --clean --log-level WARN `
     --distpath (Join-Path $root 'dist') --workpath (Join-Path $work 'pyinstaller') `

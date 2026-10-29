@@ -1,5 +1,5 @@
-# PyInstaller spec for the one-file Windows build. build.ps1 runs it with
-# WAYSTONE_BRIDGE_BUILD and WAYSTONE_ICON set.
+# PyInstaller spec for the one-file Windows build. build.ps1 runs it with WAYSTONE_ICON set.
+# Windows needs no bridge: Waystone does its work in runtime/windows.py.
 import os
 from pathlib import Path
 import tomllib
@@ -29,7 +29,6 @@ version = VSVersionInfo(
 analysis = Analysis(
     [str(ROOT / 'packaging' / 'entry.py')],
     pathex=[str(ROOT / 'src')],
-    binaries=[(os.environ['WAYSTONE_BRIDGE_BUILD'], 'bridge')],
     datas=[(str(ROOT / 'src' / 'waystone' / 'ui' / 'icon.svg'), 'waystone/ui')],
     excludes=['tkinter', 'unittest', 'pydoc', 'doctest'],
 )

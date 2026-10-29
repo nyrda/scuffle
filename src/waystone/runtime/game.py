@@ -1,4 +1,4 @@
-"""Start a game client with its credential through the bridge."""
+"""Start a game client with its credential: through the bridge on Linux, in runtime.windows on Windows."""
 from __future__ import annotations
 
 import os
@@ -8,7 +8,7 @@ import signal
 import subprocess
 
 from .. import system
-from .bridge import Bridge, NativeBridge, WineBridge, windows_path
+from .bridge import Bridge, WineBridge, windows_path
 from .proton import Proton, wine_wrapper
 
 
@@ -46,26 +46,6 @@ def _launch_arguments(bridge: Path, executable: Path, arguments: list[str], toke
     chosen = ['--game-account', *account] if account else []
     return [str(bridge), '--launch-protected-file', windows_path(token), windows_path(ack),
             *chosen, windows_path(executable), *arguments]
-
-
-class WindowsRuntime(GameRuntime):
-    def __init__(self, bridge: Path):
-        self.bridge = NativeBridge(bridge)
-
-    def start(self, executable, arguments, token, ack, *, environment=None, wrapper=(), account=None):
-        command = _launch_arguments(self.bridge.executable, executable, arguments, token, ack, account)
-        env = os.environ | {'WOW_BROKER_PIPE': '1'}
-        return subprocess.Popen(command, env=env, cwd=executable.parent, stdin=subprocess.DEVNULL,
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                creationflags=getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0))
-
-    def close(self, executable, processes, *, force=False):
-        command = [str(self.bridge.executable), '--close-game', str(executable), *(['--force'] if force else [])]
-        result = subprocess.run(command, env=os.environ | {'WOW_BROKER_PIPE': '1'}, stdin=subprocess.DEVNULL,
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
-        if result.returncode not in CLOSE_RESULTS:
-            raise RuntimeFailure('The game could not be asked to close.')
-        return CLOSE_RESULTS[result.returncode]
 
 
 class LinuxRuntime(GameRuntime):

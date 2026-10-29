@@ -18,7 +18,7 @@ from .auth.vault import Vault
 from .launch_options import ClientOptions, OptionError, linux_environment, wrapper_command
 from .library import Library, LibraryError
 from .runtime.bridge import bridge_executable
-from .runtime.game import GameRuntime, LinuxRuntime, WindowsRuntime
+from .runtime.game import GameRuntime, LinuxRuntime
 from .runtime.proton import Proton, find_protons, find_umu
 from .settings import Settings, data_dir
 
@@ -70,14 +70,15 @@ def select_proton(settings: Settings) -> Proton:
 
 
 def make_runtime(settings: Settings) -> GameRuntime:
+    if system.WINDOWS:
+        from .runtime.windows import WindowsRuntime
+        return WindowsRuntime()
     try:
         bridge = bridge_executable()
     except OSError as error:
         raise LaunchError(f'The Waystone bridge could not be copied to its folder: {error}') from None
     if not bridge.is_file():
         raise LaunchError(f'The Waystone bridge is missing at {bridge}')
-    if system.WINDOWS:
-        return WindowsRuntime(bridge)
     umu = find_umu()
     if umu is None:
         raise LaunchError('umu-run was not found. Install umu-launcher or a launcher that ships it.')

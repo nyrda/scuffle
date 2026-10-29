@@ -1,7 +1,7 @@
 """Run the Windows bridge for DPAPI, the device fingerprint and game start.
 
-On Windows the bridge runs directly. On Linux it runs inside Waystone's Wine
-prefix with Proton's Wine binary.
+On Linux it runs inside Waystone's Wine prefix with Proton's Wine binary. On
+Windows Waystone does the same work itself, in runtime.windows.
 """
 from __future__ import annotations
 
@@ -120,13 +120,6 @@ class Bridge:
         if len(parsed) != 23 or any(not isinstance(v, int) for v in parsed.values()):
             raise BridgeError('Unexpected device fingerprint fields')
         return data
-
-
-class NativeBridge(Bridge):
-    """Windows: the bridge uses the user's own DPAPI keys and registry."""
-
-    def command(self, arguments):
-        return [str(self.executable), *arguments], os.environ | {'WOW_BROKER_PIPE': '1'}
 
 
 class WineBridge(Bridge):
