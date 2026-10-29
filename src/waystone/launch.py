@@ -17,9 +17,10 @@ from .auth.bgs import CredentialRejected, login, renew
 from .auth.vault import Vault
 from .launch_options import ClientOptions, OptionError, linux_environment, wrapper_command
 from .library import Library, LibraryError
+from .runtime.bridge import bridge_executable
 from .runtime.game import GameRuntime, LinuxRuntime, WindowsRuntime
 from .runtime.proton import Proton, find_protons, find_umu
-from .settings import Settings, bridge_executable, data_dir
+from .settings import Settings, data_dir
 
 STARTUP_TIMEOUT = 120
 SignIn = Callable[[str], bytes]
@@ -69,7 +70,10 @@ def select_proton(settings: Settings) -> Proton:
 
 
 def make_runtime(settings: Settings) -> GameRuntime:
-    bridge = bridge_executable()
+    try:
+        bridge = bridge_executable()
+    except OSError as error:
+        raise LaunchError(f'The Waystone bridge could not be copied to its folder: {error}') from None
     if not bridge.is_file():
         raise LaunchError(f'The Waystone bridge is missing at {bridge}')
     if system.WINDOWS:

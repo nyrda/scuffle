@@ -724,7 +724,7 @@ class Updater:
                     self.emit('seeding_cdn_index', force=True, index=key)
                     self.client.seed_index(key, index, group=True)
         product_path = self.client.get_product_config(version['ProductConfig'])
-        product = json.loads(product_path.read_text())
+        product = json.loads(product_path.read_bytes())
         config = product.get('all', {}).get('config', {})
         if config.get('update_method') != 'ngdp' or config.get('data_dir', 'Data/') != 'Data/':
             raise LibraryError(f'{self.entry.label} is not a supported NGDP client')
@@ -968,7 +968,7 @@ class Updater:
                 if md5_file(path).hex() != key:
                     raise StoreError('build configuration checksum mismatch')
             except (OSError, StoreError) as error:
-                bad.append({'path': str(path.relative_to(self.root)), 'error': str(error)})
+                bad.append({'path': path.relative_to(self.root).as_posix(), 'error': str(error)})
         return {'client': self.code, 'verified_objects': count, 'ok': not bad, 'errors': bad}
 
 

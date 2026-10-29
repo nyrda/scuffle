@@ -746,7 +746,8 @@ class CascStore:
         self._commit()
         self._close_append()
         for segment, tail_end in self._db.execute("SELECT segment,tail_end FROM segments WHERE tail_end>durable_end"):
-            with self._path(segment).open("rb") as stream:
+            # Windows flushes a file only through a handle with write access.
+            with self._path(segment).open("r+b") as stream:
                 if os.fstat(stream.fileno()).st_size < tail_end:
                     raise StoreError("CASC segment is shorter than catalogue before checkpoint")
                 os.fsync(stream.fileno())

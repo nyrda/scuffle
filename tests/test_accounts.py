@@ -1,6 +1,7 @@
 """Choosing the WoW account the game starts with, from the Battle.net login's game accounts."""
 from pathlib import Path
 from types import SimpleNamespace
+import sys
 
 import pytest
 
@@ -85,7 +86,8 @@ def test_the_game_starts_with_the_saved_or_sole_account(saved, listed, expected)
 def test_the_bridge_gets_the_account_before_the_game_and_its_arguments():
     command = _launch_arguments(Path('/b/bridge.exe'), Path('/g/Wow.exe'), ['-launcherlogin'],
                                 Path('/s/token'), Path('/s/ack'), ('WANDERER', 'EU'))
-    assert command[4:] == ['--game-account', 'WANDERER', 'EU', 'Z:\\g\\Wow.exe', '-launcherlogin']
+    game = str(Path('/g/Wow.exe').resolve()) if sys.platform == 'win32' else 'Z:\\g\\Wow.exe'
+    assert command[4:] == ['--game-account', 'WANDERER', 'EU', game, '-launcherlogin']
     assert '--game-account' not in _launch_arguments(Path('/b'), Path('/g/Wow.exe'), [], Path('/t'), Path('/a'))
 
 

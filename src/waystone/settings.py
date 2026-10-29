@@ -5,7 +5,6 @@ from dataclasses import asdict, dataclass, field
 import json
 import os
 from pathlib import Path
-import sys
 
 from . import system
 from .launch_options import ClientOptions, LinuxOptions
@@ -30,15 +29,6 @@ def cache_dir() -> Path:
     if system.WINDOWS:
         return data_dir() / 'cache'
     return Path(os.environ.get('XDG_CACHE_HOME', Path.home() / '.cache')) / 'waystone'
-
-
-def bridge_executable() -> Path:
-    """The packaged bridge, or the one a Nix wrapper points to."""
-    override = os.environ.get('WAYSTONE_BRIDGE')
-    if override:
-        return Path(override)
-    base = Path(getattr(sys, '_MEIPASS', Path(__file__).parent))
-    return base / 'bridge' / 'wow_auth_bridge.exe'
 
 
 REGIONS = {'eu': 'Europe', 'us': 'Americas', 'kr': 'Korea', 'tw': 'Taiwan'}

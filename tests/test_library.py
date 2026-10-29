@@ -592,7 +592,7 @@ def test_verify_detects_damaged_activation_metadata_and_indexes(tmp_path, artifa
             if artifact == "published_index":
                 assert any("index" in error["error"].lower() for error in result["errors"])
             else:
-                assert any(error.get("path") == str(path.relative_to(root)) for error in result["errors"])
+                assert any(error.get("path") == path.relative_to(root).as_posix() for error in result["errors"])
     assert (path.read_bytes() if path.exists() else None) == damaged_bytes
 
 
@@ -1242,13 +1242,17 @@ def test_without_linux_mount_information_nothing_is_deleted(uninstall_pair, monk
     assert library.state('wowf') and (library.root / '_forever_').is_dir()
 
 
-def test_an_unreadable_folder_left_in_the_trash_never_blocks_the_library(uninstall_pair):
+def test_trash_that_cannot_be_removed_never_blocks_the_library(uninstall_pair):
     library, _, _ = uninstall_pair
     trash = library.root / '.waystone-trash-0123456789abcdef0123456789abcdef'
     locked_away = trash / 'Logs'
     locked_away.mkdir(parents=True)
-    (locked_away / 'session.log').write_text('kept by the system')
-    locked_away.chmod(0)
+    log = locked_away / 'session.log'
+    log.write_text('kept by the system')
+    # Linux cannot empty a folder it may not read. Windows cannot delete a file another program holds open.
+    held = log.open('rb') if sys.platform == 'win32' else None
+    if held is None:
+        locked_away.chmod(0)
     try:
         with library.locked():
             pass                    # sweeping meets the folder and leaves it
@@ -1259,4 +1263,7 @@ def test_an_unreadable_folder_left_in_the_trash_never_blocks_the_library(uninsta
         from waystone.library import remove_tree
         assert remove_tree(trash) is False and (locked_away.parent).exists()
     finally:
-        locked_away.chmod(0o700)
+        if held:
+            held.close()
+        else:
+            locked_away.chmod(0o700)

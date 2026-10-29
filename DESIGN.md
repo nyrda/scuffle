@@ -265,6 +265,11 @@ The bridge does DPAPI protection, the device fingerprint, the registry write
 and the game start. The game runs in its own runtime and never joins another
 client's container.
 
+A packaged Waystone runs the bridge from a copy in `bin` inside its data folder.
+The bridge waits for the game, and the one-file Windows build deletes the folder
+it unpacked into when Waystone exits. The copy's name carries its content hash,
+so an update never replaces a bridge that a running game still uses.
+
 ### Closing a game
 
 While a game runs, its main button reads **Close game**. Holding Shift turns it

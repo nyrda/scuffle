@@ -6,6 +6,9 @@ import time
 import pytest
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
+if sys.platform == 'win32':
+    # Offscreen Qt on Windows finds no fonts by itself, and its wider fallback breaks the layout checks.
+    os.environ.setdefault('QT_QPA_FONTDIR', os.path.join(os.environ.get('WINDIR', r'C:\Windows'), 'Fonts'))
 QtWidgets = pytest.importorskip('PySide6.QtWidgets')
 QApplication = QtWidgets.QApplication
 
@@ -184,6 +187,7 @@ def test_settings_never_scroll_sideways_at_the_minimum_size(qt, styled, window):
 
 
 def test_the_folder_picker_reveals_the_current_folder_once_it_has_loaded(qt, tmp_path):
+    from pathlib import Path
     import time
     for name in ['alpha', 'beta', 'gamma', *(f'filler {n:02}' for n in range(40)), 'zeta']:
         (tmp_path / name).mkdir()
@@ -193,13 +197,13 @@ def test_the_folder_picker_reveals_the_current_folder_once_it_has_loaded(qt, tmp
     page.show()
     page.start(str(target))
     deadline = time.monotonic() + 3
-    while time.monotonic() < deadline and page.model.filePath(page.tree.currentIndex()) != str(target):
+    while time.monotonic() < deadline and Path(page.model.filePath(page.tree.currentIndex())) != target:
         qt.processEvents()
     for _ in range(20):
         qt.processEvents()
         time.sleep(0.01)
     rect = page.tree.visualRect(page.tree.currentIndex())
-    assert page.model.filePath(page.tree.currentIndex()) == str(target)
+    assert Path(page.model.filePath(page.tree.currentIndex())) == target
     assert 0 <= rect.top() and rect.bottom() <= page.tree.viewport().height()
 
 
@@ -517,7 +521,7 @@ def test_ctrl_c_in_the_terminal_closes_the_window(qt, window):
     previous = {number: signal.getsignal(number) for number in (signal.SIGINT, signal.SIGTERM)}
     try:
         app.close_on_signals(window)
-        os.kill(os.getpid(), signal.SIGINT)
+        signal.raise_signal(signal.SIGINT)      # os.kill on Windows terminates the process instead
         for _ in range(5):
             qt.processEvents()
         assert not window.isVisible()

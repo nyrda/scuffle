@@ -1,6 +1,7 @@
-"""Check the bridge frame contract, pasted sign-in tickets and session renewal."""
+"""Check the bridge frame contract, the packaged bridge, pasted sign-in tickets and session renewal."""
 from pathlib import Path
 import struct
+import sys
 
 import pytest
 
@@ -8,8 +9,8 @@ from waystone import launch
 from waystone.auth.bgs import CredentialRejected
 from waystone.auth.vault import Vault
 from waystone.launch import Launcher, looks_like_redirect, parse_ticket
-from waystone.runtime.bridge import read_frame
-from waystone.settings import Settings
+from waystone.runtime.bridge import bridge_executable, read_frame
+from waystone.settings import Settings, data_dir
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -29,6 +30,26 @@ def test_malformed_bridge_frame_is_rejected(output):
 
 def test_bridge_frame_payload_is_returned():
     assert read_frame(b'WBC1' + struct.pack('<I', 3) + b'abc', 8) == b'abc'
+
+
+def test_a_packaged_bridge_runs_from_a_lasting_copy_that_an_update_never_overwrites(tmp_path, monkeypatch):
+    # A one-file build unpacks into a temporary folder that goes away when Waystone exits,
+    # while the bridge keeps waiting for the game.
+    monkeypatch.delenv('WAYSTONE_BRIDGE', raising=False)
+    packaged = tmp_path / 'bundle' / 'bridge' / 'wow_auth_bridge.exe'
+    packaged.parent.mkdir(parents=True)
+    packaged.write_bytes(b'MZ first')
+    monkeypatch.setattr(sys, '_MEIPASS', str(tmp_path / 'bundle'), raising=False)
+
+    first = bridge_executable()
+    assert first.parent == data_dir() / 'bin' and first.read_bytes() == b'MZ first'
+    first.write_bytes(b'MZ fir')                # cut short by a crash
+    assert bridge_executable() == first and first.read_bytes() == b'MZ first'
+
+    packaged.write_bytes(b'MZ second')
+    second = bridge_executable()
+    assert second != first and second.read_bytes() == b'MZ second'
+    assert list(second.parent.iterdir()) == [second]
 
 
 @pytest.mark.parametrize('pasted', [
@@ -102,4 +123,4 @@ def test_nothing_touches_battle_net_desktop_login():
     # Using Battle.net's own saved login consumes it and signs the app out.
     sources = [*ROOT.glob('src/**/*.py'), *ROOT.glob('bridge/*.[ch]')]
     assert sources
-    assert not [path.name for path in sources if 'UnifiedAuth' in path.read_text()]
+    assert not [path.name for path in sources if 'UnifiedAuth' in path.read_text(encoding='utf-8')]

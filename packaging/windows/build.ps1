@@ -1,0 +1,56 @@
+<#
+.SYNOPSIS
+Build dist\Waystone.exe, the one-file Windows package.
+
+.DESCRIPTION
+Runs on Windows from a checkout. The bridge is a Windows program that the Nix
+flake cross-builds on Linux, so it comes in as a path. Build tools are installed
+from the hashed requirements.txt into a virtual environment, which is reused
+while the requirements stay the same.
+#>
+param(
+    [Parameter(Mandatory)] [string] $Bridge,
+    [string] $Python = '3.14',
+    [string] $Venv = ''
+)
+$ErrorActionPreference = 'Stop'
+
+function Invoke-Native {
+    $command, $arguments = $args
+    & $command @arguments
+    if ($LASTEXITCODE) { throw "$command exited with $LASTEXITCODE" }
+}
+
+$root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+$work = Join-Path $root 'build\windows'
+$requirements = Join-Path $PSScriptRoot 'requirements.txt'
+if (-not $Venv) { $Venv = Join-Path $work 'venv' }
+$Bridge = (Resolve-Path $Bridge).Path
+New-Item -ItemType Directory -Force $work | Out-Null
+
+$stamp = Join-Path $Venv 'requirements.sha256'
+$wanted = "$Python $((Get-FileHash $requirements -Algorithm SHA256).Hash)"
+if (-not (Test-Path $stamp) -or (Get-Content $stamp) -ne $wanted) {
+    if (Test-Path $Venv) { Remove-Item -Recurse -Force $Venv }
+    Invoke-Native py "-$Python" -m venv $Venv
+    Invoke-Native "$Venv\Scripts\python.exe" -m pip install --quiet --disable-pip-version-check `
+        --require-hashes --only-binary ':all:' -r $requirements
+    Set-Content $stamp $wanted
+}
+$python = Join-Path $Venv 'Scripts\python.exe'
+
+$icon = Join-Path $work 'Waystone.ico'
+Invoke-Native $python (Join-Path $root 'packaging\make_icon.py') (Join-Path $root 'src\waystone\ui\icon.svg') $icon
+
+$env:WAYSTONE_BRIDGE_BUILD = $Bridge
+$env:WAYSTONE_ICON = $icon
+Invoke-Native $python -m PyInstaller --noconfirm --clean --log-level WARN `
+    --distpath (Join-Path $root 'dist') --workpath (Join-Path $work 'pyinstaller') `
+    (Join-Path $PSScriptRoot 'waystone.spec')
+
+# The windowed program writes to a redirected stream, and PowerShell waits for it.
+$exe = Join-Path $root 'dist\Waystone.exe'
+$help = & $exe --help | Out-String
+if ($LASTEXITCODE -or $help -notmatch 'usage: waystone') { throw "Waystone.exe --help failed:`n$help" }
+$size = [math]::Round((Get-Item $exe).Length / 1MB, 1)
+Write-Output "Built $exe ($size MB)"

@@ -5,13 +5,17 @@ prefix with Proton's Wine binary.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
 import struct
 import subprocess
+import sys
 
 from .. import system
+from ..library import atomic_bytes
+from ..settings import data_dir
 
 FRAME_MAGIC = b'WBC1'
 
@@ -34,6 +38,44 @@ def windows_path(path: Path) -> str:
     """The path as Windows programs see it: unchanged on Windows, Z: under Wine."""
     path = Path(path).resolve()
     return str(path) if system.WINDOWS else 'Z:' + str(path).replace('/', '\\')
+
+
+def bridge_executable() -> Path:
+    """The bridge a Nix wrapper points to, a lasting copy of the packaged one, or the source tree's."""
+    override = os.environ.get('WAYSTONE_BRIDGE')
+    if override:
+        return Path(override)
+    bundle = getattr(sys, '_MEIPASS', None)
+    if bundle is None:
+        return Path(__file__).parents[1] / 'bridge' / 'wow_auth_bridge.exe'
+    packaged = Path(bundle) / 'bridge' / 'wow_auth_bridge.exe'
+    return installed_copy(packaged, data_dir() / 'bin') if packaged.is_file() else packaged
+
+
+def installed_copy(packaged: Path, folder: Path) -> Path:
+    """A copy of the packaged bridge that outlives this Waystone.
+
+    The one-file Windows build unpacks into a temporary folder that is deleted when
+    Waystone exits, and an AppImage unmounts. The bridge waits for the game, so it runs
+    from here. The name carries the content hash, so a newer Waystone never replaces a
+    bridge that a running game still uses.
+    """
+    data = packaged.read_bytes()
+    digest = hashlib.sha256(data).hexdigest()[:16]
+    target = folder / f'{packaged.stem}-{digest}{packaged.suffix}'
+    try:
+        if target.read_bytes() == data:
+            return target
+    except FileNotFoundError:
+        pass
+    atomic_bytes(target, data)
+    for old in folder.glob(f'{packaged.stem}-*{packaged.suffix}'):
+        if old != target:
+            try:
+                old.unlink()
+            except OSError:
+                pass        # Windows keeps a running bridge. The next start removes it.
+    return target
 
 
 class Bridge:

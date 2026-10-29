@@ -1,0 +1,4 @@
+# Build tools for the Windows package. PySide6 matches the version the Nix flake pins.
+pyinstaller==6.22.3
+pyinstaller-hooks-contrib==2026.9
+pyside6-essentials==6.12.0

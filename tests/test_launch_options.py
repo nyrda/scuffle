@@ -145,6 +145,7 @@ def test_a_wrapper_command_that_cannot_work_is_named(programs, text, message):
         launch_options.wrapper_command(LinuxOptions(wrapper=text))
 
 
+@pytest.mark.skipif(sys.platform == 'win32', reason='Linux wrappers')
 def test_wrapper_programs_are_found_on_path_and_gamemode_runs_closest_to_umu(programs):
     gamescope = executable(programs / 'gamescope', '#!/bin/sh\n')
     gamemoderun = executable(programs / 'gamemoderun', '#!/bin/sh\n')
@@ -217,6 +218,7 @@ class Library:
         return self.folder / 'Wow.exe'
 
 
+@pytest.mark.skipif(sys.platform == 'win32', reason='Linux launch through umu-run')
 def test_the_game_runs_inside_the_wrappers_with_the_options_and_the_prefix_without_them(
         tmp_path, programs, monkeypatch):
     log = tmp_path / 'calls.jsonl'
@@ -275,6 +277,7 @@ def test_a_proton_log_without_a_chosen_wine_debug_leaves_the_channels_to_proton(
     assert 'WINEDEBUG' not in env and env['WINEPREFIX'] == str(tmp_path / 'prefix')
 
 
+@pytest.mark.skipif(sys.platform == 'win32', reason='Linux wrappers')
 def test_a_missing_wrapper_stops_the_launch_before_the_sign_in_is_used(tmp_path, programs, monkeypatch):
     renewed = []
     monkeypatch.setattr(launch, 'renew', lambda *args: renewed.append(args))
@@ -326,6 +329,7 @@ def test_a_saved_variable_name_with_spaces_is_dropped_instead_of_stopping_the_st
     assert loaded.linux_launch.environment == {'GOOD': '1'} and loaded.problems
 
 
+@pytest.mark.skipif(sys.platform == 'win32', reason='Linux wrappers')
 def test_a_relative_wrapper_is_made_absolute_since_the_game_starts_in_its_own_folder(tmp_path, monkeypatch):
     from waystone.launch_options import wrapper_command
     tool = tmp_path / 'wrap'
@@ -351,6 +355,7 @@ def test_the_newest_proton_is_the_newest_build_not_the_last_used_folder(tmp_path
     assert launch.select_proton(Settings()).name == 'GE-Proton11-11'
 
 
+@pytest.mark.skipif(sys.platform == 'win32', reason='Linux variables')
 def test_paths_in_variables_expand_as_in_a_shell(monkeypatch, tmp_path):
     from waystone.launch_options import linux_environment
     monkeypatch.setenv('HOME', str(tmp_path))

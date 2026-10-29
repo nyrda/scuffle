@@ -8,8 +8,9 @@ This project is not affiliated with or endorsed by Blizzard Entertainment.
 Downloads come from Blizzard's public CDN. Signing in uses Battle.net's own
 sign-in page in your browser.
 
-Status: Linux works. The Windows runtime is written but has not been tested on
-Windows yet. See [DESIGN.md](DESIGN.md) for the architecture.
+Status: Linux works. The Windows build starts and its bridge runs, but
+installing and launching a game has not been tested on Windows yet. See
+[DESIGN.md](DESIGN.md) for the architecture.
 
 ## Clients
 
@@ -136,6 +137,10 @@ waystone --root /games/Waystone play wow_classic_era --mode hardcore
 Battle.net one, and opens it read-only. Progress is printed to stderr as JSON
 lines.
 
+On Windows, `Waystone.exe` is a windowed program, so a terminal does not wait
+for it. Start a command with `start /wait "" Waystone.exe ...` in cmd, or with
+`Start-Process -Wait -NoNewWindow Waystone.exe -ArgumentList ...` in PowerShell.
+
 ## Development
 
 ```sh
@@ -147,3 +152,22 @@ PYTHONPATH=src python -m waystone
 To check the uninstall tests against deliberate failures, run
 `nix develop -c python3 tools/check_uninstall_mutations.py`. The script restores
 each source file and writes its report under `.pytest_cache/uninstall-mutations`.
+
+## Windows package
+
+`dist/Waystone.exe` is a single file with Python, Qt and the bridge inside.
+PyInstaller cannot cross-compile, so it is built on a Windows machine over SSH:
+
+```sh
+packaging/windows/remote-build.sh <ssh host>
+```
+
+The script cross-builds the bridge with Nix, copies the working tree with its
+uncommitted changes to `waystone-build` in the remote home folder, runs
+`packaging/windows/build.ps1` there and fetches the result. The Windows machine
+needs Python 3.14 from python.org with the `py` launcher. On a Windows checkout,
+`packaging/windows/build.ps1 -Bridge <path to wow_auth_bridge.exe>` builds the
+same file directly.
+
+Build tools come from `packaging/windows/requirements.txt`, pinned with hashes.
+After changing `requirements.in`, regenerate it with the command at its top.

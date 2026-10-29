@@ -11,7 +11,7 @@ import threading
 import time
 
 from PySide6.QtCore import QEvent, QObject, QPoint, QTimer, QUrl, Qt, Signal
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QDesktopServices, QIcon
 from PySide6.QtWidgets import (QApplication, QFrame, QGraphicsOpacityEffect, QHBoxLayout, QMainWindow, QPushButton, QStackedWidget,
                                QMenu, QStyleFactory, QVBoxLayout, QWidget)
 
@@ -1229,6 +1229,8 @@ def main():
     os.environ.pop('QT_STYLE_OVERRIDE', None)
     application = QApplication(sys.argv)
     application.setApplicationName('Waystone')
+    application.setDesktopFileName('waystone')       # Wayland matches the window to waystone.desktop
+    application.setWindowIcon(QIcon(str(Path(__file__).with_name('icon.svg'))))
     prepare(application)
     window = MainWindow()
     close_on_signals(window)

@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 import sys
 
-from . import catalog
+from . import catalog, system
 from .library import Library, LibraryError, Updater
 from .ngdp.cdn import CDNClient
 from .settings import Settings, cache_dir
@@ -138,6 +138,7 @@ def main(argv=None):
 
 
 def entrypoint():
+    system.attach_console()
     try:
         main()
     except (LibraryError, OSError, ValueError) as error:

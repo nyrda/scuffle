@@ -75,7 +75,7 @@ def probe(code: str, region: str, cache: Path, *, factory: Callable = CDNClient)
     try:
         with factory(cache, region, code, retries=1, timeout=20) as client:
             version, _ = client.discover()
-            product = json.loads(client.get_product_config(version['ProductConfig']).read_text())
+            product = json.loads(client.get_product_config(version['ProductConfig']).read_bytes())
             config = product.get('all', {}).get('config', {})
             if config.get('update_method') != 'ngdp' or config.get('data_dir', 'Data/') != 'Data/':
                 raise ValueError('not an NGDP client')

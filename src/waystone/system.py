@@ -75,6 +75,57 @@ def sync_directory(path: Path) -> None:
         os.close(fd)
 
 
+def attach_console() -> None:
+    """Give the windowed Windows build the console of the terminal that started it.
+
+    The packaged Waystone.exe is a GUI program, so a double click opens no console
+    window, and Python starts it without standard streams. A command started from a
+    terminal writes there instead. The terminal does not wait for a GUI program, so
+    commands that read input need start /wait in cmd. Streams a parent redirected
+    stay as they are.
+    """
+    if not WINDOWS or None not in (sys.stdin, sys.stdout, sys.stderr):
+        return
+    import ctypes
+    kernel32 = ctypes.windll.kernel32
+    # The one-file build runs Python in a child of the process that unpacked it, and
+    # that process has no console. The terminal is its parent.
+    attached = kernel32.AttachConsole(-1) or kernel32.AttachConsole(_parent_id(os.getppid()))  # -1: the parent
+    for name, device, mode in [('stdin', 'CONIN$', 'r'), ('stdout', 'CONOUT$', 'w'), ('stderr', 'CONOUT$', 'w')]:
+        if getattr(sys, name) is None:
+            setattr(sys, name, open(device if attached else os.devnull, mode, encoding='utf-8', buffering=1))
+
+
+def _parent_id(pid: int) -> int:
+    """The ID of the process that started pid, or 0 if it is gone."""
+    import ctypes
+    from ctypes import wintypes
+
+    class Entry(ctypes.Structure):          # PROCESSENTRY32W
+        _fields_ = [('size', wintypes.DWORD), ('usage', wintypes.DWORD), ('pid', wintypes.DWORD),
+                    ('heap', ctypes.c_size_t), ('module', wintypes.DWORD), ('threads', wintypes.DWORD),
+                    ('parent', wintypes.DWORD), ('priority', wintypes.LONG), ('flags', wintypes.DWORD),
+                    ('name', wintypes.WCHAR * 260)]
+
+    kernel32 = ctypes.WinDLL('kernel32')
+    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    kernel32.Process32FirstW.argtypes = kernel32.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(Entry)]
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    snapshot = kernel32.CreateToolhelp32Snapshot(0x2, 0)       # TH32CS_SNAPPROCESS
+    if snapshot in (None, wintypes.HANDLE(-1).value):
+        return 0
+    try:
+        entry = Entry(size=ctypes.sizeof(Entry))
+        found = kernel32.Process32FirstW(snapshot, ctypes.byref(entry))
+        while found:
+            if entry.pid == pid:
+                return entry.parent
+            found = kernel32.Process32NextW(snapshot, ctypes.byref(entry))
+        return 0
+    finally:
+        kernel32.CloseHandle(snapshot)
+
+
 def running_executables(names: set[str] | None = None) -> list[tuple[int, str, str]]:
     """List running processes as (pid, executable path or command line, cwd).
 
