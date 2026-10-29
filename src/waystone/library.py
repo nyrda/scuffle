@@ -658,6 +658,52 @@ class Updater:
         decode_blte(self._encoded(ek, encoded_size), path, ek, ck, size)
         return path
 
+    def _fill_plan(self, plan: Plan, build: dict, signature: str, region: str, locale: str, *,
+                   stage: str | None) -> None:
+        """Record the objects and files a build needs. A plan made for the same signature is kept."""
+        def manifest(name):
+            ck, ek = (bytes.fromhex(x) for x in build[name])
+            decoded, encoded = map(int, build[name + '-size'])
+            return self._decoded(name, ck, ek, decoded, encoded)
+
+        encoding = manifest('encoding')
+        install = manifest('install')
+        download = manifest('download')
+        selected = {'Windows', 'x86_64', region.upper(), locale, 'speech', 'text'}
+        old = plan.db.execute("SELECT value FROM metadata WHERE name='signature'").fetchone()
+        with EncodingTable(encoding) as table:
+            if not old or old[0] != signature:
+                if stage:
+                    self.emit(stage, force=True)
+                plan.db.execute('DELETE FROM objects')
+                plan.db.execute('DELETE FROM files')
+                plan.db.commit()
+                plan.add(read_download(download, selected))
+                for entry in read_install(install, selected):
+                    relative = managed_path(entry.path)
+                    size, choices = table.lookup(entry.ckey)
+                    if size != entry.decoded_size or not choices:
+                        raise LibraryError('Install and encoding metadata disagree')
+                    encoding_info = choices[0]
+                    duplicate = plan.db.execute('SELECT ckey FROM files WHERE lower(path)=lower(?)', (relative,)).fetchone()
+                    if duplicate and duplicate[0] != entry.ckey:
+                        raise LibraryError('Conflicting selected install file variants')
+                    plan.db.execute('INSERT OR REPLACE INTO files VALUES(?,?,?,?)',
+                        (relative, entry.ckey, encoding_info.ekey, size))
+                    plan.add([DownloadEntry(encoding_info.ekey, encoding_info.encoded_size, -20)])
+                plan.db.execute("INSERT OR REPLACE INTO metadata VALUES('signature',?)", (signature,))
+                plan.db.commit()
+            # Well-known metadata is required even when absent from the download set.
+            entries = []
+            for name, values in build.items():
+                if name in {'encoding', 'install', 'download', 'size', 'patch-index', 'vfs-root'} or (name.startswith('vfs-') and not name.endswith('-size')):
+                    if len(values) == 2 and all(len(x) == 32 for x in values):
+                        ek = bytes.fromhex(values[1])
+                        entries.append(DownloadEntry(ek, int(build[name + '-size'][1]), -10))
+            _, root_choices = table.lookup(bytes.fromhex(build['root'][0]))
+            entries.append(DownloadEntry(root_choices[0].ekey, root_choices[0].encoded_size, -10))
+            plan.add(entries)
+
     def prepare(self):
         self._seed()
         version, cdn = self.client.discover()
@@ -707,48 +753,8 @@ class Updater:
             path = self.client.get_config(key)
             atomic_bytes(self.root / 'Data/config' / key[:2] / key[2:4] / key, path.read_bytes())
 
-        def manifest(name):
-            ck, ek = (bytes.fromhex(x) for x in build[name])
-            decoded, encoded = map(int, build[name + '-size'])
-            return self._decoded(name, ck, ek, decoded, encoded)
-
-        encoding = manifest('encoding')
-        install = manifest('install')
-        download = manifest('download')
-        selected = {'Windows', 'x86_64', self.region.upper(), self.locale, 'speech', 'text'}
-        signature = json.dumps(self.snapshot, sort_keys=True)
-        old = self.plan.db.execute("SELECT value FROM metadata WHERE name='signature'").fetchone()
-        with EncodingTable(encoding) as table:
-            if not old or old[0] != signature:
-                self.emit('planning', force=True)
-                self.plan.db.execute('DELETE FROM objects')
-                self.plan.db.execute('DELETE FROM files')
-                self.plan.db.commit()
-                self.plan.add(read_download(download, selected))
-                for entry in read_install(install, selected):
-                    relative = managed_path(entry.path)
-                    size, choices = table.lookup(entry.ckey)
-                    if size != entry.decoded_size or not choices:
-                        raise LibraryError('Install and encoding metadata disagree')
-                    encoding_info = choices[0]
-                    duplicate = self.plan.db.execute('SELECT ckey FROM files WHERE lower(path)=lower(?)', (relative,)).fetchone()
-                    if duplicate and duplicate[0] != entry.ckey:
-                        raise LibraryError('Conflicting selected install file variants')
-                    self.plan.db.execute('INSERT OR REPLACE INTO files VALUES(?,?,?,?)',
-                        (relative, entry.ckey, encoding_info.ekey, size))
-                    self.plan.add([DownloadEntry(encoding_info.ekey, encoding_info.encoded_size, -20)])
-                self.plan.db.execute("INSERT OR REPLACE INTO metadata VALUES('signature',?)", (signature,))
-                self.plan.db.commit()
-            # Well-known metadata is required even when absent from the download set.
-            entries = []
-            for name, values in build.items():
-                if name in {'encoding', 'install', 'download', 'size', 'patch-index', 'vfs-root'} or (name.startswith('vfs-') and not name.endswith('-size')):
-                    if len(values) == 2 and all(len(x) == 32 for x in values):
-                        ek = bytes.fromhex(values[1])
-                        entries.append(DownloadEntry(ek, int(build[name + '-size'][1]), -10))
-            _, root_choices = table.lookup(bytes.fromhex(build['root'][0]))
-            entries.append(DownloadEntry(root_choices[0].ekey, root_choices[0].encoded_size, -10))
-            self.plan.add(entries)
+        self._fill_plan(self.plan, build, json.dumps(self.snapshot, sort_keys=True),
+                        self.region, self.locale, stage='planning')
         self.store.checkpoint()
         total, size, missing, missing_size = self.plan.totals()
         free = shutil.disk_usage(self.root).free
@@ -861,6 +867,8 @@ class Updater:
         self.library.write_build_info(replacing=state)
         atomic_json(self.client_dir / 'state.json', state)
         (self.client_dir / 'pending.json').unlink(missing_ok=True)
+        for name in ('installed-plan.sqlite', 'installed-plan.sqlite-wal', 'installed-plan.sqlite-shm'):
+            (self.client_dir / name).unlink(missing_ok=True)
         system.sync_directory(self.client_dir)
         self.emit('complete', force=True, version=state['version'], objects=total, encoded_bytes=size)
         return state
@@ -876,8 +884,49 @@ class Updater:
         state = self.library.state(self.code)
         if not state:
             raise LibraryError(f'{self.entry.label} is not installed')
+        plan = self._installed_plan(state)
+        try:
+            return self._verify(state, plan, deep=deep)
+        finally:
+            if plan is not self.plan:
+                plan.close()
+
+    @staticmethod
+    def _describes(plan: Plan, state: dict) -> bool:
+        row = plan.db.execute("SELECT value FROM metadata WHERE name='signature'").fetchone()
+        try:
+            planned = json.loads(row[0]) if row else {}
+        except ValueError:
+            return False
+        return all(planned.get(name) == state.get(name) for name in ('build_config', 'region', 'locale'))
+
+    def _installed_plan(self, state: dict) -> Plan:
+        """The plan of the installed build.
+
+        An update plans the new build into plan.sqlite before it downloads, so while it is
+        unfinished the installed build gets a plan of its own, made from local content.
+        """
+        if self._describes(self.plan, state):
+            return self.plan
+        plan = Plan(self.client_dir / 'installed-plan.sqlite', self.store.inventory_path)
+        try:
+            if not self._describes(plan, state):
+                key = state['build_config']
+                path = self.root / 'Data/config' / key[:2] / key[2:4] / key
+                if not path.is_file() or md5_file(path).hex() != key:
+                    path = self.client.get_config(key)
+                signature = json.dumps({name: state.get(name) for name in ('product', 'build_config', 'region', 'locale')},
+                                       sort_keys=True)
+                self._fill_plan(plan, read_config(path.read_bytes()), signature, state['region'], state['locale'],
+                                stage=None)
+            return plan
+        except BaseException:
+            plan.close()
+            raise
+
+    def _verify(self, state: dict, plan: Plan, *, deep: bool) -> dict:
         count, bad = 0, []
-        for entry in self.plan.entries(physical=True):
+        for entry in plan.entries(physical=True):
             try:
                 if not self.store.has(entry.ekey):
                     raise StoreError('missing object')
@@ -890,7 +939,7 @@ class Updater:
                 self.check_cancelled()
             self.emit('verifying', done=count, errors=len(bad))
         game = self.root / state['folder']
-        for relative, ck, ek, size in self.plan.db.execute('SELECT path,ckey,ekey,size FROM files'):
+        for relative, ck, ek, size in plan.db.execute('SELECT path,ckey,ekey,size FROM files'):
             path = contained(game, relative)
             if not path.is_file() or path.stat().st_size != size or md5_file(path) != ck:
                 bad.append({'path': relative, 'error': 'installed file checksum or size mismatch'})

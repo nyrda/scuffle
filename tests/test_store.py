@@ -421,6 +421,27 @@ def test_verify_indexes_checks_latest_generation_without_mutation(tmp_path):
                           for path in current}
 
 
+def test_verify_indexes_accepts_appends_since_the_last_publish_and_only_those(tmp_path):
+    (old, old_data), (new, new_data) = blte(b"published"), blte(b"appended by an unfinished update")
+    with CascStore(tmp_path / "install") as store:
+        store.put(old, old_data)
+        store.publish()
+        store.put(new, new_data)
+        # The replacement of a published object is still published at its old place.
+        store.invalidate(old)
+        store.put(old, old_data)
+        assert store.verify_indexes()
+        # Once the record says they were published, missing or moved entries are errors again.
+        store._db.execute("UPDATE published SET tail_end=tail_end+1000000")
+        with pytest.raises(StoreError, match="differs from catalogue"):
+            store.verify_indexes()
+        store._db.execute("DELETE FROM published")
+        with pytest.raises(StoreError, match="differs from catalogue"):
+            store.verify_indexes()
+        store.publish()
+        assert store.verify_indexes()
+
+
 def test_verify_indexes_rejects_missing_bucket(tmp_path):
     with CascStore(tmp_path / "install") as store:
         paths = store.publish()

@@ -332,6 +332,10 @@ class CascStore:
                         segment INTEGER PRIMARY KEY, durable_end INTEGER NOT NULL,
                         tail_end INTEGER NOT NULL
                     );
+                    CREATE TABLE IF NOT EXISTS published(
+                        id INTEGER PRIMARY KEY CHECK (id = 0), segment INTEGER NOT NULL,
+                        tail_end INTEGER NOT NULL
+                    );
                 """)
                 self._recover()
         except BaseException:
@@ -770,9 +774,20 @@ class CascStore:
         without asserting their payload integrity. An owned prefix must occur
         exactly once with its catalogue location and size. It does not change
         files or catalogue rows. SQLite cursors and one mapped index bound
-        memory use. New updater appends require ``publish`` before verification.
+        memory use. Appends after the last ``publish``, such as an unfinished
+        update's, may be missing or still published at an older location.
         """
         with self._locked():
+            frontier = self._db.execute("SELECT segment,tail_end FROM published").fetchone()
+
+            def unpublished(row) -> bool:
+                return frontier is not None and (row[1], row[2]) >= frontier
+
+            def skip(wanted, prefix):
+                while wanted is not None and wanted[0] < prefix and unpublished(wanted):
+                    wanted = next(expected, None)
+                return wanted
+
             try:
                 indexes = _index_files(self.data_dir)
                 missing = sorted(set(range(16)) - indexes.keys())
@@ -787,10 +802,12 @@ class CascStore:
                         wanted = next(expected, None)
                         for found in actual:
                             prefix, segment, offset, size = found
+                            wanted = skip(wanted, prefix)
                             if wanted is not None and prefix == wanted[0]:
                                 if size == 0:
                                     raise StoreError(f"zero-size native span collides with owned prefix {prefix.hex()}")
-                                if wanted != found:
+                                # An unpublished replacement can still be published at its old location.
+                                if wanted != found and not unpublished(wanted):
                                     raise StoreError(f"published CASC index differs from catalogue in bucket {bucket:02x}: expected {wanted!r}, found {found!r}")
                                 wanted = next(expected, None)
                             elif wanted is not None and prefix > wanted[0]:
@@ -806,6 +823,7 @@ class CascStore:
                                     if size == 0:
                                         raise StoreError(f"zero-size native span collides with owned prefix {prefix.hex()}")
                                     raise StoreError(f"duplicate or ambiguous owned prefix {prefix.hex()} in published CASC indexes")
+                        wanted = skip(wanted, b"\xff" * 10)
                         if wanted is not None:
                             raise StoreError(f"published CASC index differs from catalogue in bucket {bucket:02x}: missing {wanted!r}")
                     finally:
@@ -836,6 +854,7 @@ class CascStore:
         with self._locked():
             self._checkpoint()
             self._invalidate_shmem()
+            frontier = self._db.execute("SELECT segment,tail_end FROM segments ORDER BY segment DESC LIMIT 1").fetchone()
             previous = _index_files(self.data_dir)
             published = []
             for bucket in range(16):
@@ -881,6 +900,10 @@ class CascStore:
                     if path not in keep:
                         path.unlink()
             system.sync_directory(self.data_dir)
+            # Appends from here on are not in these indexes yet. A crash before this commit
+            # keeps the older end, which only makes verify_indexes stricter.
+            self._db.execute("INSERT OR REPLACE INTO published VALUES(0,?,?)", frontier or (0, 0))
+            self._commit()
             return published
 
     export_index = publish

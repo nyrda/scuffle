@@ -383,6 +383,27 @@ def test_partial_transfer_resumes_without_refetching_stored_objects(tmp_path):
         assert all(dict(store.iter_entries())[key] == location for key, location in retained.items())
 
 
+def test_verify_checks_the_installed_build_while_an_update_waits(tmp_path):
+    root, build = tmp_path / "install", SyntheticBuild()
+    run_build(root, FixtureCDN(build, tmp_path / "first"))
+    changed = SyntheticBuild("0.0.1.2", changed=b"version two")
+    with pytest.raises(KeyboardInterrupt):
+        run_build(root, FixtureCDN(changed, tmp_path / "update", interrupt_after=0))
+    assert json.loads((root / ".waystone/clients/wowf/pending.json").read_text())["phase"] == "downloading"
+    # The plan describes the new build now. The installed one is still whole.
+    with updater_for(root, FixtureCDN(changed, tmp_path / "verify")) as updater:
+        report = updater.verify()
+    assert report["ok"], report["errors"]
+    (root / "_forever_/INTERFACE/client.txt").write_bytes(b"damaged")
+    with updater_for(root, FixtureCDN(changed, tmp_path / "again")) as updater:
+        report = updater.verify()
+    assert [error["path"] for error in report["errors"]] == ["INTERFACE/client.txt"]
+    run_build(root, FixtureCDN(changed, tmp_path / "finish"))
+    assert not (root / ".waystone/clients/wowf/installed-plan.sqlite").exists()
+    with updater_for(root, FixtureCDN(changed, tmp_path / "after")) as updater:
+        assert updater.verify()["ok"]
+
+
 @pytest.mark.parametrize("mode", ["truncated", "corrupted"])
 def test_bad_update_object_cannot_activate_over_previous_install(tmp_path, mode):
     root, old = tmp_path / "install", SyntheticBuild()

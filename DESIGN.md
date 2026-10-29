@@ -147,6 +147,20 @@ and committing to SQLite cost more.
 - A seed object is read once and checked in memory, from a segment file that
   stays open, since seeding reads in physical order.
 
+### Checking files
+
+A check compares the installed build with its plan: every object, every
+installed file, the build configurations and the published indexes.
+
+- An update plans the new build into `plan.sqlite` before it downloads. While it
+  is unfinished, the check plans the installed build into
+  `installed-plan.sqlite` from local content and uses that. Activation deletes
+  it.
+- Publishing records the end of the newest segment. Objects appended after it,
+  such as an unfinished update's, are not in the published indexes yet, or are
+  still published at an older location. The index check accepts that for them
+  only.
+
 ### CDN requests
 
 Every region row names its CDN hosts. For EU every WoW product currently names
