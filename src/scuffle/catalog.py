@@ -121,10 +121,10 @@ KNOWN = {
 }
 ORDER = list(KNOWN)
 
-# What Blizzard's data says now: the catalog's installs, the releases discovery found
-# and the clients offered, in order. Replaced as a whole, so a worker thread reading
+# What Blizzard's data says now: the catalog's installs, what earlier catalogs said about
+# products it no longer lists, the releases discovery found and the clients offered, in order. Replaced as a whole, so a worker thread reading
 # it never sees half an update.
-_state: tuple[dict[str, dict], dict[str, Release], dict[str, Client]] = ({}, {}, {})
+_state: tuple[dict[str, dict], dict[str, dict], dict[str, Release], dict[str, Client]] = ({}, {}, {}, {})
 
 
 def is_product(code) -> bool:
@@ -197,12 +197,12 @@ def _category(code: str, entry: dict) -> str:
     return kind if kind in CATEGORIES else OTHER
 
 
-def _describe(code: str, installs: dict, releases: dict[str, Release]) -> Client:
+def _describe(code: str, installs: dict, dropped: dict, releases: dict[str, Release]) -> Client:
     """A client before its parent is settled, from what is known about it."""
     known = KNOWN.get(code)
     entry = installs.get(code) or {}
     # A product the catalog dropped still launches with the install UID it had, and keeps its name.
-    earlier = entry or _builtin().get(code) or {}
+    earlier = entry or dropped.get(code) or _builtin().get(code) or {}
     found = releases.get(code)
     version = found.version if found else ''
     category = _category(code, entry)
@@ -256,13 +256,15 @@ def offered(code: str, installs: dict, releases: dict[str, Release]) -> bool:
     return found is not None and found.public
 
 
-def apply(products: dict[str, dict] | None, installs: dict | None = None) -> None:
-    """Use what discovery found and the Battle.net catalog's installs.
+def apply(products: dict[str, dict] | None, installs: dict | None = None, dropped: dict | None = None) -> None:
+    """Use what discovery found and the Battle.net catalog's installs, and what earlier
+    catalogs said about the products it dropped.
 
     No products means no versions are known. No installs means the snapshot Scuffle ships with.
     """
     global _state
     installs = installs if isinstance(installs, dict) else _builtin()
+    dropped = dropped if isinstance(dropped, dict) else {}
     releases = {}
     for code, row in (products or {}).items():
         if not is_product(code) or not isinstance(row, dict) or not row.get('version'):
@@ -271,17 +273,17 @@ def apply(products: dict[str, dict] | None, installs: dict | None = None) -> Non
                                  tuple(row.get('locales') or ()))
     codes = [code for code in KNOWN if offered(code, installs, releases)]
     codes += sorted(code for code in releases if code not in KNOWN and offered(code, installs, releases))
-    clients = _settle([_describe(code, installs, releases) for code in codes], installs)
-    _state = installs, releases, {client.code: client for client in sorted(clients, key=_order)}
+    clients = _settle([_describe(code, installs, dropped, releases) for code in codes], installs)
+    _state = installs, dropped, releases, {client.code: client for client in sorted(clients, key=_order)}
 
 
 def checked() -> bool:
     """Whether versions from the version service are known."""
-    return bool(_state[1])
+    return bool(_state[2])
 
 
 def release(code: str) -> Release | None:
-    return _state[1].get(code)
+    return _state[2].get(code)
 
 
 def clients(locale: str = '') -> list[Client]:
@@ -289,7 +291,7 @@ def clients(locale: str = '') -> list[Client]:
 
     With a locale, clients that discovery found cannot be installed in it are left out.
     """
-    _, releases, offered_ = _state
+    _, _, releases, offered_ = _state
 
     def fits(client):
         found = releases.get(client.code)
@@ -299,10 +301,10 @@ def clients(locale: str = '') -> list[Client]:
 
 def describe(code: str) -> Client:
     """A client that is not offered now, such as one installed earlier, by what is known about it."""
-    installs, releases, offered_ = _state
+    installs, dropped, releases, offered_ = _state
     if code in offered_:
         return offered_[code]
-    client = _describe(code, installs, releases)
+    client = _describe(code, installs, dropped, releases)
     return _settle(list(offered_.values()) + [client], installs)[-1]
 
 

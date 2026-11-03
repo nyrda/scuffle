@@ -1780,7 +1780,8 @@ class MainWindow(QMainWindow):
             self.discover()         # the region changed while this one was checked
             return
         if snapshot:
-            catalog.apply(snapshot['products'], battlenet.current(cache_dir())['installs'])
+            table = battlenet.current(cache_dir())
+            catalog.apply(snapshot['products'], table['installs'], table.get('dropped'))
         # A failed check with an earlier answer shows that answer, and says it is old.
         self.catalog_state = ('ready' if snapshot else 'stale') if catalog.checked() else 'offline'
         self.show_catalog()

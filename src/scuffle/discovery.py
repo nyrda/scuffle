@@ -162,7 +162,8 @@ def restore(cache: Path, region: str) -> dict | None:
     Returns the versions, or None when there are none yet.
     """
     snapshot = load(cache, region)
-    catalog.apply((snapshot or {}).get('products'), battlenet.current(cache)['installs'])
+    table = battlenet.current(cache)
+    catalog.apply((snapshot or {}).get('products'), table['installs'], table.get('dropped'))
     return snapshot
 
 

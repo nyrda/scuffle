@@ -131,13 +131,21 @@ def parse(root: dict, fragment: dict) -> dict[str, dict]:
 
 
 def valid(table) -> bool:
-    """A table as parse makes it, holding World of Warcraft itself. Anything else is not used."""
+    """A table as parse makes it, with World of Warcraft itself as a live game. Anything else is
+    not used, such as a catalog whose types could not be read, which would leave no game live."""
     if not isinstance(table, dict) or table.get('format') != FORMAT or not isinstance(table.get('checked_at'), int):
         return False
     installs = table.get('installs')
-    if not isinstance(installs, dict) or 'wow' not in installs:
+    if not isinstance(installs, dict) or not isinstance(installs.get('wow'), dict) \
+            or installs['wow'].get('kind') != catalog.LIVE:
         return False
-    for code, row in installs.items():
+    return _rows_valid(installs) and _rows_valid(table.get('dropped', {}))
+
+
+def _rows_valid(rows) -> bool:
+    if not isinstance(rows, dict):
+        return False
+    for code, row in rows.items():
         if not catalog.is_product(code) or not isinstance(row, dict):
             return False
         if not isinstance(row.get('uid'), str) or not UID.fullmatch(row['uid']) or row.get('kind') not in KINDS:
@@ -235,6 +243,17 @@ def fresh(table: dict | None, now: float | None = None) -> bool:
     return 0 <= age < TTL
 
 
+def retired(older: dict | None, installs: dict) -> dict[str, dict]:
+    """The products an older table had that these installs lack, with what was known about them.
+
+    An installed client the catalog stopped listing still launches with its install UID.
+    """
+    if not older:
+        return {}
+    rows = {**older.get('dropped', {}), **older['installs']}
+    return {code: row for code, row in sorted(rows.items()) if code not in installs}
+
+
 def update(region: str, cache: Path, *, get: Callable[[str], bytes]) -> dict | None:
     """Read the catalog again once the cached one is old. Never raises.
 
@@ -247,12 +266,16 @@ def update(region: str, cache: Path, *, get: Callable[[str], bytes]) -> dict | N
         table = fetch(region, cache, get=get)
     except Exception:       # offline, or the catalog changed. The last good one stays.
         return cached
+    table['dropped'] = retired(cached, table['installs'])
     save(cache, table)
     return table
 
 
 def current(cache: Path) -> dict:
-    """The newer of the cached table and the snapshot Scuffle ships with."""
+    """The newer of the cached table and the snapshot Scuffle ships with, with every product
+    either of them knew that it lacks."""
     from .catalog_snapshot import SNAPSHOT
     cached = load(cache)
-    return cached if cached and cached['checked_at'] >= SNAPSHOT['checked_at'] else SNAPSHOT
+    if cached and cached['checked_at'] >= SNAPSHOT['checked_at']:
+        return cached
+    return SNAPSHOT | {'dropped': retired(cached, SNAPSHOT['installs'])}

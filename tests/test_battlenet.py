@@ -154,6 +154,13 @@ def test_a_broken_or_unreachable_catalog_keeps_the_last_good_one(cdn, loopback, 
     cdn.publish('PUB-30', root(), empty)
     assert battlenet.update('us', tmp_path, get=cdn.get) == stale
     assert battlenet.load(tmp_path) == stale
+    # Or one whose products and types cannot be read, which would leave no game live.
+    untyped = fragment()
+    del untyped['products']
+    cdn.versions.clear()
+    cdn.publish('PUB-30', root(), untyped)
+    assert battlenet.update('us', tmp_path, get=cdn.get) == stale
+    assert battlenet.load(tmp_path) == stale
 
     def offline(url):
         raise OSError('offline')
@@ -162,15 +169,35 @@ def test_a_broken_or_unreachable_catalog_keeps_the_last_good_one(cdn, loopback, 
 
 def test_a_damaged_cache_is_not_used_and_the_newer_of_cache_and_snapshot_wins(tmp_path):
     from scuffle.catalog_snapshot import SNAPSHOT
-    assert battlenet.current(tmp_path) is SNAPSHOT
+    assert battlenet.current(tmp_path)['build'] == SNAPSHOT['build']
     battlenet.path(tmp_path).parent.mkdir(parents=True)
     battlenet.path(tmp_path).write_text('{"format": 1, "installs": {"wow": ')
-    assert battlenet.load(tmp_path) is None and battlenet.current(tmp_path) is SNAPSHOT
+    assert battlenet.load(tmp_path) is None and battlenet.current(tmp_path)['build'] == SNAPSHOT['build']
     newer = table() | {'checked_at': SNAPSHOT['checked_at'] + 1}
     battlenet.save(tmp_path, newer)
     assert battlenet.current(tmp_path) == newer
     battlenet.save(tmp_path, newer | {'checked_at': SNAPSHOT['checked_at'] - 1})
-    assert battlenet.current(tmp_path) is SNAPSHOT
+    assert battlenet.current(tmp_path)['build'] == SNAPSHOT['build']
+
+
+def test_an_installed_client_the_catalog_stops_listing_keeps_its_install_uid(cdn, loopback, tmp_path):
+    from scuffle.catalog_snapshot import SNAPSHOT
+    added = fragment()
+    added['installs']['wow_forever_live'] = added['installs']['wowf'] | {'tact_product': 'wowf9'}
+    cdn.publish('PUB-30', root(), added)
+    first = battlenet.update('us', tmp_path, get=cdn.get)
+    assert first['installs']['wowf9']['uid'] == 'wow_forever_live'
+    battlenet.save(tmp_path, first | {'checked_at': first['checked_at'] - battlenet.TTL - 1})
+    cdn.versions.clear()
+    cdn.publish('PUB-30', root(), fragment())        # Blizzard removes it again
+    assert 'wowf9' not in battlenet.update('us', tmp_path, get=cdn.get)['installs']
+    for age in [0, SNAPSHOT['checked_at'] - battlenet.load(tmp_path)['checked_at'] - 1]:
+        # From the cache, and once a newer Scuffle's snapshot is used instead of it.
+        cached = battlenet.load(tmp_path)
+        battlenet.save(tmp_path, cached | {'checked_at': cached['checked_at'] + age})
+        discovery.restore(tmp_path, 'us')
+        assert catalog.get('wowf9').uid == 'wow_forever_live'
+        assert 'wowf9' in [c.code for c in catalog.visible(installed=['wowf9'])]
 
 
 def test_a_check_of_the_version_service_reads_the_catalog_again_once_it_is_old(cdn, loopback, tmp_path):

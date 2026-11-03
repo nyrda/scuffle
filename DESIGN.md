@@ -163,15 +163,18 @@ Scuffle reads the newest format first and falls back to an older one when the
 newer one cannot be read. The result is a table keyed by product code with the
 install UID, the name, a kind and the game modes. The kind is live when the
 type's category is a live one and it is not deprecated, test when its type, UID
-or code names a PTR or a beta, and other otherwise. A table without World of
-Warcraft itself is rejected.
+or code names a PTR or a beta, and other otherwise. A table in which World of
+Warcraft itself is not a live game is rejected, as it is when the types cannot
+be read.
 
 The table is cached as `catalog/battlenet.json` in the cache folder and read
 again with the version service once it is six hours old. A catalog that cannot
 be read or is rejected leaves the cached table in place. `catalog_snapshot.py`
 holds the table as `tools/catalog_snapshot.py` read it, so a first start without
 a network lists the clients. Scuffle uses whichever of the cache and the
-snapshot is newer.
+snapshot is newer. The cache also keeps what earlier catalogs said about
+products the current one no longer lists, so an installed client keeps its
+install UID and name.
 
 ### What Scuffle adds
 
@@ -193,7 +196,7 @@ family's glyph.
 | Field | Comes from |
 | --- | --- |
 | Product code | the catalog's `installs` and the version service |
-| Install UID (`-uid`) | the catalog, or the snapshot for a product the catalog dropped, or the code |
+| Install UID (`-uid`) | the catalog, then an earlier catalog or the snapshot for a product it dropped, then the code |
 | Live, test or other | live from the catalog, test or other from Scuffle's table, then the catalog |
 | Name | Scuffle's table, then the catalog, then the version line, version and code |
 | Family | Scuffle's table, then the catalog's product, then the version |
