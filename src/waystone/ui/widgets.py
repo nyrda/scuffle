@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QComboBox, QFram
                                QVBoxLayout, QWidget)
 
 from .. import catalog
-from .style import CONTROL_HEIGHT, FAMILY_NAMES, SPACING, client_color, size_text, tile
+from .style import CONTROL_HEIGHT, FAMILY_NAMES, SPACING, size_text, tile
 
 
 def label(text: str = '', name: str | None = None, *, wrap: bool = False) -> QLabel:
@@ -137,7 +137,7 @@ class ClientRow(QWidget):
         layout.setContentsMargins(SPACING, 5, SPACING, 5)
         layout.setSpacing(10)
         icon = QLabel()
-        icon.setPixmap(tile(client.short, client_color(client), 32))
+        icon.setPixmap(tile(client, 32))
         icon.setFixedSize(32, 32)
         text = QVBoxLayout()
         text.setSpacing(0)
@@ -477,7 +477,7 @@ class StorageCard(QFrame):
         largest = max((size for _, size in clients), default=0)
         for row, (client, size) in enumerate(sorted(clients, key=lambda c: -c[1])):
             icon = QLabel()
-            icon.setPixmap(tile(client.short, client_color(client), 20))
+            icon.setPixmap(tile(client, 20))
             icon.setFixedSize(20, 20)
             name = ElidedLabel(client.label)
             meter = QProgressBar()

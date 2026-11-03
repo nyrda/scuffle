@@ -29,7 +29,6 @@ class Client:
     label: str
     uid: str             # install UID passed as -uid
     family: str          # groups related clients in the selector
-    short: str = ''      # tile text in the selector
     blurb: str = ''      # one line about what the client is
     parent: str = ''     # the live client a test or other client belongs to
     category: str = LIVE
@@ -88,30 +87,30 @@ BLURBS = {
 }
 
 CLIENTS = (
-    Client('wow', 'World of Warcraft', 'wow', 'retail', 'WoW'),
-    Client('wow_classic', 'Mists of Pandaria Classic', 'wow_classic', 'classic', 'MoP'),
-    Client('wow_anniversary', 'Burning Crusade Anniversary', 'wow_classic_anniversary', 'classic', 'TBC'),
-    Client('wow_classic_era', 'Classic Era', 'wow_classic_era', 'classic', 'Era', modes=ERA_MODES),
+    Client('wow', 'World of Warcraft', 'wow', 'retail'),
+    Client('wow_classic', 'Mists of Pandaria Classic', 'wow_classic', 'classic'),
+    Client('wow_anniversary', 'Burning Crusade Anniversary', 'wow_classic_anniversary', 'classic'),
+    Client('wow_classic_era', 'Classic Era', 'wow_classic_era', 'classic', modes=ERA_MODES),
     # Forever's release channel is not published yet. Its stress test is.
-    Client('wowf', 'Forever', 'wowf', 'forever', 'FV'),
-    Client('wowt', 'Retail PTR', 'wow_ptr', 'retail', 'PTR', parent='wow', category=TEST),
-    Client('wowxptr', 'Retail PTR 2', 'wow_ptr_x', 'retail', 'PTR2', parent='wow', category=TEST),
-    Client('wow_beta', 'Retail Beta', 'wow_beta', 'retail', 'β', parent='wow', category=TEST),
-    Client('wow_classic_ptr', 'MoP Classic PTR', 'wow_classic_ptr', 'classic', 'PTR', parent='wow_classic',
+    Client('wowf', 'Forever', 'wowf', 'forever'),
+    Client('wowt', 'Retail PTR', 'wow_ptr', 'retail', parent='wow', category=TEST),
+    Client('wowxptr', 'Retail PTR 2', 'wow_ptr_x', 'retail', parent='wow', category=TEST),
+    Client('wow_beta', 'Retail Beta', 'wow_beta', 'retail', parent='wow', category=TEST),
+    Client('wow_classic_ptr', 'MoP Classic PTR', 'wow_classic_ptr', 'classic', parent='wow_classic',
            category=TEST),
-    Client('wow_classic_era_ptr', 'Classic Era PTR', 'wow_classic_era_ptr', 'classic', 'PTR', parent='wow_classic_era',
+    Client('wow_classic_era_ptr', 'Classic Era PTR', 'wow_classic_era_ptr', 'classic', parent='wow_classic_era',
            category=TEST, modes=ERA_MODES),
-    Client('wow_classic_beta', 'Forever Beta', 'wow_classic_beta', 'forever', 'β', parent='wowf', category=TEST),
+    Client('wow_classic_beta', 'Forever Beta', 'wow_classic_beta', 'forever', parent='wowf', category=TEST),
 )
 
 # Other products Waystone has a name for. They are listed only once discovery finds
 # them public. Their install UIDs come from the same Battle.net catalog, whose
 # installs table maps each UID to its product, such as wow_dark to wowlivetest.
 OTHERS = (
-    Client('wowlivetest', 'Dark Realm Test', 'wow_dark', 'retail', 'DRT', parent='wow', category=OTHER),
-    Client('wowe1', 'Retail Event', 'wow_event1', 'retail', 'EV', parent='wow', category=OTHER),
-    Client('wowz', 'Classic Submission', 'wow_submission', 'classic', 'SUB', parent='wow_classic_era', category=OTHER),
-    Client('wow_cn_beta', 'Forever China Beta', 'wow_cn_beta', 'forever', 'CN', parent='wowf', category=OTHER),
+    Client('wowlivetest', 'Dark Realm Test', 'wow_dark', 'retail', parent='wow', category=OTHER),
+    Client('wowe1', 'Retail Event', 'wow_event1', 'retail', parent='wow', category=OTHER),
+    Client('wowz', 'Classic Submission', 'wow_submission', 'classic', parent='wow_classic_era', category=OTHER),
+    Client('wow_cn_beta', 'Forever China Beta', 'wow_cn_beta', 'forever', parent='wowf', category=OTHER),
 )
 
 CLIENTS, OTHERS = (tuple(Client(**{**c.__dict__, 'blurb': BLURBS.get(c.code, '')}) for c in group)
@@ -170,8 +169,7 @@ def describe(code: str, version: str = '') -> Client:
     family, parent = lineage(version) if version else ('retail', '')
     numbers = '.'.join(map(str, patch(version)))
     label = f'{LINE_NAMES[parent]} {numbers} ({code})' if numbers else code
-    short = re.sub(r'^wow_?', '', code).replace('_', '')[:3].upper() or 'WoW'
-    return Client(code, label, code, family, short, f'Published by Blizzard as {code}.', parent, OTHER)
+    return Client(code, label, code, family, f'Published by Blizzard as {code}.', parent, OTHER)
 
 
 def apply(products: dict[str, dict] | None) -> None:

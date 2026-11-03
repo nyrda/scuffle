@@ -3,8 +3,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QPointF, Qt
-from PySide6.QtGui import QColor, QFont, QPainter, QPalette, QPen, QPixmap
+from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtGui import (QBrush, QColor, QLinearGradient, QPainter, QPainterPath, QPalette, QPen,
+                           QPixmap, QPolygonF)
 
 ACCENT = '#2f6fd6'
 FAMILY_COLORS = {'retail': '#2f6fd6', 'classic': '#c4892b', 'forever': '#7d4fd1'}
@@ -209,22 +210,148 @@ QToolTip {{ background: {RAISED}; color: {TEXT}; border: 1px solid {BORDER}; pad
 '''
 
 
-def tile(text: str, color: str, size: int = 28) -> QPixmap:
-    """A rounded label tile, so the list needs no artwork."""
+# Each live client has a plain shape of its own. Its test and other clients share it.
+GLYPHS = {'wow': 'star', 'wow_classic': 'moon', 'wow_anniversary': 'flame', 'wow_classic_era': 'hourglass',
+          'wowf': 'loop'}
+FAMILY_GLYPHS = {'retail': 'star', 'classic': 'hourglass', 'forever': 'loop'}
+FILLED = {'star'}       # drawn as a solid shape, the others as an outline
+
+
+def glyph_name(client) -> str:
+    return GLYPHS.get(client.code) or GLYPHS.get(client.parent) or FAMILY_GLYPHS[client.family]
+
+
+def glyph_path(name: str) -> QPainterPath:
+    """The shape in a 24 by 24 box."""
+    path = QPainterPath()
+    if name == 'star':
+        points = [(12, 2.5), (14, 10), (21.5, 12), (14, 14), (12, 21.5), (10, 14), (2.5, 12), (10, 10)]
+        path.addPolygon(QPolygonF([QPointF(x, y) for x, y in points]))
+        path.closeSubpath()
+    elif name == 'moon':
+        disc = QPainterPath()
+        disc.addEllipse(QPointF(11, 12.5), 8.5, 8.5)
+        bite = QPainterPath()
+        bite.addEllipse(QPointF(16.5, 8.5), 7, 7)
+        path = disc.subtracted(bite)
+    elif name == 'flame':
+        path.moveTo(12, 21)
+        path.cubicTo(8, 21, 5.5, 18.4, 5.5, 15)
+        path.cubicTo(5.5, 11, 9.5, 9, 10, 4.5)
+        path.cubicTo(12.5, 6.5, 13, 9, 13, 10.5)
+        path.cubicTo(14, 9.7, 14.7, 8.5, 14.8, 7.2)
+        path.cubicTo(17.2, 9.2, 18.5, 12, 18.5, 15)
+        path.cubicTo(18.5, 18.4, 16, 21, 12, 21)
+    elif name == 'hourglass':
+        path.moveTo(6, 3)
+        path.lineTo(18, 3)
+        path.moveTo(6, 21)
+        path.lineTo(18, 21)
+        for side in (1, -1):
+            x = lambda value: 12 + side * (value - 12)
+            path.moveTo(x(7.5), 3)
+            path.cubicTo(x(7.5), 8, 12, 9.5, 12, 12)
+            path.cubicTo(12, 14.5, x(7.5), 16, x(7.5), 21)
+    elif name == 'loop':
+        path.moveTo(12, 12)
+        path.cubicTo(9.4, 8, 4, 8, 4, 12)
+        path.cubicTo(4, 16, 9.4, 16, 12, 12)
+        path.cubicTo(14.6, 8, 20, 8, 20, 12)
+        path.cubicTo(20, 16, 14.6, 16, 12, 12)
+    return path
+
+
+def mix(color: str, other: str, amount: float) -> QColor:
+    """color moved amount of the way towards other."""
+    a, b = QColor(color), QColor(other)
+    return QColor.fromRgbF(*(x + (y - x) * amount for x, y in
+                             zip((a.redF(), a.greenF(), a.blueF()), (b.redF(), b.greenF(), b.blueF()))))
+
+
+def accent_shade(color: str) -> str:
+    """The client's color, darkened until white text on it is readable (WCAG 4.5:1)."""
+    def luminance(value: QColor) -> float:
+        channels = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+                    for c in (value.redF(), value.greenF(), value.blueF())]
+        return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
+    amount = 0.0
+    shade = QColor(color)
+    while 1.05 / (luminance(shade) + 0.05) < 4.5 and amount < 1:
+        amount += 0.04
+        shade = mix(color, '#000000', amount)
+    return shade.name()
+
+
+def draw_glyph(painter: QPainter, name: str, box: QRectF, color: QColor, width: float = 1.8) -> None:
+    """The glyph scaled into box, filled or outlined with width in the glyph's own units."""
+    painter.save()
+    painter.translate(box.topLeft())
+    painter.scale(box.width() / 24, box.height() / 24)
+    path = glyph_path(name)
+    if name in FILLED:
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(color)
+    else:
+        painter.setPen(QPen(color, width, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        painter.setBrush(Qt.NoBrush)
+    painter.drawPath(path)
+    painter.restore()
+
+
+def tile(client, size: int = 28) -> QPixmap:
+    """A rounded tile with the client's glyph, so the list needs no artwork.
+
+    Test clients add stripes and other public clients dots, over their live client's glyph.
+    """
+    color = client_color(client)
     pixmap = QPixmap(size * 2, size * 2)
     pixmap.setDevicePixelRatio(2)
     pixmap.fill(Qt.transparent)
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.Antialiasing)
-    painter.setBrush(QColor(color))
-    painter.setPen(Qt.NoPen)
-    painter.drawRoundedRect(0, 0, size, size, size * 0.26, size * 0.26)
-    painter.setPen(QColor('white'))
-    font = QFont()
-    font.setBold(True)
-    font.setPixelSize(int(size * (0.36 if len(text) > 2 else 0.44)))
-    painter.setFont(font)
-    painter.drawText(0, 0, size, size, Qt.AlignCenter, text)
+    shape = QPainterPath()
+    radius = size * 0.24
+    shape.addRoundedRect(QRectF(0, 0, size, size), radius, radius)
+    painter.setClipPath(shape)
+    gradient = QLinearGradient(0, 0, size * 0.6, size)
+    gradient.setColorAt(0, mix(color, '#ffffff', 0.34))
+    gradient.setColorAt(0.5, QColor(color))
+    gradient.setColorAt(1, mix(color, '#000000', 0.34))
+    painter.fillRect(0, 0, size, size, gradient)
+    painter.setPen(QPen(QColor(255, 255, 255, 34), 1.2))
+    if client.test:
+        step = max(4.0, size / 6)
+        position = -size
+        while position < size:
+            painter.drawLine(QPointF(position, size), QPointF(position + size, 0))
+            position += step
+    elif client.optional:
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(255, 255, 255, 60))
+        step = max(4.0, size / 6)
+        y = step / 2
+        while y < size:
+            x = step / 2
+            while x < size:
+                painter.drawEllipse(QPointF(x, y), 1.0, 1.0)
+                x += step
+            y += step
+    # Lit from above: a light top edge and a darker bottom one.
+    edge = QLinearGradient(0, 0, 0, size)
+    edge.setColorAt(0, QColor(255, 255, 255, 70))
+    edge.setColorAt(0.5, QColor(255, 255, 255, 0))
+    edge.setColorAt(1, QColor(0, 0, 0, 70))
+    painter.setPen(QPen(QBrush(edge), 1.5))
+    painter.setBrush(Qt.NoBrush)
+    painter.drawPath(shape)
+    # Small tiles give the glyph more of the tile and a thicker line, so it stays readable.
+    share = 0.62 if size >= 28 else 0.7
+    inset = size * (1 - share) / 2
+    box = QRectF(inset, inset, size * share, size * share)
+    width = 1.8 if size >= 28 else 2.3
+    name = glyph_name(client)
+    draw_glyph(painter, name, box.translated(0, size * 0.03), QColor(0, 0, 0, 80), width)
+    draw_glyph(painter, name, box, QColor('white'), width)
     painter.end()
     return pixmap
 

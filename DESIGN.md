@@ -79,6 +79,18 @@ holds the NGDP product code. Every client launches its own executable, such as
 `Wow.exe`, `WowT.exe` or `WowB.exe`, with `-launcherlogin -uid <install UID>`.
 Classic Era modes add `-initialgamemode=cera`, `chc` or `csod`.
 
+### Look
+
+Waystone ships no Blizzard artwork, logos or icons. Each client's tile is drawn
+in code: a gradient in the client's color with a plain glyph. Retail has a
+star, Mists of Pandaria Classic a crescent, Burning Crusade Anniversary a flame,
+Classic Era an hourglass and Forever a loop. Test and other public clients take
+their live client's glyph, with stripes for a test client and dots for an other
+one. The client page tints its header band with the client's color and draws
+the glyph large and faint at its top right. The main button and the progress
+bar take the client's color, darkened until white text on it reaches 4.5:1.
+Pause and the other secondary states keep the neutral button.
+
 ### Discovery
 
 `discovery` reads the version service's summary at

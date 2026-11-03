@@ -6,8 +6,9 @@ from pathlib import Path
 import shutil
 import sys
 
-from PySide6.QtCore import QDir, QEvent, QTimer, Qt, Signal
-from PySide6.QtGui import QColor, QKeySequence, QLinearGradient, QPainter, QShortcut
+from PySide6.QtCore import QDir, QEvent, QPointF, QRectF, QTimer, Qt, Signal
+from PySide6.QtGui import (QBrush, QColor, QKeySequence, QLinearGradient, QPainter, QPen, QRadialGradient, QShortcut,
+                           QTransform)
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QFileSystemModel, QFrame, QGridLayout,
                                QHBoxLayout, QLabel, QLineEdit, QMenu, QProgressBar, QPushButton,
                                QScrollArea, QSizePolicy, QSpacerItem, QSpinBox, QToolButton, QTreeView, QVBoxLayout, QWidget)
@@ -16,7 +17,8 @@ from .. import catalog
 from ..launch import looks_like_redirect, open_browser, parse_ticket
 from ..settings import LOCALE_NAMES, MEGABYTE, REGIONS, Settings
 from .launch_options import LaunchSettings
-from .style import BACKGROUND, FAMILY_NAMES, SPACING, client_color, size_text, tile
+from .style import (BACKGROUND, FAMILY_NAMES, SPACING, accent_shade, client_color, glyph_name, glyph_path, mix,
+                    size_text, tile)
 from .widgets import (Banner, ElidedLabel, FactsCard, Segmented, StorageCard, duration_text, fixed, label,
                       progress_variants, tone)
 
@@ -79,32 +81,63 @@ class UninstallPage(QWidget):
 
 
 class Tinted(QWidget):
-    """A page body with a faint band of the client's color behind the header."""
+    """A page body with a faint band of the client's color and its glyph behind the header."""
 
     def __init__(self):
         super().__init__()
-        self.color = None
+        self.client = None
 
-    def set_color(self, color: str | None):
-        if color != self.color:
-            self.color = color
+    def set_client(self, client: catalog.Client | None):
+        if client != self.client:
+            self.client = client
             self.update()
 
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.fillRect(self.rect(), QColor(BACKGROUND))
-        if self.color:
+        if self.client:
+            painter.setRenderHint(QPainter.Antialiasing)
+            color = client_color(self.client)
             # A header band that grows with the window, so tall windows look planned.
             height = min(280, max(160, int(self.height() * 0.28)))
-            gradient = QLinearGradient(0, 0, 0, height)
-            top = QColor(self.color)
-            top.setAlpha(34)
-            bottom = QColor(self.color)
-            bottom.setAlpha(0)
-            gradient.setColorAt(0, top)
-            gradient.setColorAt(1, bottom)
-            painter.fillRect(0, 0, self.width(), height, gradient)
+            band = QLinearGradient(0, 0, 0, height)
+            band.setColorAt(0, faded(color, 34))
+            band.setColorAt(1, faded(color, 0))
+            painter.fillRect(0, 0, self.width(), height, band)
+            # A brighter wash from the top left corner, behind the client's tile and name.
+            # Stretched sideways, so it is gone by the band's bottom edge on every window.
+            wash = QRadialGradient(QPointF(0, 0), height)
+            wash.setColorAt(0, faded(color, 52))
+            wash.setColorAt(1, faded(color, 0))
+            stretch = max(320, self.width() * 0.55) / height
+            painter.save()
+            painter.scale(stretch, 1)
+            painter.fillRect(QRectF(0, 0, self.width() / stretch, height), wash)
+            painter.restore()
+            # The glyph, large and faint at the top right, with rings that fade out downwards.
+            size = height * 1.15
+            centre = QPointF(self.width() - size * 0.36, height * 0.32)
+            fade = QLinearGradient(0, 0, 0, height)
+            fade.setColorAt(0, faded(color, 60, lighter=True))
+            fade.setColorAt(1, faded(color, 0, lighter=True))
+            painter.setBrush(Qt.NoBrush)
+            painter.setPen(QPen(QBrush(fade), 1))
+            for ring in range(1, 10):
+                painter.drawEllipse(centre, ring * 15.0, ring * 15.0)
+            # Outlined at this size, even a glyph the tiles fill, so it stays in the background.
+            place = QTransform()
+            place.translate(centre.x() - size / 2, centre.y() - size / 2)
+            place.scale(size / 24, size / 24)
+            painter.setClipRect(QRectF(0, 0, self.width(), height))
+            painter.setPen(QPen(QBrush(fade), 1.6, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            painter.drawPath(place.map(glyph_path(glyph_name(self.client))))
         painter.end()
+
+
+def faded(color: str, alpha: int, lighter: bool = False) -> QColor:
+    value = mix(color, '#ffffff', 0.45) if lighter else QColor(color)
+    value.setAlpha(alpha)
+    return value
 
 
 GUTTER = 10          # the vertical scroll bar's width in the stylesheet
@@ -440,7 +473,7 @@ class ClientPage(Page):
             self.title.style().unpolish(self.title)
             self.title.style().polish(self.title)
             if getattr(self, '_client', None):
-                self.icon.setPixmap(tile(self._client.short, client_color(self._client), size))
+                self.icon.setPixmap(tile(self._client, size))
 
     def focus_chain(self) -> list[QWidget]:
         """The page's controls in reading order, for the window's tab order."""
@@ -450,9 +483,25 @@ class ClientPage(Page):
                    self.primary, self.cancel, self.more]
         return widgets
 
+    def accent(self, color: str) -> None:
+        """The main button and the progress bar take the client's color.
+
+        Only the accented state is restyled, so Pause and the other secondary states keep
+        the application's look. The shade keeps white text readable.
+        """
+        if color == getattr(self, '_accent', None):
+            return
+        self._accent = color
+        shade = accent_shade(color)
+        self.primary.setStyleSheet(
+            f'QPushButton#primary[secondary="false"]:enabled {{ background: {shade}; }}'
+            f'QPushButton#primary[secondary="false"]:enabled:hover {{ background: {mix(shade, "#ffffff", 0.12).name()}; }}'
+            f'QPushButton#primary[secondary="false"]:disabled {{ background: {mix(shade, BACKGROUND, 0.6).name()}; }}')
+        self.busy.setStyleSheet(f'QProgressBar[tone=""]::chunk {{ background: {color}; }}')
+
     def show_empty(self) -> None:
         self._client = None
-        self.body.set_color(None)
+        self.body.set_client(None)
         self.main.hide()
         self.storage.hide()
         self.empty.show()
@@ -465,8 +514,9 @@ class ClientPage(Page):
         self.main.show()
         self.empty.hide()
         self._client = client
-        self.icon.setPixmap(tile(client.short, client_color(client), self.icon.width()))
-        self.body.set_color(client_color(client))
+        self.icon.setPixmap(tile(client, self.icon.width()))
+        self.body.set_client(client)
+        self.accent(client_color(client))
         self.title.setText(client.label)
         self.family.setText(FAMILY_NAMES[client.family] + (' · test client' if client.test else
                                                             ' · other public client' if client.optional else ''))
