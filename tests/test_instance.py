@@ -1,10 +1,14 @@
 """One window per user: a later start hands its request to the process that holds the window."""
 from pathlib import Path
+import shutil
+import subprocess
+import sys
 import threading
 
 import pytest
 
-from waystone import instance
+from waystone import cli, instance
+from waystone.library import LibraryError
 
 
 def test_a_later_start_hands_its_request_to_the_window_and_waits_for_the_game():
@@ -66,3 +70,32 @@ def test_a_request_the_window_refuses_ends_with_its_reason():
             instance.hand_over({'play': 'wow', 'mode': 'sod'})
     finally:
         window.close()
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='the stand-in game is a Linux process')
+def test_a_waiting_shortcut_keeps_waiting_for_the_game_when_the_window_closes_first(tmp_path):
+    executable = tmp_path / '_retail_' / 'Wow.exe'
+    executable.parent.mkdir()
+    # A process that runs the game's file as far as Waystone can tell, by its first argument.
+    game = subprocess.Popen([str(executable), '-c', 'sleep 1; true'], executable=shutil.which('bash'))
+    window = instance.claim({'show': True})
+    window.serve(lambda request, reply: (reply.send(ok=True, executable=str(executable)), reply.close()))
+    try:
+        assert instance.hand_over({'play': 'wow', 'wait': True})
+        assert game.poll() is not None
+    finally:
+        game.kill()
+        game.wait()
+        window.close()
+
+
+def test_a_command_never_runs_beside_the_window(tmp_path):
+    window = instance.claim({'show': True})
+    try:
+        with pytest.raises(instance.InstanceError, match='window is open'):
+            cli.main(['--root', str(tmp_path / 'games'), 'verify', 'wow'])
+    finally:
+        window.close()
+    # Without a window the command runs, and fails only because nothing is installed.
+    with pytest.raises(LibraryError, match='not installed'):
+        cli.main(['--root', str(tmp_path / 'games'), 'verify', 'wow'])

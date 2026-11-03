@@ -1685,13 +1685,17 @@ def test_a_running_window_takes_over_a_shortcut_and_says_when_the_game_has_exite
     reply = Reply()
     window.on_request({'play': 'wow_classic_era', 'mode': 'sod', 'wait': True}, reply)
     assert started == [('wow_classic_era', 'sod')]
-    assert reply.sent == [{'ok': True}] and not reply.closed
+    # The game's file lets the shortcut keep waiting for it should this window close first.
+    executable = str(window.library.root / '_retail_' / 'Wow.exe')
+    assert reply.sent == [{'ok': True, 'executable': executable}] and not reply.closed
     window.on_phase('wow_classic_era', 'Running')
     assert not reply.closed
     window.on_task_finished('wow_classic_era', '')
-    assert reply.sent == [{'ok': True}, {'finished': True}] and reply.closed
+    assert reply.sent == [{'ok': True, 'executable': executable}, {'finished': True}] and reply.closed
 
 
+@pytest.mark.skipif(sys.platform == 'win32', reason='Windows finds Steam and the Start menu '
+                    'outside the folders a test can redirect')
 def test_the_menu_adds_a_client_to_the_app_launcher_and_uninstalling_removes_it(qt, window, tmp_path, monkeypatch):
     from waystone import shortcuts
     from waystone.downloads import DONE, Job
@@ -1715,6 +1719,8 @@ def test_the_menu_adds_a_client_to_the_app_launcher_and_uninstalling_removes_it(
     assert not shortcuts.in_launcher('wow')
 
 
+@pytest.mark.skipif(sys.platform == 'win32', reason='Windows finds Steam and the Start menu '
+                    'outside the folders a test can redirect')
 def test_the_menu_adds_a_client_to_steam_once_steam_is_closed(qt, window, tmp_path, monkeypatch):
     from pathlib import Path
     from waystone import steam

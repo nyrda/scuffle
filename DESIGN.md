@@ -382,7 +382,9 @@ crashed window never blocks the next start. Its leftover socket is removed by
 the next owner of the lock. A window that holds the lock but does not listen
 yet gets 30 seconds. So the library, the download queue and the session are
 only ever used by one process, and a shortcut never fights a running window
-for the library lock.
+for the library lock. The other commands, such as `update` or a plain `play`,
+hold the same lock while they run and refuse to start while a window holds it.
+`clients` only reads and needs no lock.
 
 ### What a shortcut runs
 
@@ -397,7 +399,9 @@ or update, a client that is not installed, or a start that failed. Once shown,
 it stays open as a normal window. A hidden process quits once the game runs,
 or with `--wait` once it has exited, which keeps Steam showing the game as
 running. A window that took over a shortcut with `--wait` keeps the
-connection open and answers when the game has exited. A shortcut for a game
+connection open and answers when the game has exited. Its first answer names
+the game's executable, so a shortcut whose window closes before the game keeps
+waiting on the game's process itself. A shortcut for a game
 that already runs starts nothing and waits for that game.
 
 The command has to survive upgrades.

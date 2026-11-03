@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import shlex
 import shutil
+import stat
 import struct
 import zlib
 
@@ -160,13 +161,23 @@ class Steam:
     root: Path
 
     def users(self) -> list[Path]:
-        """The config folder of every Steam account that signed in here."""
+        """The config folder of every Steam account that signed in here.
+
+        An account folder that cannot be read raises, so a change never skips it unnoticed.
+        """
         folder = self.root / 'userdata'
-        try:
-            return sorted(user / 'config' for user in folder.iterdir()
-                          if user.name.isdigit() and int(user.name) > 0 and (user / 'config').is_dir())
-        except OSError:
+        if not folder.is_dir():
             return []
+        found = []
+        for user in folder.iterdir():
+            if not (user.name.isdigit() and int(user.name) > 0):
+                continue
+            try:
+                if stat.S_ISDIR((user / 'config').stat().st_mode):
+                    found.append(user / 'config')
+            except (FileNotFoundError, NotADirectoryError):
+                continue
+        return sorted(found)
 
     def running(self) -> bool:
         """Whether this Steam installation's client runs."""
@@ -194,7 +205,11 @@ class Steam:
         return False
 
     def has(self, code: str) -> bool:
-        for config in self.users():
+        try:
+            users = self.users()
+        except OSError:
+            return False
+        for config in users:
             try:
                 if any(ours(value, code) for _, _, value in shortcut_list(parse(self._read(config)))):
                     return True
@@ -300,8 +315,8 @@ def find() -> Steam | None:
     for candidate in candidates:
         try:
             steam = Steam(candidate.resolve())
+            if steam.users():
+                return steam
         except OSError:
             continue
-        if steam.users():
-            return steam
     return None

@@ -1084,7 +1084,9 @@ class MainWindow(QMainWindow):
             reply.send(error=problem)
             reply.close()
             return
-        reply.send(ok=True)
+        # Kept by a waiting start, which watches the game itself if this window closes first.
+        executable = self.library.executable(code) if self.library else None
+        reply.send(ok=True, executable=str(executable) if executable else None)
         if not wait:
             reply.close()
         finished = (lambda: (reply.send(finished=True), reply.close())) if wait else None

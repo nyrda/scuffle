@@ -130,15 +130,21 @@ def test_nothing_is_written_while_steam_runs(installation, tmp_path):
 
 
 @linux_steam
-@pytest.mark.parametrize('damage', [b'\x09odd\x00', b''], ids=['unknown-type', 'cut-short'])
+@pytest.mark.parametrize('damage', [b'\x09odd\x00', b'', None], ids=['unknown-type', 'cut-short', 'no-access'])
 def test_a_file_waystone_cannot_read_stops_every_change(installation, damage):
     root, (first, second) = installation
     data = FIXTURE.read_bytes()
     # A field of a type with unknown length inside the first entry, or the end missing.
     broken = data[:40] + damage + data[40:] if damage else data[:-5]
     (second / 'shortcuts.vdf').write_bytes(broken)
-    with pytest.raises(steam.VdfError):
-        steam.find().add('wow', 'World of Warcraft', COMMAND, images())
+    found = steam.find()
+    if damage is None:
+        second.parent.chmod(0)          # an account folder Waystone may not enter
+    try:
+        with pytest.raises(PermissionError if damage is None else steam.VdfError):
+            found.add('wow', 'World of Warcraft', COMMAND, images())
+    finally:
+        second.parent.chmod(0o755)
     # Neither account's file changed, though the first one could have been read.
     assert (first / 'shortcuts.vdf').read_bytes() == data
     assert (second / 'shortcuts.vdf').read_bytes() == broken

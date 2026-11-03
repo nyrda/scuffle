@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from contextlib import contextmanager
 from multiprocessing import AuthenticationError
 from multiprocessing.connection import Client, Listener
 import os
@@ -126,16 +127,34 @@ def claim(request: dict) -> Window | None:
             handle.close()
         if hand_over(request):
             return None
-        # The window took the lock and is still starting.
+        # The window took the lock and is still starting, or a command in a terminal holds it.
         if time.monotonic() > deadline:
-            raise InstanceError('Waystone is starting in another process and does not answer. Try again.')
+            raise InstanceError('Another Waystone process, such as a command in a terminal, is using the '
+                                'installation and does not answer. Try again once it has finished.')
         time.sleep(0.2)
+
+
+@contextmanager
+def exclusive():
+    """Hold the window's lock while a command runs, or refuse while a window holds it."""
+    path = settings.data_dir() / 'window.lock'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open('a+b') as handle:
+        try:
+            system.lock(handle, blocking=False)
+        except system.LockBusy:
+            raise InstanceError('The Waystone window is open. Close it first, or use the window.') from None
+        try:
+            yield
+        finally:
+            system.unlock(handle)
 
 
 def hand_over(request: dict) -> bool:
     """Send request to the window that runs. False when none answers.
 
-    With wait in the request, this returns once the window says the game is gone.
+    With wait in the request, this returns once the window says the game is gone. A window
+    that closes before then leaves the game running, so the game's own process is watched.
     """
     secret = key()
     if secret is None:
@@ -158,6 +177,11 @@ def hand_over(request: dict) -> bool:
         if request.get('wait'):
             try:
                 connection.recv_bytes(4096)
+                return True
             except (OSError, EOFError):
-                pass        # the window closed, which ends the wait too
+                pass        # the window closed first
+    if request.get('wait') and answer.get('executable'):
+        executable = Path(answer['executable'])
+        while system.game_processes(executable):
+            time.sleep(2)
     return True

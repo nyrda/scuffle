@@ -9,7 +9,7 @@ from pathlib import Path
 import sys
 
 from . import catalog, system
-from .instance import InstanceError
+from .instance import InstanceError, exclusive
 from .library import Library, LibraryError, Updater
 from .ngdp.cdn import CDNClient
 from .settings import Settings, cache_dir
@@ -79,6 +79,14 @@ def main(argv=None):
         # The window's own Play, which handles sign-in and updates and keeps one Waystone per user.
         from .ui.app import main as interface
         return interface({'play': args.client, 'mode': args.mode, 'wait': args.wait})
+    if args.command == 'clients':
+        return run(args)        # reads only
+    # The window's queue, launches and session must not run beside a command's.
+    with exclusive():
+        return run(args)
+
+
+def run(args):
     settings = Settings.load()
     root = args.root or (Path(settings.root) if settings.root else None)
     if root is None:

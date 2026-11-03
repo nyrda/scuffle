@@ -163,7 +163,9 @@ waystone --root /games/Waystone play wow_classic_era --mode hardcore
 waystone play wow_classic_era --mode hardcore --shortcut --wait
 ```
 
-`play --shortcut` is what the shortcuts run. It uses the window's installation
+The commands refuse to run while the Waystone window is open, since the window
+may be downloading or starting a game in the same folder. `play --shortcut` is
+what the shortcuts run. It uses the window's installation
 folder and opens the window when it needs a sign-in or an update, where a plain
 `play` asks for the sign-in in the terminal. `--wait` keeps the command
 running until the game exits, as Steam needs.
