@@ -455,11 +455,6 @@ def fake_installed(window, code: str) -> None:
     window.library.state = lambda c: ({'version': '12.0.5.66741', 'region': 'eu', 'locale': 'enUS',
                                        'folder': '_retail_'} if c == code else state(c))
 
-
-if __name__ == '__main__':
-    main(Path(sys.argv[1] if len(sys.argv) > 1 else 'screens'))
-
-
 def tray_menu(window, application, output: Path) -> None:
     """The tray icon's menu while a client downloads, with clients to play and one running."""
     from PySide6.QtCore import QPoint
@@ -486,3 +481,7 @@ def tray_menu(window, application, output: Path) -> None:
     window.library.installed, window.library.state = installed, state
     window.downloads.jobs.clear()
     window.downloads._current = None
+
+
+if __name__ == '__main__':
+    main(Path(sys.argv[1] if len(sys.argv) > 1 else 'screens'))
