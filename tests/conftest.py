@@ -1,5 +1,7 @@
 """Every test runs with its own configuration, data and cache folders."""
+import ipaddress
 import os
+import socket
 from pathlib import Path
 
 import pytest
@@ -55,6 +57,27 @@ def private_folders(tmp_path, monkeypatch):
     for name in FOLDERS:
         monkeypatch.setenv(name, str(tmp_path / 'home' / name.lower()))
     monkeypatch.setenv('DBUS_SESSION_BUS_ADDRESS', NO_BUS)
+
+
+LOOPBACK_NAMES = {'localhost', '127.0.0.1', '::1'}
+
+
+@pytest.fixture(autouse=True)
+def no_network(monkeypatch):
+    # Tests read captured answers. Only local servers a test starts itself can be reached.
+    resolve, connect = socket.getaddrinfo, socket.socket.connect
+
+    def local_names(host, *args, **kwargs):
+        if host not in LOOPBACK_NAMES and not (isinstance(host, str) and host.startswith('127.')):
+            raise socket.gaierror(f'Tests never reach the network, not even to look up {host}')
+        return resolve(host, *args, **kwargs)
+
+    def local_only(self, address):
+        if self.family in (socket.AF_INET, socket.AF_INET6) and not ipaddress.ip_address(address[0]).is_loopback:
+            raise OSError(f'Tests never reach the network, not even {address[0]}')
+        return connect(self, address)
+    monkeypatch.setattr(socket, 'getaddrinfo', local_names)
+    monkeypatch.setattr(socket.socket, 'connect', local_only)
 
 
 @pytest.fixture
