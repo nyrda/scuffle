@@ -52,6 +52,24 @@ def test_a_packaged_bridge_runs_from_a_lasting_copy_that_an_update_never_overwri
     assert list(second.parent.iterdir()) == [second]
 
 
+def test_the_appimage_bridge_runs_from_a_lasting_copy_and_the_nix_bridge_in_place(tmp_path, monkeypatch):
+    # The AppImage's mount goes away when Waystone exits, while the bridge waits for the game.
+    appdir = tmp_path / 'mount'
+    packaged = appdir / 'usr' / 'libexec' / 'waystone' / 'wow_auth_bridge.exe'
+    packaged.parent.mkdir(parents=True)
+    packaged.write_bytes(b'MZ appimage')
+    monkeypatch.setenv('APPDIR', str(appdir))
+    monkeypatch.setenv('WAYSTONE_BRIDGE', str(packaged))
+    copy = bridge_executable()
+    assert copy.parent == data_dir() / 'bin' and copy.read_bytes() == b'MZ appimage'
+
+    store = tmp_path / 'store' / 'libexec' / 'wow_auth_bridge.exe'
+    store.parent.mkdir(parents=True)
+    store.write_bytes(b'MZ nix')
+    monkeypatch.setenv('WAYSTONE_BRIDGE', str(store))
+    assert bridge_executable() == store
+
+
 @pytest.mark.parametrize('pasted', [
     'http://localhost:0/?ST=EU-0123abcd-314159265&flowTrackingId=\n',
     '  EU-0123abcd-314159265  ',

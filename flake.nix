@@ -57,8 +57,10 @@
         pythonImportsCheck = [ "waystone.library" "waystone.launch" "waystone.cli" ];
         meta.mainProgram = "waystone";
       };
+      # A Linux package for distributions without Nix. See packaging/appimage.
+      appimage = pkgs.callPackage ./packaging/appimage { inherit version bridge app; source = ./src/waystone; };
     in {
-      packages.${system} = { default = app; inherit bridge; };
+      packages.${system} = { default = app; inherit bridge appimage; };
       devShells.${system}.default = pkgs.mkShell {
         packages = [ (python.withPackages (p: [ p.pytest p.pyside6 ])) pkgs.umu-launcher ];
         WAYSTONE_BRIDGE = "${bridge}/libexec/wow_auth_bridge.exe";
