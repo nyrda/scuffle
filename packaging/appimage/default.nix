@@ -125,6 +125,9 @@ stdenvNoCC.mkDerivation {
 
     cp -r ${source} $site/waystone
     chmod -R u+w $site/waystone
+    # The package metadata, so the version Waystone reports, as in diagnostics, is this build's.
+    mkdir $site/waystone-${version}.dist-info
+    printf 'Metadata-Version: 2.1\nName: waystone\nVersion: ${version}\n' > $site/waystone-${version}.dist-info/METADATA
 
     mkdir -p $appdir/usr/lib/umu
     tar -xf ${umu} -C $appdir/usr/lib/umu --strip-components=1 umu/umu-run
