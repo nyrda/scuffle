@@ -28,6 +28,7 @@ Read `DESIGN.md` before changing behaviour. `README.md` is the user's guide.
 nix develop -c pytest -q                       # the whole suite, a few minutes
 nix develop -c env QT_QPA_PLATFORM=offscreen PYTHONPATH=src \
   python3 tools/screens.py /tmp/scuffle-screens  # every UI state at three sizes
+nix develop -c python3 tools/readme_screenshot.py  # docs/screenshot.png, after window changes
 nix build                                      # the Nix package, runs the tests
 nix build .#appimage                           # the Linux AppImage
 packaging/windows/remote-build.sh <ssh host>   # Scuffle.exe, built on Windows
