@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  linux:
+    name: Linux (Nix and AppImage)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: cachix/install-nix-action@v31
+      # The package build runs the whole test suite.
+      - name: Build and test the Nix package
+        run: nix build -L
+      - name: Build the AppImage
+        run: nix build -L .#appimage -o appimage
+      - name: Start the AppImage on Ubuntu
+        run: packaging/appimage/test-ubuntu.sh appimage/Scuffle-*-x86_64.AppImage
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Scuffle-AppImage
+          path: appimage/Scuffle-*-x86_64.AppImage
+          if-no-files-found: error
+
+  windows:
+    name: Windows (tests and Scuffle.exe)
+    runs-on: windows-2025
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+      - name: Build Scuffle.exe
+        run: ./packaging/windows/build.ps1
+      # The build's own environment has PySide6 at the version the package bundles.
+      - name: Install pytest
+        run: build/windows/venv/Scripts/python.exe -m pip install --quiet --disable-pip-version-check pytest==9.1.1
+      - name: Run the tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: build/windows/venv/Scripts/python.exe -m pytest -q
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Scuffle-exe
+          path: dist/Scuffle.exe
+          if-no-files-found: error
