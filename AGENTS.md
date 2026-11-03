@@ -35,23 +35,6 @@ nix build .#appimage                           # the Linux AppImage
 packaging/windows/remote-build.sh <ssh host>   # Scuffle.exe, built on Windows
 ```
 
-## Safety
-
-This machine holds real data. Never run Scuffle against it:
-
-- the settings, Battle.net sessions and Wine prefix in `~/.config/scuffle`,
-  `~/.local/share/scuffle` and `~/.cache/scuffle`
-- the installation folder named in the settings
-- `~/.steam`, `~/.local/share/applications` and the Start menu
-
-Run with temporary `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME` and
-`HOME`, as `tests/conftest.py` and `tools/screens.py` do. Do not sign in to
-Battle.net, start a game or download real builds. Use the fixtures and fakes.
-
-The suite fails if anything changes the real folders. When that happens, check
-first whether the user's own running Scuffle wrote them. It saves on exit and
-checks for updates every 30 minutes.
-
 ## Rules for the product
 
 - No Blizzard artwork, logos or icons, bundled or fetched. Icons and tiles are
