@@ -41,10 +41,16 @@ def windows_path(path: Path) -> str:
 
 
 def bridge_executable() -> Path:
-    """The bridge a Nix wrapper points to, a lasting copy of the packaged one, or the source tree's."""
+    """The bridge a package points to, a lasting copy of the packaged one, or the source tree's."""
     override = os.environ.get('WAYSTONE_BRIDGE')
     if override:
-        return Path(override)
+        bridge = Path(override)
+        # The AppImage points into its own mount, which goes away when Waystone exits.
+        # The Nix store stays, so the Nix package's bridge runs where it is.
+        appdir = os.environ.get('APPDIR')
+        if appdir and bridge.is_relative_to(appdir) and bridge.is_file():
+            return installed_copy(bridge, data_dir() / 'bin')
+        return bridge
     bundle = getattr(sys, '_MEIPASS', None)
     if bundle is None:
         return Path(__file__).parents[1] / 'bridge' / 'wow_auth_bridge.exe'

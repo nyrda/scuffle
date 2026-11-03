@@ -153,6 +153,40 @@ To check the uninstall tests against deliberate failures, run
 `nix develop -c python3 tools/check_uninstall_mutations.py`. The script restores
 each source file and writes its report under `.pytest_cache/uninstall-mutations`.
 
+## Linux AppImage
+
+`Waystone-<version>-x86_64.AppImage` runs on distributions without Nix, such as
+Ubuntu 22.04 and newer, Fedora, Arch and SteamOS. Python, Qt, umu-launcher and
+the bridge are inside. Build it on a machine with Nix:
+
+```sh
+nix build .#appimage
+ls result/Waystone-0.1.0-x86_64.AppImage
+```
+
+Copy the file anywhere, make it executable and start it:
+
+```sh
+chmod +x Waystone-0.1.0-x86_64.AppImage
+./Waystone-0.1.0-x86_64.AppImage            # the window
+./Waystone-0.1.0-x86_64.AppImage --help     # the command line
+```
+
+It needs FUSE, which desktops install as `fuse3`. Without it,
+`--appimage-extract-and-run` unpacks the file to a temporary folder first. That
+folder is deleted when Waystone exits, so close the game before Waystone.
+
+The AppImage keeps its settings, session and prefix in the same folders as the
+Nix package, so you can switch between them. Proton still comes from Steam,
+ProtonUp or another launcher. Closing a game needs `nsenter`, which every
+distribution ships with util-linux.
+
+On NixOS, use the Nix package. To try the AppImage there anyway, run it with
+`appimage-run` and add `zstd` to its libraries. `packaging/appimage/test-ubuntu.sh
+result/Waystone-0.1.0-x86_64.AppImage` runs it in a plain Ubuntu container with
+podman, without network, and checks the command line, the window on X11,
+Wayland and offscreen, and the bundled umu-run.
+
 ## Windows package
 
 `dist/Waystone.exe` is a single file with Python and Qt inside. Windows needs

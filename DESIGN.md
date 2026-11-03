@@ -317,6 +317,78 @@ from an earlier window, counts too. A worker lists the processes at most every
 - A game without a window, as when it hangs while quitting, or one that has
   not quit after 20 seconds, gets a banner that points at Force quit.
 
+## Linux packaging
+
+Linux has two packages. The Nix package wraps the app with `WAYSTONE_BRIDGE`,
+`umu-launcher` and `util-linux` from nixpkgs. The AppImage is for distributions
+without Nix and is built by the same flake, `nix build .#appimage`.
+
+The AppImage holds nothing from the Nix store. Its parts are prebuilt for
+portability, and each is fetched by hash in `packaging/appimage/default.nix`:
+
+| Part | Source |
+| --- | --- |
+| Python 3.14 | python-build-standalone, built against glibc 2.17 |
+| Qt and PySide6 6.12 | the `manylinux_2_34` wheels, the version the Nix and Windows packages use |
+| xcb helper libraries | Debian 12 packages, for Qt's X11 plugin |
+| umu-launcher 1.4.4 | its release zipapp, the version nixpkgs wraps |
+| the bridge | the Nix mingw build, a Windows program |
+| the AppImage runtime | the static type2 runtime, which needs FUSE but not libfuse2 |
+
+The build runs in the Nix sandbox, so the same commit yields the same file, and
+`nix build .#appimage --rebuild` confirms it. The wheels set the glibc baseline
+at 2.34: Ubuntu 22.04, Fedora 35, Debian 12, current Arch and SteamOS 3.
+python-appimage and linuxdeploy were the alternatives. They collect libraries
+from the build machine, which on NixOS are Nix's own and need its newer glibc.
+An AppImage of a Nix closure carries Nix's glibc and graphics stack, so Qt
+would not find the host's OpenGL drivers, and it is several times larger.
+
+Only the Qt parts Waystone uses are kept: QtCore, QtGui, QtWidgets, the X11,
+Wayland and offscreen platforms, desktop themes, input methods, and SVG icons
+and images. The build fails if a kept library needs a Qt or xcb helper library
+that is not bundled. The xcb helpers sit next to Qt's libraries, where the
+plugins' `RPATH` finds them, so the AppImage sets no `LD_LIBRARY_PATH` that the
+browser or the game would inherit. Everything else comes from the host and is
+part of every desktop: glibc, libstdc++, libxcb, libxkbcommon, the Wayland
+client libraries, fontconfig, OpenGL, GLib, D-Bus, zstd and the CA
+certificates. libxkbcommon-x11 is not bundled, since it must come from the same
+release as the host's libxkbcommon. A mismatched pair crashes the X11 plugin.
+
+`AppRun` starts the bundled Python with `-I -B`, so the user's Python variables
+and packages stay out and no bytecode is written. The bytecode is compiled at
+build time with unchecked hashes. `AppRun` sets `APPDIR` to its own folder and
+`WAYSTONE_BRIDGE` to the bridge inside it, and puts its `usr/bin` first on
+`PATH`. It leaves `APPIMAGE` as the runtime set it, so Waystone can name its own
+file. The configuration, data and cache folders are the XDG ones, as with the
+Nix package, so a user can switch between the two.
+
+The AppImage's mount lasts as long as Waystone's process, since the runtime
+unmounts it when the last holder of its keepalive pipe exits and Waystone's
+children do not inherit that pipe. The bridge and umu-run wait for the game,
+which can outlive Waystone, so neither runs from the mount:
+
+- A `WAYSTONE_BRIDGE` inside `APPDIR` runs from the copy in `bin` inside the
+  data folder, as the Windows package's bridge does. The Nix store stays, so
+  the Nix package's bridge runs in place.
+- umu-run is bundled, preferred over a system one as in the Nix package, and
+  found by `find_umu` on `PATH`. `usr/bin/umu-run` starts the AppImage file
+  again with `WAYSTONE_APPRUN=umu-run`, which gives umu-run a mount of its own
+  for as long as it runs, and `AppRun` then runs the zipapp with the bundled
+  Python. An extracted copy, such as appimage-run's, is not a mount point and
+  runs in place. Without the zipapp it exits with a message that names it,
+  which Waystone shows. umu-run downloads the Steam Linux Runtime on first use,
+  as it does elsewhere.
+
+`nsenter` comes from the host's util-linux, which every target distribution
+installs. Closing a game joins the same pressure-vessel container as with Nix,
+where umu-run runs inside one more FHS container. Without `nsenter` the close
+fails with a message that points at Force quit.
+
+`--appimage-extract-and-run`, for systems without FUSE, deletes the extracted
+copy when Waystone exits, so a game started from it should end before
+Waystone does. On NixOS the Nix package is the one to use. appimage-run's
+environment lacks libzstd and needs it added to run the AppImage.
+
 ## Launch options
 
 Each client has its own game arguments, stored by client code. They apply on
