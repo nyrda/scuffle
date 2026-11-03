@@ -2,9 +2,7 @@
 
 Scuffle installs, updates and launches the public World of Warcraft clients
 without the Battle.net app. Linux runs games through Proton and `umu-run`, and
-Windows runs them natively. It is a Python 3 and PySide6 app. The project was
-called Waystone, and the repository folder keeps that name. Call it Scuffle
-everywhere else.
+Windows runs them natively. It is a Python 3 and PySide6 app.
 
 Read `DESIGN.md` before changing behaviour. `README.md` is the user's guide.
 
