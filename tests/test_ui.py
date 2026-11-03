@@ -1719,6 +1719,19 @@ def test_a_shortcut_opens_the_window_on_a_client_that_needs_something_first(qt, 
     assert not unseen.waiters and not unseen.quits
 
 
+def test_a_shortcut_with_the_tray_setting_on_still_stops_the_queue_when_it_quits(qt, unseen, monkeypatch):
+    stopped = []
+    monkeypatch.setattr(unseen.downloads, 'shutdown', lambda: stopped.append(True))
+    monkeypatch.setattr(unseen.tray, 'available', lambda: True)
+    unseen.settings.keep_in_tray = True
+    unseen.start_shortcut({'play': 'wow_classic_era', 'mode': None, 'wait': False})
+    settle(qt)
+    unseen.on_phase('wow_classic_era', 'Running')
+    settle(qt)
+    # Quitting, not hiding into the tray: the queue stops and is saved as on any quit.
+    assert unseen.quits and stopped
+
+
 def test_a_shortcut_that_needs_a_sign_in_shows_the_sign_in_page(qt, unseen, monkeypatch):
     monkeypatch.setattr(pages, 'open_browser', lambda url: None)
     unseen.start_shortcut({'play': 'wow', 'wait': False})
@@ -1877,3 +1890,198 @@ def test_import_from_a_chosen_folder_explains_a_folder_without_an_installation(q
     assert window.stack.currentWidget() is page
     assert 'No World of Warcraft installation' in page.problem.text()
     assert not page.confirm.isEnabled()
+
+
+def notifications(window, monkeypatch):
+    """What reached the desktop's notification service, as client, title and body."""
+    shown = []
+    monkeypatch.setattr(window.notifier, 'show',
+                        lambda title, body, client, category='': shown.append((client, title, body)))
+    return shown
+
+
+def wait_until(qt, check):
+    deadline = time.monotonic() + 20         # generous for a loaded machine. Only a failure waits it out
+    while not check():
+        assert time.monotonic() < deadline
+        qt.processEvents()
+        time.sleep(0.01)
+    qt.processEvents()
+
+
+def test_a_finished_or_failed_download_notifies_unless_the_window_shows_that_client(qt, window, tmp_path,
+                                                                                   monkeypatch):
+    from waystone.downloads import DONE, FAILED, DownloadManager
+    from waystone.library import LibraryError
+
+    def execute(self, job):
+        if job.client == 'wowf':
+            raise LibraryError('The disk is full.')
+        return {}
+    monkeypatch.setattr(DownloadManager, '_execute', execute)
+    shown = notifications(window, monkeypatch)
+    window.settings.root = str(tmp_path / 'games')
+    window.open_library()
+    window.populate()
+    window.client_list.select('wow')
+    window.show_client_page()
+    window.activateWindow()
+    wait_until(qt, window.isActiveWindow)
+    for code in ['wow', 'wowf', 'wowt']:        # the first one is on screen
+        window.downloads.enqueue(code, 'install')
+    wait_until(qt, lambda: all(window.downloads.job(c).status in {DONE, FAILED} for c in ['wow', 'wowf', 'wowt']))
+    ptr = ui_label('wowt')
+    assert shown == [('wowf', 'Forever did not install', 'The disk is full.'),
+                     ('wowt', f'{ptr} is installed', 'Ready to play.')]
+    # Removing the failure later is no second failure.
+    window.downloads.remove('wowf')
+    qt.processEvents()
+    window.settings.show_notifications = False
+    window.downloads.enqueue('wow_classic', 'install')
+    wait_until(qt, lambda: window.downloads.job('wow_classic').status == DONE)
+    assert len(shown) == 2
+
+
+def ui_label(code):
+    from waystone import catalog
+    return catalog.get(code).label
+
+
+def test_a_new_version_is_announced_once_also_after_a_restart(qt, window, tmp_path, monkeypatch):
+    from waystone.ui import app as ui
+    shown = notifications(window, monkeypatch)
+    window.settings.root = str(tmp_path / 'games')
+    window.open_library()
+    installed(window, monkeypatch, ['wow', 'wowf'])
+    window.populate()
+    window.client_list.select('wowf')
+    window.on_updates({'wow': '12.0.7.1', 'wowf': False})
+    window.on_updates({'wow': '12.0.7.1', 'wowf': False})      # the check half an hour later
+    assert shown == [('wow', 'Update for World of Warcraft', 'Version 12.0.7.1 is available.')]
+    restarted = ui.MainWindow()
+    try:
+        later = notifications(restarted, monkeypatch)
+        restarted.on_updates({'wow': '12.0.7.1'})
+        restarted.on_updates({'wow': '12.0.8.2'})
+        assert later == [('wow', 'Update for World of Warcraft', 'Version 12.0.8.2 is available.')]
+    finally:
+        restarted.close()
+
+
+@pytest.mark.parametrize('exit_code, report, force, expected', [
+    (0, False, False, None),
+    (0, True, False, 'Its crash report is in the Errors folder of its game folder.'),
+    (0xC0000005, False, False, 'It exited with code 0xc0000005.'),
+    (1, False, True, None),          # Force quit ends a game on Windows with code 1
+])
+def test_a_game_that_quits_unexpectedly_notifies(qt, window, tmp_path, monkeypatch, exit_code, report, force,
+                                                 expected):
+    import threading
+    from types import SimpleNamespace
+    from waystone.ui import app as ui
+    shown = notifications(window, monkeypatch)
+    window.settings.root = str(tmp_path / 'games')
+    window.open_library()
+    installed(window, monkeypatch, ['wow'])
+    monkeypatch.setattr(window.library, 'game_processes', lambda code: [4242])
+    release = threading.Event()
+
+    class Game:
+        returncode = None
+
+        def wait(self):
+            assert release.wait(30)
+            if report:
+                (tmp_path / 'games/_retail_/Errors').mkdir(parents=True)
+                (tmp_path / 'games/_retail_/Errors/crash.txt').write_text('')
+            self.returncode = exit_code
+    monkeypatch.setattr(ui, 'CDNClient', lambda *args: None)
+    monkeypatch.setattr(ui, 'update_available', lambda *args: False)
+    runtime = SimpleNamespace(close=lambda *args, **kwargs: 'asked')
+    monkeypatch.setattr(window, 'launcher', lambda: SimpleNamespace(
+        play=lambda code, sign_in, mode=None, status=None: Game(), runtime=runtime))
+    window.populate()
+    window.client_list.select('wowf')
+    window.play('wow')
+    wait_until(qt, lambda: window.phases.get('wow') == 'Running')
+    if force:
+        window.close_game('wow', force=True)
+        qt.processEvents()
+    release.set()
+    wait_until(qt, lambda: 'wow' not in window.phases)
+    assert shown == ([('wow', 'World of Warcraft quit unexpectedly', expected)] if expected else [])
+
+
+@pytest.mark.parametrize('tray', [True, False])
+def test_closing_with_the_tray_setting_keeps_downloads_running_until_quit(qt, window, tmp_path, monkeypatch, tray):
+    import json
+    from PySide6.QtWidgets import QSystemTrayIcon
+    from waystone import downloads
+    from waystone.downloads import PAUSED, QUEUED, DownloadManager
+    from waystone.settings import Settings
+    monkeypatch.setattr(QSystemTrayIcon, 'isSystemTrayAvailable', staticmethod(lambda: tray))
+    monkeypatch.setattr(DownloadManager, '_run', lambda self: None)    # the job waits, so its state stays plain
+    window.settings.root = str(tmp_path / 'games')
+    window.open_library()
+    window.settings.keep_in_tray = True
+    window.downloads.enqueue('wow', 'install')
+    try:
+        window.close()
+        if tray:
+            # Hidden with a way back, and the download carries on.
+            assert window.isHidden() and window.tray.available()
+            assert window.downloads.job('wow').status == QUEUED
+            window.quit()
+        # Without a tray, closing quits as it always did. Quit from the tray does the same.
+        assert window.isHidden() and not window.tray.icon.isVisible()
+        assert window.downloads.job('wow').status == PAUSED
+        saved = json.loads((downloads.data_dir() / 'downloads.json').read_text())
+        assert [(job['client'], job['status']) for job in saved['jobs']] == [('wow', PAUSED)]
+        assert Settings.load().keep_in_tray is True
+    finally:
+        QApplication.setQuitOnLastWindowClosed(True)
+
+
+def test_without_a_system_tray_the_tray_setting_is_greyed_out_and_keeps_its_choice(qt, window, monkeypatch):
+    from PySide6.QtWidgets import QSystemTrayIcon
+    from waystone.settings import Settings
+    available = {'tray': False}
+    monkeypatch.setattr(QSystemTrayIcon, 'isSystemTrayAvailable', staticmethod(lambda: available['tray']))
+    window.settings.keep_in_tray = True
+    window.open_settings()
+    page = window.settings_page
+    assert not page.keep_in_tray.isEnabled() and not page.keep_in_tray.isChecked()
+    assert page.tray_note.isVisible() and 'no system tray' in page.tray_note.text()
+    page.show_notifications.setChecked(False)
+    assert (Settings.load().show_notifications, Settings.load().keep_in_tray) == (False, True)
+    available['tray'] = True
+    window.open_settings()
+    assert page.keep_in_tray.isEnabled() and page.keep_in_tray.isChecked() and not page.tray_note.isVisible()
+    page.keep_in_tray.setChecked(False)
+    assert Settings.load().keep_in_tray is False
+
+
+def test_the_tray_starts_a_client_as_its_main_button_does(qt, window, tmp_path, monkeypatch):
+    from waystone.downloads import DownloadManager
+    from waystone.ui import app as ui
+    monkeypatch.setattr(DownloadManager, '_run', lambda self: None)
+    window.settings.root = str(tmp_path / 'games')
+    window.open_library()
+    installed(window, monkeypatch, ['wow', 'wowf'])
+    # The update check before a start finds one, so the start becomes that update.
+    monkeypatch.setattr(ui, 'CDNClient', lambda *args: None)
+    monkeypatch.setattr(ui, 'update_available', lambda *args: True)
+    window.populate()
+    window.updates['wowf'] = True
+    window.refresh()
+    actions = window.tray.client_actions
+    assert actions['wowf'].text() == 'Update Forever'
+    assert actions['wow'].text() == 'Sign in and play World of Warcraft'
+    actions['wowf'].trigger()
+    assert window.downloads.job('wowf').kind == 'update'
+    actions['wow'].trigger()
+    assert window.phases['wow'] == 'Checking for updates'
+    assert not actions['wow'].isEnabled()           # one start at a time
+    wait_until(qt, lambda: window.downloads.job('wow') is not None)
+    assert window.downloads.job('wow').kind == 'update' and 'wow' not in window.phases
+    assert actions['wow'].text() == 'World of Warcraft · Queued' and not actions['wow'].isEnabled()

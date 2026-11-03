@@ -699,10 +699,10 @@ installed client the catalog does not offer now still gets a row in Settings, so
 it can be shown again after it was hidden. Entries that cannot be a product code
 are dropped when loading.
 
-The settings page has five sections: General for the folder, region and
-language, Clients for the three categories, Downloads for transfer controls,
-Launch for the Proton build and the Linux launch options, and Diagnostics for
-bug reports.
+The settings page has five sections: General for the folder, region,
+language, notifications and the tray, Clients for the three categories,
+Downloads for transfer controls, Launch for the Proton build and the Linux
+launch options, and Diagnostics for bug reports.
 `SettingsPage.add_launch_widget` and `add_download_row` add further settings to
 those sections.
 
@@ -762,3 +762,55 @@ Privacy holds in three layers.
   300 characters only after this, so a cut never hides part of a secret from
   the patterns.
 
+## Notifications and tray
+
+`ui/notifications.py` shows desktop notifications. `ui/tray.py` holds the tray
+icon and its menu, which the window fills from its own state on every refresh.
+
+### Notifications
+
+- On Linux a notification goes to `org.freedesktop.Notifications` on the
+  session bus, so it shows without a tray and the desktop's do-not-disturb
+  applies. PySide6's QtDBus cannot marshal the `uint32` that `Notify` takes, so
+  Waystone sends it with `jeepney`, a pure-Python D-Bus library.
+- The connection stays open for the whole run. KDE and dunst send a click only
+  to the connection that showed the notification. The `default` action of a
+  known notification id opens the window on its client.
+- All D-Bus work runs on a thread of its own with a 5 second reply timeout, so
+  a missing bus, a missing service or a hung one never holds up the window. A
+  failure falls back to the tray icon's message, or to nothing, and the next
+  notification connects again. A body is escaped when the service reads markup.
+- On Windows the tray icon shows the notification, which the system turns into
+  a toast that follows Focus assist.
+- Nothing is shown for the client the active window shows, or for downloads
+  while the Downloads page is open. **Show notifications** turns them all off.
+
+What counts:
+
+| Event | Detected by |
+| --- | --- |
+| A download finished or failed | the job's status going from running to done or failed, seen by a download manager listener on the thread that changed it. A failure removed later, or one restored on start, is not a new one |
+| A new version | the update check. `announced_updates` in the settings keeps the last version announced per client, so each version is announced once, also across restarts |
+| A start that failed, or a needed update | the same results the window's banner shows. They matter for a start from the tray |
+| A crash | a file in the game folder's `Errors` folder newer than the start, or, on Windows, a non-zero exit code. On Linux the bridge returns 0 after any game exit, so only the crash report counts there. A Force quit is never a crash |
+
+### Tray
+
+The icon is created on every desktop, and it counts as reachable only while
+`QSystemTrayIcon.isSystemTrayAvailable()` is true, which a tray bar that starts
+later can change. Its menu has Show Waystone, the current download with Pause all and Resume all, up
+to five installed and listed clients by last play, and Quit. A client's entry
+reads as the main button would, Play, Sign in and play or Update, and runs the
+same `MainWindow.start`. It is greyed out while the client has a job, is
+starting or running, and during a sign-in, when the window locks the other
+clients too. A sign-in started from the tray shows the window.
+
+With `keep_in_tray`, closing the window hides it while the tray is available.
+Downloads and games carry on. A hidden window turns off quitting on the last
+closed window, so a closing menu cannot end the process. A timer checks the
+tray every 5 seconds while the window is hidden and shows the window when the
+tray went away, so there is never a process the user cannot reach. Quit in the
+tray, Ctrl+C and a terminate request all close the window through the same
+close handling as before: the queue stops, the running transfer pauses, and the
+settings are saved. Without a tray the setting is greyed out with the reason,
+and its saved choice is kept.

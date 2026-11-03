@@ -680,6 +680,20 @@ class SettingsPage(Page):
                          'They apply to new installs. Installed clients keep their own.')
         self.row(grid, 'Region', self.region)
         self.row(grid, 'Language', self.locale)
+        grid = self.card(general, 'Notifications and tray',
+                         'Notifications say when a download finishes or fails, when a client has a new '
+                         'version, and when a game quits unexpectedly.')
+        self.show_notifications = QCheckBox('Show notifications')
+        self.keep_in_tray = QCheckBox('Keep running in the tray when the window is closed')
+        self.keep_in_tray.setToolTip('Downloads keep running. Quit Waystone from the tray icon\'s menu.')
+        # Without a tray, a hidden window could not come back, so closing it always quits.
+        self.tray_note = label('This desktop has no system tray, so closing the window quits Waystone.',
+                               'small', wrap=True)
+        self.tray_note.hide()
+        for box in [self.show_notifications, self.keep_in_tray]:
+            grid.addWidget(box, grid.rowCount(), 0, 1, 3)
+            box.toggled.connect(self.apply)
+        grid.addWidget(self.tray_note, grid.rowCount(), 0, 1, 3)
 
         # Clients
         clients = self.section_layouts['clients']
@@ -885,7 +899,7 @@ class SettingsPage(Page):
         """The page's controls in reading order, for the window's tab order."""
         chain = [self.close_button, *self.sections.group.buttons()]
         if self.section == 'general':
-            chain += [self.browse, self.region, self.locale]
+            chain += [self.browse, self.region, self.locale, self.show_notifications, self.keep_in_tray]
         elif self.section == 'clients':
             for category, _, _ in self.CATEGORIES:
                 if category == catalog.OTHER:
@@ -1015,12 +1029,23 @@ class SettingsPage(Page):
         self.workers.setValue(settings.workers)
         self.pause_while_playing.setChecked(settings.pause_while_playing)
         self.resume_downloads.setChecked(settings.resume_downloads)
+        self.show_notifications.setChecked(settings.show_notifications)
+        self.keep_in_tray.setChecked(settings.keep_in_tray and self.keep_in_tray.isEnabled())
         if self.launch is not None:
             self.launch.load(settings)
         self._loading = False
         self.update_free()
         self.update_other()
         self.update_logs()
+
+    def set_tray_available(self, available: bool) -> None:
+        """Without a system tray the setting is greyed out and shown off. Its saved choice stays."""
+        self.keep_in_tray.setEnabled(available)
+        self.tray_note.setVisible(not available)
+        if self.settings is not None:
+            self._loading, was_loading = True, self._loading
+            self.keep_in_tray.setChecked(available and self.settings.keep_in_tray)
+            self._loading = was_loading
 
     def lock_folder(self, reason: str) -> None:
         """Downloads write into the current folder, so it stays until they are done."""
@@ -1063,6 +1088,9 @@ class SettingsPage(Page):
         s.workers = self.workers.value()
         s.pause_while_playing = self.pause_while_playing.isChecked()
         s.resume_downloads = self.resume_downloads.isChecked()
+        s.show_notifications = self.show_notifications.isChecked()
+        if self.keep_in_tray.isEnabled():
+            s.keep_in_tray = self.keep_in_tray.isChecked()
         if self.launch is not None:
             self.launch.apply(s)      # the Proton build and the Linux launch options
         s.show_other_clients = values['show_other']

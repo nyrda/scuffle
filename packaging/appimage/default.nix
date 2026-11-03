@@ -24,6 +24,11 @@ let
       url = "https://files.pythonhosted.org/packages/49/c2/a04fa003b4360e99d8e3fc2829abacf37396ace63ea1cd616402209ec7c6/shiboken6-6.12.0-cp310-abi3-manylinux_2_34_x86_64.whl";
       hash = "sha256-O95WW7CJAES1x/Y4CK3d7eWrwkHpOVor/tYZGYhNYkA=";
     })
+    # Desktop notifications over D-Bus, the version the Nix package uses. Pure Python.
+    (fetchurl {
+      url = "https://files.pythonhosted.org/packages/b2/a3/e137168c9c44d18eff0376253da9f1e9234d0239e0ee230d2fee6cea8e55/jeepney-0.9.0-py3-none-any.whl";
+      hash = "sha256-l+VxRSDBb8CkVpXlNlouEbgep5u6eW4m+fHReMsYJoM=";
+    })
   ];
   # The version the Nix package wraps. The zipapp carries its pure Python dependencies.
   umu = fetchurl {
