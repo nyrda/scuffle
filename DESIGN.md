@@ -354,7 +354,8 @@ client libraries, fontconfig, OpenGL, GLib, D-Bus, zstd and the CA
 certificates. libxkbcommon-x11 is not bundled, since it must come from the same
 release as the host's libxkbcommon. A mismatched pair crashes the X11 plugin.
 
-`AppRun` starts the bundled Python with `-I -B`, so the user's Python variables
+`AppRun` stops with a message that names the file when its Python or the
+bridge is missing. It starts the bundled Python with `-I -B`, so the user's Python variables
 and packages stay out and no bytecode is written. The bytecode is compiled at
 build time with unchecked hashes. `AppRun` sets `APPDIR` to its own folder and
 `WAYSTONE_BRIDGE` to the bridge inside it, and puts its `usr/bin` first on

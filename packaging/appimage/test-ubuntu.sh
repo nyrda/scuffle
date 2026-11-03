@@ -93,4 +93,6 @@ assert umu == pathlib.Path(os.environ[\"APPDIR\"]) / \"usr/bin/umu-run\", umu
 '"
 rm $root/usr/lib/umu/umu-run
 check 'a missing umu-run says so' "! $root/usr/bin/umu-run --help 2>/tmp/missing.log && grep -q 'umu-run is missing from this Waystone AppImage' /tmp/missing.log"
+rm $root/usr/libexec/waystone/wow_auth_bridge.exe
+check 'a missing bridge says so' "! $root/AppRun --help 2>/tmp/missing.log && grep -q 'wow_auth_bridge.exe is missing' /tmp/missing.log"
 EOF

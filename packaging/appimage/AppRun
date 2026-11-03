@@ -16,6 +16,12 @@ fi
 # Waystone copies a bridge inside APPDIR to its data folder, since the mount goes away on exit.
 export APPDIR="$here"
 export WAYSTONE_BRIDGE="$here/usr/libexec/waystone/wow_auth_bridge.exe"
+for part in "$python" "$WAYSTONE_BRIDGE"; do
+    if [ ! -f "$part" ]; then
+        echo "This Waystone AppImage is incomplete: $part is missing" >&2
+        exit 127
+    fi
+done
 # The bundled umu-run comes first, as the Nix package puts its own first.
 export PATH="$here/usr/bin${PATH:+:$PATH}"
 exec "$python" -I -B -m waystone "$@"
