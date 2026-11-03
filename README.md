@@ -223,29 +223,4 @@ for it. Use `start /wait "" Scuffle.exe ...` in cmd or
 
 ## Development
 
-```sh
-nix develop -c pytest -q                         # the tests
-nix develop -c env QT_QPA_PLATFORM=offscreen PYTHONPATH=src \
-  python3 tools/screens.py /tmp/scuffle-screens    # every window state, for review
-nix develop -c python3 tools/readme_screenshot.py  # docs/screenshot.png
-nix develop -c env PYTHONPATH=src python3 -m scuffle  # run from the checkout
-```
-
-`tools/readme_screenshot.py` draws the screenshot above from code, with made-up
-clients and no real data, so it only changes when the window does. Run it after
-changing the window. `tools/check_uninstall_mutations.py` and
-`tools/check_move_mutations.py` check that the uninstall and move tests catch
-deliberate bugs.
-
-**AppImage**: `nix build .#appimage` writes `result/Scuffle-0.1.0-x86_64.AppImage`.
-`packaging/appimage/test-ubuntu.sh result/Scuffle-0.1.0-x86_64.AppImage` runs
-it in a plain Ubuntu container with podman. On NixOS, use the Nix package, or
-run the AppImage with `appimage-run` with `zstd` added.
-
-**Windows**: PyInstaller cannot cross-compile, so
-`packaging/windows/remote-build.sh <ssh host>` copies the working tree to a
-Windows machine with Python 3.14 and the `py` launcher, builds `Scuffle.exe`
-there and fetches it. On a Windows checkout, `packaging/windows/build.ps1`
-builds it directly. Its tools are pinned with hashes in
-`packaging/windows/requirements.txt`. After changing `requirements.in`,
-regenerate it with the command at its top.
+Building, testing and packaging are in [DEVELOPMENT.md](DEVELOPMENT.md).

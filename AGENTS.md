@@ -4,7 +4,8 @@ Scuffle installs, updates and launches the public World of Warcraft clients
 without the Battle.net app. Linux runs games through Proton and `umu-run`, and
 Windows runs them natively. It is a Python 3 and PySide6 app.
 
-Read `DESIGN.md` before changing behaviour. `README.md` is the user's guide.
+Read `DESIGN.md` before changing behaviour. `README.md` is the user's guide, and
+`DEVELOPMENT.md` covers building, testing and packaging.
 
 ## Layout
 
@@ -57,6 +58,7 @@ packaging/windows/remote-build.sh <ssh host>   # Scuffle.exe, built on Windows
 
 ## Docs and commits
 
-- Prose in docs has no semicolons. README is for users, DESIGN for the design.
+- Prose in docs has no semicolons. README is for users, DESIGN for the design,
+  DEVELOPMENT for working on Scuffle.
 - A commit message is one plain sentence about the change, as in
   `git log --oneline`.
