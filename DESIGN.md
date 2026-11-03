@@ -458,12 +458,12 @@ session/
   the id that logon returns and becomes active. Signing in again to an account
   that is already listed replaces its session and keeps its number and choices.
   A browser still signed in to Battle.net skips the form and returns a ticket
-  for the account it knows. While adding, the sign-in page reads the account id
-  that today's tickets end in, as in `EU-<hex>-314159265`, and refuses a ticket
-  for a listed account before it is used, with a hint to open the link, which
-  **Copy link** copies, in a private window. A ticket of another shape goes
-  through as before. A sign-in that Play asks for renews the same account and
-  skips this check.
+  for the account it knows. So adding does not open the browser. The page
+  offers **Copy link**, for a private window, and **Open in browser**. It reads
+  the account id that today's tickets end in, as in `EU-<hex>-314159265`, and
+  refuses a ticket for a listed account before it is used. A ticket of another
+  shape goes through as before. The first sign-in and a sign-in that Play asks
+  for open the browser as before and skip this check.
 - **Signing out.** **Sign out of this account** deletes the active login's
   folder and nothing else. The next login by number becomes active. The WoW
   account choice in the settings stays, as it does today.

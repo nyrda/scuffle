@@ -1184,8 +1184,8 @@ class SignInPage(Page):
         content = self.centre(column(outer))
         content.addWidget(label('Sign in to Battle.net', 'pagetitle'))
         content.addSpacing(6)
-        content.addWidget(label('Your browser opened Battle.net\'s own sign-in page. '
-                                'Waystone never sees your password.', 'muted', wrap=True))
+        self.intro = label('', 'muted', wrap=True)
+        content.addWidget(self.intro)
         content.addSpacing(20)
         steps = QFrame()
         steps.setObjectName('card')
@@ -1206,9 +1206,8 @@ class SignInPage(Page):
             steps_layout.addLayout(row)
         content.addWidget(steps)
         # Battle.net signs a browser in to the account it used last, without asking.
-        self.hint = label('Adding another account? Your browser may still be signed in to Battle.net, which then '
-                          'skips the sign-in form. Copy the link and open it in a private window to sign in with '
-                          'a different account.', 'caution', wrap=True)
+        self.hint = label('If your browser is signed in to Battle.net, copy the link into a private window.',
+                          'caution', wrap=True)
         self.hint.hide()
         content.addSpacing(12)
         content.addWidget(self.hint)
@@ -1240,7 +1239,7 @@ class SignInPage(Page):
         content.addSpacing(24)
         buttons = QHBoxLayout()
         buttons.setSpacing(SPACING)
-        reopen = fixed(QPushButton('Open the sign-in page again'))
+        self.open_button = reopen = fixed(QPushButton('Open the sign-in page again'))
         reopen.clicked.connect(lambda: open_browser(self.url))
         copy = fixed(QPushButton('Copy link'))
         copy.setToolTip('For a private window or another browser')
@@ -1260,16 +1259,24 @@ class SignInPage(Page):
         """taken: the accounts already signed in, by id, when this sign-in adds another one."""
         self.url, self.active = url, True
         self.taken = dict(taken or {})
-        self.hint.setVisible(bool(self.taken))
+        adding = bool(self.taken)
+        self.hint.setVisible(adding)
         self.field.clear()
         self.status.setText('Waiting for the address.')
         self._before = QApplication.clipboard().text()
-        open_browser(url)
+        # A browser signed in to Battle.net would answer at once for that account, so adding one
+        # leaves the choice of window to the user.
+        self.intro.setText('Open Battle.net\'s own sign-in page to add an account. Waystone never sees your '
+                           'password.' if adding else
+                           'Your browser opened Battle.net\'s own sign-in page. Waystone never sees your password.')
+        self.open_button.setText('Open in browser' if adding else 'Open the sign-in page again')
+        if not adding:
+            open_browser(url)
 
     def copy_link(self):
         self._before = self.url         # the link on the clipboard is no address to take
         QApplication.clipboard().setText(self.url)
-        self.status.setText('Link copied. Paste it into a private window, sign in there and come back.')
+        self.status.setText('Link copied.')
 
     def check_clipboard(self):
         # Wayland shares the clipboard only with the focused window, so this
@@ -1293,8 +1300,8 @@ class SignInPage(Page):
         if owner in self.taken:
             # Unused, so the browser's session is not spent on an account Waystone already has.
             self.field.clear()
-            self.status.setText(f'That address signs in {self.taken[owner]}, which is already signed in. '
-                                'Open the link in a private window and sign in with the other account.')
+            self.status.setText(f'That address is for {self.taken[owner]}, which is already signed in. '
+                                'Copy the link into a private window.')
             self._before = QApplication.clipboard().text()
             return
         self.finish(ticket)

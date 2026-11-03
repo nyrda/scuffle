@@ -157,11 +157,12 @@ BattleTag, or "Account 1" when Battle.net does not send one. Click it to open
 the account menu:
 
 - **Add account…** signs in to another Battle.net account through the browser,
-  the same way as the first time. The new account becomes the active one. A
-  browser that is still signed in to Battle.net skips the sign-in form and
-  answers for the account it knows. Waystone then says that account is already
-  signed in and leaves its address unused. Use **Copy link** on the sign-in
-  page and open the link in a private window to sign in with the other account.
+  the same way as the first time. The new account becomes the active one. It
+  does not open the browser by itself, because a browser signed in to
+  Battle.net answers at once for that account. If yours is signed in, use
+  **Copy link** and open the link in a private window. Otherwise use **Open in
+  browser**. An address for an account that is already signed in is left
+  unused.
 - Pick an account in the list to switch to it. **Play** always uses the active
   account, and each account keeps its own session.
 - **Sign out of this account** signs out of the active account only. The

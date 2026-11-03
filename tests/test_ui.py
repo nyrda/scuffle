@@ -1491,7 +1491,8 @@ def test_uninstall_completion_refreshes_storage_and_not_installed_notice(qt, win
 def test_adding_an_account_refuses_the_address_of_one_already_signed_in(qt, window, tmp_path, monkeypatch,
                                                                        save_login):
     from waystone.auth.vault import Vault
-    monkeypatch.setattr(pages, 'open_browser', lambda url: None)
+    opened = []
+    monkeypatch.setattr(pages, 'open_browser', opened.append)
     window.settings.root = str(tmp_path / 'games')
     window.open_library()
     installed(window, monkeypatch, ['wow'])
@@ -1507,8 +1508,8 @@ def test_adding_an_account_refuses_the_address_of_one_already_signed_in(qt, wind
     deadline = time.monotonic() + 5
     while not page.active and time.monotonic() < deadline:
         qt.processEvents()
-    assert page.active and not page.hint.isHidden()
-    # A browser still signed in to Battle.net answers at once for the account it knows.
+    # A browser signed in to Battle.net would answer at once for that account, so the user picks the window.
+    assert page.active and not page.hint.isHidden() and opened == []
     page.take('http://localhost:0/?ST=EU-0123abcd-314159265&flowTrackingId=', explicit=True)
     assert page.active and 'Wanderer#7395, which is already signed in' in page.status.text()
     page.take('http://localhost:0/?ST=EU-4567cdef-202432841&flowTrackingId=', explicit=True)
