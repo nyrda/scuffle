@@ -38,6 +38,7 @@ def main(output: Path) -> None:
     application = QApplication(sys.argv)
     ui.prepare(application)
     window = ui.MainWindow()
+    window.screens_output = output
     window.check_updates = lambda: None
     fake_installed(window, 'wow')               # one installed client in a throwaway folder
     window.clear_notice('')
@@ -105,6 +106,8 @@ def main(output: Path) -> None:
     window.show_client_page()
     window.client_list.select('wow_classic_era')
     shot('02-not-installed')
+    import_states(window, shot, application)
+    window.client_list.select('wow_classic_era')
     if window.downloads:
         job = Job('wow_classic_era', 'install', status=RUNNING, stage='downloading',
                   done_bytes=12_400_000_000, total_bytes=31_800_000_000, speed=48_000_000)
@@ -349,6 +352,88 @@ def battle_net_menu(window, application, path: Path) -> None:
     application.processEvents()
     menu.grab().save(str(path))
     menu.close()
+
+
+def fake_battle_net(folder: Path, clients: dict[str, str]) -> Path:
+    """A Battle.net-style installation with empty content, only for the import page to find."""
+    (folder / 'Data/data').mkdir(parents=True)
+    (folder / 'Data/data/0000000001.idx').write_bytes(b'')
+    (folder / '.build.info').write_text('Branch!STRING:0|Product!STRING:0\n' +
+                                        ''.join(f'eu|{code}\n' for code in clients.values()))
+    for name, code in clients.items():
+        (folder / name).mkdir()
+        (folder / name / '.flavor.info').write_text(f'Product Flavor!STRING:0\n{code}\n')
+        (folder / name / 'Wow.exe').write_bytes(b'')
+    return folder
+
+
+def import_states(window, shot, application) -> None:
+    """Importing Classic Era from installations found in a throwaway home, never the user's own folders."""
+    from waystone import imports
+    home = Path(_home)
+    fake_battle_net(home / 'Games/battlenet/drive_c/Program Files (x86)/World of Warcraft',
+                    {'_retail_': 'wow', '_classic_era_': 'wow_classic_era', '_ptr_': 'wowt'})
+    fake_battle_net(home / 'run/media/Games SSD/World of Warcraft', {'_classic_era_': 'wow_classic_era'})
+    places = [imports.Place(home / 'Games', 'Games folder', 3), imports.Place(home / 'run/media', 'Mounted drive', 3)]
+    original = imports.default_places
+
+    def settle(seconds=0.5):
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            application.processEvents()
+            time.sleep(0.02)
+
+    menu = window.client_page.more.menu()
+    window.refresh()
+    menu.popup(window.client_page.more.mapToGlobal(window.client_page.more.rect().bottomLeft()))
+    application.processEvents()
+    menu.grab().save(str(window.screens_output / '30-import-menu.png'))
+    menu.close()
+    imports.default_places = lambda: []
+    window.open_import()
+    window._import_searching = True
+    window.import_page.set_status('Looking in Wine prefixes, Steam, Lutris, ~/Games and mounted drives…')
+    window._import_search += 1          # the empty search's answer must not end this state
+    shot('30a-import-searching')
+    imports.default_places = lambda: places
+    window.open_import()
+    settle()
+    shot('30b-import-found')
+    window.import_page.boxes['wowt'].setChecked(True)
+    shot('30c-import-two-clients')
+    window.import_page.copy.setChecked(False)
+    shot('30d-import-without-settings')
+    imports.default_places = lambda: []
+    window.open_import()
+    settle()
+    shot('30e-import-nothing-found')
+    window.choose_import_folder()
+    settle(1.5)
+    shot('30f-import-folder-picker')
+    window.on_import_folder_chosen(str(home))
+    settle()
+    shot('30g-import-chosen-folder-empty')
+    window.on_import_searched(window._import_search, False)
+    window._import_searching = True
+    window.on_import_searched(window._import_search, False)
+    shot('30h-import-search-stopped')
+    imports.default_places = original
+    window.close_import()
+    if window.downloads:
+        job = Job('wow_classic_era', 'install', status=RUNNING, stage='seeding', done_bytes=9_800_000_000,
+                  total_bytes=24_600_000_000, speed=0, seed_from=str(home / 'run/media/Games SSD/World of Warcraft'))
+        window.downloads.jobs.append(job)
+        window.downloads._current = job
+        window.client_list.select('wow_classic_era')
+        shot('30i-importing')
+        job.stage, job.total_bytes = 'copying_settings', 0
+        shot('30j-copying-settings')
+        window.downloads.jobs.clear()
+        window.downloads._current = None
+        job.status, job.result = 'done', {'settings': {'copied': 412, 'kept': 0, 'skipped': 0, 'failed': 0}}
+        window.on_job(job)
+        shot('30k-imported')
+        window.clear_notice('wow_classic_era')
 
 
 def fake_installed(window, code: str) -> None:

@@ -17,14 +17,14 @@ from PySide6.QtGui import QDesktopServices, QIcon
 from PySide6.QtWidgets import (QApplication, QFrame, QGraphicsOpacityEffect, QHBoxLayout, QMainWindow, QPushButton, QStackedWidget,
                                QMenu, QStyleFactory, QVBoxLayout, QWidget)
 
-from .. import catalog, diagnostics, discovery, instance, shortcuts, steam, system
+from .. import catalog, diagnostics, discovery, imports, instance, shortcuts, steam, system
 from ..downloads import DONE, FAILED, PAUSED, QUEUED, RUNNING, DownloadManager, Job
 from ..launch import Launcher, LaunchError
 from ..library import Library, LibraryError, update_available
 from ..ngdp.cdn import CDNClient
 from ..settings import LOCALE_NAMES, MEGABYTE, REGIONS, Settings, cache_dir, data_dir
 from .client_options import ClientOptionsPage, summary as options_summary
-from .pages import ClientPage, FolderPage, QueuePage, SettingsPage, SignInPage, UninstallPage
+from .pages import ClientPage, FolderPage, ImportPage, QueuePage, SettingsPage, SignInPage, UninstallPage
 from .style import SPACING, capsule_image, dark_palette, make_images, png, size_text, stylesheet, tile_image
 from .widgets import ClientList, DownloadBar, fixed, label, progress_variants
 
@@ -46,6 +46,9 @@ class Bus(QObject):
     running_scanned = Signal(object, object)   # library, clients whose game runs
     diagnostics_ready = Signal(str)            # the report, or '' when it could not be built
     request_received = Signal(object, object)  # a later start's request, the way to answer it
+    import_found = Signal(int, object)      # search number, an installation to import
+    import_searched = Signal(int, bool)     # search number, whether it looked everywhere
+    import_picked = Signal(int, object, str)   # search number, installations in a chosen folder, or why none
 
 
 class MainWindow(QMainWindow):
@@ -81,6 +84,11 @@ class MainWindow(QMainWindow):
         self.bus.running_scanned.connect(self.on_running_scanned)
         self.bus.diagnostics_ready.connect(self.on_diagnostics)
         self.bus.request_received.connect(self.on_request)
+        self.bus.import_found.connect(self.on_import_found)
+        self.bus.import_searched.connect(self.on_import_searched)
+        self.bus.import_picked.connect(self.on_import_picked)
+        self._import_search = 0         # the current search. Results of an older one are dropped
+        self._import_searching = False
         # Shift turns Close game into Force quit while it is held.
         QApplication.instance().installEventFilter(self)
         self.storage: dict = {}
@@ -119,6 +127,16 @@ class MainWindow(QMainWindow):
         self.uninstall_page = UninstallPage()
         self.uninstall_page.cancelled.connect(self.show_client_page)
         self.uninstall_page.confirmed.connect(self.confirm_uninstall)
+        self.client_page.import_clicked.connect(self.open_import)
+        self.import_page = ImportPage()
+        self.import_page.cancelled.connect(self.close_import)
+        self.import_page.confirmed.connect(self.confirm_import)
+        self.import_page.choose_folder.connect(self.choose_import_folder)
+        self.import_folder_page = FolderPage(
+            'Choose the installation to import', 'Pick the World of Warcraft folder, such as the one Battle.net '
+            'installed, or a folder above it. Waystone only reads it.', existing_only=True)
+        self.import_folder_page.chosen.connect(self.on_import_folder_chosen)
+        self.import_folder_page.cancelled.connect(lambda: self.stack.setCurrentWidget(self.import_page))
         self.client_page.launch_options_clicked.connect(self.open_launch_options)
         self.client_page.show_clients_clicked.connect(lambda: self.open_settings('clients'))
         self.options_page = ClientOptionsPage()
@@ -145,7 +163,7 @@ class MainWindow(QMainWindow):
         self.queue_page.pause_all.connect(lambda: self.downloads.pause_all())
         self.queue_page.resume_all.connect(lambda: self.downloads.resume_all())
         for page in [self.client_page, self.settings_page, self.sign_in_page, self.folder_page, self.queue_page,
-                     self.options_page, self.uninstall_page]:
+                     self.options_page, self.uninstall_page, self.import_page, self.import_folder_page]:
             self.stack.addWidget(page)
         right.addWidget(self.stack, 1)
         self.download_bar = DownloadBar()
@@ -452,6 +470,7 @@ class MainWindow(QMainWindow):
         if job and job.status == RUNNING:
             verb = {'install': 'Installing', 'update': 'Updating', 'verify': 'Verifying',
                     'repair': 'Repairing', 'uninstall': 'Uninstalling'}[job.kind]
+            verb = 'Importing' if job.seed_from else verb
             return (f'{verb} {job.fraction:.0%}' if job.total_bytes else verb), 'active'
         if job and job.status == QUEUED:
             return 'Queued', 'active'
@@ -542,6 +561,8 @@ class MainWindow(QMainWindow):
         self.refresh_client(code)
         if self.stack.currentWidget() is self.uninstall_page:
             self.uninstall_page.set_reason(self.uninstall_reason(self.uninstall_page.code))
+        if self.stack.currentWidget() is self.import_page:
+            self.import_page.set_blocked({c: r for c in self.import_codes() if (r := self.import_reason(c))})
         self.update_tab_order()
 
     def update_tab_order(self):
@@ -615,6 +636,8 @@ class MainWindow(QMainWindow):
         hint = ''
         if not state and not job and self.library and self.library.installed():
             hint = 'Content the installed clients already have is not downloaded again.'
+        if not state and not job:
+            hint = (hint + ' Installed with Battle.net already? Import… in the ⋯ menu copies it from there.').strip()
         if client.test:
             hint = (hint + ' Test clients connect to Blizzard\'s test realms, which need account access.').strip()
         elif client.optional:
@@ -644,6 +667,7 @@ class MainWindow(QMainWindow):
         reason = self.uninstall_reason(code)
         self.client_page.uninstall_action.setEnabled(bool(state) and not reason)
         self.client_page.uninstall_action.setToolTip(reason)
+        self.client_page.import_action.setEnabled(not self.import_reason(code))
         # Pause is a secondary action. Only starting something gets the accent color.
         secondary = primary in {'Pause', 'Queued'} or launching or running
         button = self.client_page.primary
@@ -985,6 +1009,145 @@ class MainWindow(QMainWindow):
             return
         self.show_client_page()
         self.refresh()
+
+    # Importing
+
+    def import_reason(self, code: str) -> str:
+        """Why a client cannot be imported now, in a few words, or nothing."""
+        if not self.library:
+            return 'choose an installation folder first'
+        if self.library.state(code):
+            return 'installed'
+        job = self.downloads.job(code) if self.downloads else None
+        if job and job.status not in {DONE, FAILED}:
+            return 'has a download'
+        return ''
+
+    def import_codes(self) -> set[str]:
+        return {code for found in self.import_page.found for code in found.clients}
+
+    def open_import(self):
+        code = self.selected()
+        if not code or self.import_reason(code) or self.stack.currentWidget() is self.sign_in_page:
+            return
+        self._import_search += 1
+        number, exclude = self._import_search, self.library.root
+        places = 'Program Files, Battle.net\'s records and local drives' if sys.platform == 'win32' else \
+            'Wine prefixes, Steam, Lutris, ~/Games and mounted drives'
+        self.import_page.start(code, f'Looking in {places}…')
+        self._import_searching = True
+        self.stack.setCurrentWidget(self.import_page)
+        self.client_list.set_active(False)
+        self.refresh()
+
+        def work():
+            search = imports.Search(exclude=exclude, cancelled=lambda: number != self._import_search)
+            try:
+                for found in search:
+                    self.bus.import_found.emit(number, found)
+            except Exception:       # an unreadable place ends the search early. Choosing a folder still works
+                search.complete = False
+            self.bus.import_searched.emit(number, search.complete)
+        threading.Thread(target=work, name='waystone-import-search', daemon=True).start()
+        # A folder that hangs in the kernel, such as a stalled drive, cannot be interrupted.
+        # The page stops waiting for it.
+        QTimer.singleShot(int(imports.SEARCH_SECONDS * 1000) + 3000, self,
+                          lambda: self.on_import_searched(number, False))
+
+    def on_import_found(self, number: int, found) -> None:
+        if number == self._import_search:
+            self.import_page.add(found)
+            self.refresh()
+
+    def on_import_searched(self, number: int, complete: bool) -> None:
+        if number != self._import_search or not self._import_searching:
+            return
+        self._import_searching = False
+        page = self.import_page
+        if complete:
+            page.set_status('' if page.found else 'No installation found. Choose its folder if you have one.')
+        else:
+            page.set_status(f'The search stopped after {imports.SEARCH_SECONDS} seconds. '
+                            'Choose the folder if yours is not listed.')
+
+    def close_import(self):
+        self._import_search += 1           # a running search stops at its next folder
+        self._import_searching = False
+        self.show_client_page()
+
+    def choose_import_folder(self):
+        # Home, not the found installation's folder, whose drive the window must not wait for.
+        self.import_folder_page.start(str(Path.home()))
+        self.stack.setCurrentWidget(self.import_folder_page)
+
+    def on_import_folder_chosen(self, folder: str):
+        self.stack.setCurrentWidget(self.import_page)
+        self.import_page.set_reason('')
+        self._import_search += 1
+        self._import_searching = False
+        number, exclude = self._import_search, self.library.root
+        self.import_page.set_status('Reading the chosen folder…')
+
+        def work():
+            path = Path(folder)
+            if not path.is_dir():
+                self.bus.import_picked.emit(number, [], 'This folder does not exist or cannot be read.')
+                return
+            if imports.overlaps(path, exclude):
+                self.bus.import_picked.emit(number, [], 'This folder is part of the Waystone installation folder. '
+                                                        'Choose an installation outside it.')
+                return
+            try:
+                self.bus.import_picked.emit(number, [imports.inspect(path, 'Chosen folder')], '')
+                return
+            except imports.NotImportable as error:
+                reason = str(error)
+            # A folder above the installation, such as a drive or Program Files.
+            search = imports.Search([imports.Place(path, 'Chosen folder', 2)], seconds=5, exclude=exclude,
+                                    cancelled=lambda: number != self._import_search)
+            try:
+                found = list(search)
+            except Exception:
+                found = []
+            self.bus.import_picked.emit(number, found, '' if found else reason)
+        threading.Thread(target=work, name='waystone-import-folder', daemon=True).start()
+
+    def on_import_picked(self, number: int, found: list, reason: str) -> None:
+        if number != self._import_search:
+            return
+        page = self.import_page
+        page.set_status('')
+        page.set_reason(reason)
+        for index, item in enumerate(found):
+            page.add(item, select=index == 0)
+        self.refresh()
+
+    def confirm_import(self):
+        page = self.import_page
+        found, codes = page.selected(), page.chosen_clients()
+        if not found or not codes:
+            page.set_reason('Choose an installation and at least one client.')
+            return
+        # The state can change while the page is open, such as a download that started meanwhile.
+        blocked = [f'{catalog.get(c).label}: {r}' for c in codes if (r := self.import_reason(c))]
+        if blocked:
+            page.set_reason('Cannot import ' + '; '.join(blocked) + '.')
+            self.refresh()
+            return
+        try:
+            for code in codes:
+                self.downloads.enqueue(code, 'install', seed_from=str(found.path),
+                                       copy_settings=page.copy.isChecked())
+        except LibraryError as error:
+            page.set_reason(str(error))
+            return
+        self._import_search += 1
+        self._import_searching = False
+        # A hidden client is listed again by its download.
+        self.populate()
+        if page.code not in codes:
+            self.client_list.select(codes[0])
+        self.show_client_page()
 
     def remember_mode(self, mode: str):
         code = self.selected()
@@ -1346,11 +1509,27 @@ class MainWindow(QMainWindow):
             if job.result.get('cleanup', {}).get('deferred'):
                 message += ' Shared content cleanup will finish after other clients close or finish updating.'
             self.notify(message, 'info', client=job.client if job.client in self.client_list.rows else '')
+        if job.status == DONE and job.kind == 'install' and 'settings' in job.result:
+            self.notify(self.settings_copied(job.result['settings']), 'info', client=job.client)
         if job.status == FAILED:
             # The message shows on that client's own page, so it needs no name.
             # Dismiss also clears a failed download. Found damage stays until it is repaired.
             self.notify(job.error, 'error' if job.kind == 'verify' else 'failure', client=job.client)
         self.refresh()
+
+    @staticmethod
+    def settings_copied(result: dict) -> str:
+        """What copying an imported client's settings and addons did."""
+        if result.get('error') and not result.get('copied'):
+            return f"Imported. Settings and addons were not copied: {result['error']}"
+        text = 'Imported, with your settings and addons.' if result.get('copied') else \
+            'Imported. The installation had no settings or addons to copy.'
+        if result.get('kept'):
+            count = result['kept']
+            text += f" {count} {'file' if count == 1 else 'files'} already here {'was' if count == 1 else 'were'} kept."
+        if result.get('failed'):
+            text += f" {result['failed']} could not be copied: {result['error']}"
+        return text
 
     def check_updates(self):
         self._update_key = (self.settings.root, self.settings.region, self.settings.locale)

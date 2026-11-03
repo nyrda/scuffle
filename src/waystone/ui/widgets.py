@@ -47,6 +47,7 @@ STAGES = {
     'downloading': 'Downloading…', 'download_complete': 'Writing game files…',
     'materializing': 'Writing game files…', 'cleaning_up': 'Removing unused content…',
     'verifying': 'Checking files…', 'complete': 'Finishing…',
+    'copying_settings': 'Copying settings and addons…',
 }
 # The stages that move bytes. Before and after them, sizes and time left mean nothing.
 TRANSFER = {'downloading', 'seeding'}

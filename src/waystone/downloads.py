@@ -7,12 +7,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
+import os
+from pathlib import Path
 import sqlite3
 import threading
 from typing import Callable
 
-from . import catalog
-from .library import Cancelled, Library, LibraryError, Updater, atomic_json
+from . import catalog, imports
+from .library import Cancelled, Library, LibraryError, Updater, atomic_json, default_preferences
 from .ngdp.cdn import CDNClient, Throttle
 from .settings import Settings, cache_dir, data_dir
 from .rates import RateSmoother
@@ -35,6 +37,8 @@ class Job:
     held: bool = False            # paused by Waystone while a game runs, not by the user
     step: tuple[int, int] | None = None   # done and total of a stage that is not the transfer
     keep_settings: bool = True
+    seed_from: str = ''           # an installation an install imports from. It is only read
+    copy_settings: bool = False   # copy its WTF and Interface once the install succeeded
 
     @property
     def fraction(self) -> float:
@@ -93,6 +97,11 @@ class DownloadManager:
             status = FAILED if row['status'] == FAILED else PAUSED
             job = Job(row['client'], row['kind'], status=status,
                       error=row.get('error', '') if isinstance(row.get('error', ''), str) else '')
+            # An import keeps its source across restarts. The job checks it is still there when it runs.
+            seed = row.get('seed_from')
+            if job.kind == 'install' and isinstance(seed, str) and Path(seed).is_absolute():
+                job.seed_from = seed
+                job.copy_settings = row.get('copy_settings') is True
             if job.kind != 'verify':
                 job.done_bytes, job.total_bytes = self.library.download_progress(job.client)
             if status == PAUSED and self.settings.resume_downloads and present:
@@ -106,6 +115,7 @@ class DownloadManager:
         try:
             atomic_json(self._path, {'root': str(self.library.root), 'jobs': [
                 {'client': j.client, 'kind': j.kind, 'status': j.status, 'error': j.error}
+                | ({'seed_from': j.seed_from, 'copy_settings': j.copy_settings} if j.seed_from else {})
                 for j in self.jobs if j.status != DONE and not j.cancel_requested]})
         except OSError:
             # A full or read-only data folder only loses the queue for the next start.
@@ -136,12 +146,27 @@ class DownloadManager:
         job = self.job(code)
         return bool(job and job.status != DONE and not (job is self._current and job.kind == 'uninstall'))
 
-    def enqueue(self, client: str, kind: str, *, keep_settings: bool = True) -> Job:
+    def enqueue(self, client: str, kind: str, *, keep_settings: bool = True, seed_from: str | None = None,
+                copy_settings: bool = False) -> Job:
+        """Queue a job. An install with seed_from imports from that installation.
+
+        Without seed_from, a job that replaces a failed one of the same kind keeps its source,
+        so trying an import again imports again.
+        """
         catalog.get(client)
         if kind not in {'install', 'update', 'verify', 'repair', 'uninstall'}:
             raise ValueError(f'Unknown job kind {kind!r}')
+        if seed_from is not None and kind != 'install':
+            raise ValueError('Only an install can import')
+        if seed_from is not None:
+            # By name only, since this runs on the window's thread. The job compares the folders themselves.
+            seed_from = os.path.abspath(seed_from)
+            if imports.nested(Path(seed_from), self.library.root):
+                raise LibraryError('Import from a folder outside the Waystone installation folder')
         with self._lock:
             existing = self.job(client)
+            if seed_from is not None and existing and existing.status not in {DONE, FAILED}:
+                raise LibraryError('Remove this client\'s download before importing it')
             if kind == 'uninstall' and existing and existing.status != DONE and existing.kind != 'uninstall':
                 raise LibraryError('Remove the download job before uninstalling')
             if existing and existing.kind == 'uninstall' and existing.status != DONE and kind != 'uninstall':
@@ -160,6 +185,10 @@ class DownloadManager:
                 job = Job(client, kind, status=PAUSED, keep_settings=keep_settings)
                 if existing and existing.kind == 'uninstall':
                     job.keep_settings = existing.keep_settings
+                if seed_from is not None:
+                    job.seed_from, job.copy_settings = seed_from, copy_settings
+                elif existing and existing.kind == kind:
+                    job.seed_from, job.copy_settings = existing.seed_from, existing.copy_settings
                 self.jobs.append(job)
             self._resume(job, override=override)
             self._save()
@@ -375,13 +404,21 @@ class DownloadManager:
                 job.done_bytes = event['encoded_bytes'] - event['missing_bytes']
             self._notify(job)
 
+        seed = Path(job.seed_from) if job.seed_from and job.kind == 'install' else None
+        if seed is not None and not imports.available(seed):
+            # Such as a drive that is not connected now. What is already stored stays for the next try.
+            raise LibraryError(f'The installation to import from is not available: {seed}. Connect its '
+                               'drive and try again, or remove this download and install without it.')
+        # Before the installation folder is created, which could otherwise land inside the source.
+        if seed is not None and imports.overlaps(seed, self.library.root):
+            raise LibraryError('Import from a folder outside the Waystone installation folder')
         if job.kind == 'install':
             self.library.create()
         elif not state:
             raise LibraryError(f'{catalog.get(job.client).label} is not installed')
         with self.library.locked():
             updater = Updater(self.library, job.client, self.client_factory(job.client, region),
-                              region=region, locale=locale, progress=progress,
+                              region=region, locale=locale, seed_from=seed, progress=progress,
                               cancelled=self._pause.is_set)
             try:
                 if job.kind == 'verify':
@@ -400,6 +437,10 @@ class DownloadManager:
                 result = updater.run()
             finally:
                 updater.close()
+            if seed is not None and job.copy_settings:
+                job.stage, job.step = 'copying_settings', None
+                self._notify(job)
+                result['settings'] = self._copy_settings(seed, result)
             # Reclaim content the previous build needed. A running game or
             # another client's unfinished update defers this to a later job.
             try:
@@ -409,3 +450,14 @@ class DownloadManager:
             except LibraryError as error:
                 result['cleanup'] = {'deferred': str(error)}
             return result
+
+    def _copy_settings(self, seed: Path, state: dict) -> dict:
+        """Copy WTF and Interface after a successful import. A failure leaves the install as it is."""
+        source = imports.client_folder(seed, state['product'])
+        if source is None:
+            return {'error': f'{seed} no longer has this client\'s folder'}
+        try:
+            return imports.copy_settings(source, self.library.root / state['folder'], replaceable={
+                'WTF/Config.wtf': default_preferences(state['region'], state['locale'])})
+        except (OSError, imports.NotImportable) as error:
+            return {'error': str(error)}

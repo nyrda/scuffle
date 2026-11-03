@@ -42,6 +42,33 @@ Close the client and finish any unfinished update or remove its download job
 before uninstalling. Removal runs in the background. If Waystone closes halfway
 through, it finishes the removal on the next start.
 
+## Importing an existing installation
+
+If a client is already installed elsewhere, for example by Battle.net, choose
+**Import…** in its **⋯** menu instead of **Install**. Waystone looks for
+installations in Wine prefixes such as `~/.wine`, Lutris prefixes and
+`~/Games`, Steam's Proton prefixes and mounted drives under `/mnt`, `/media`
+and `/run/media`. On Windows it looks in Program Files, on local drives and in
+the folders Battle.net records. The search stops after 12 seconds and skips
+network drives. If yours is not listed, **Choose folder…** picks it, either
+the `World of Warcraft` folder itself or a folder above it.
+
+The page lists the clients the installation holds. Check the ones to import.
+Each becomes an ordinary download in the queue, which you can pause and resume.
+Content that matches the current build is copied from the installation, and
+only the rest is downloaded. If the installation is on a drive that is not
+connected when a paused import resumes, the import fails with a message.
+Connect the drive and try again, or remove the download and install normally.
+
+**Copy settings and addons** is on by default. Once a client's install has
+succeeded, it copies the `WTF` and `Interface` folders, with your settings,
+keybinds, macros and addons, into the new client folder. Files already there
+are kept, except the default `Config.wtf` Waystone writes, which your own
+replaces. Links inside those folders are not copied.
+
+Waystone only reads the installation you import from. It never changes, moves
+or deletes anything in it, so Battle.net can keep using it.
+
 ## Run
 
 ```sh
@@ -219,8 +246,9 @@ folder and opens the window when it needs a sign-in or an update, where a plain
 running until the game exits, as Steam needs.
 
 `--seed-from` copies verified content from an existing installation, such as a
-Battle.net one, and opens it read-only. Progress is printed to stderr as JSON
-lines.
+Battle.net one, and opens it read-only. It is what **Import…** does in the
+window, without copying settings and addons. Progress is printed to stderr as
+JSON lines.
 
 On Windows, `Waystone.exe` is a windowed program, so a terminal does not wait
 for it. Start a command with `start /wait "" Waystone.exe ...` in cmd, or with

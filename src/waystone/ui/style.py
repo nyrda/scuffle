@@ -192,6 +192,15 @@ QCheckBox:focus {{ color: white; }}
 QCheckBox::indicator:focus {{ border-color: #6f97e0; }}
 QCheckBox::indicator:checked {{ background: {ACCENT}; border-color: {ACCENT}; image: url({images['check']}); }}
 QCheckBox::indicator:checked:disabled {{ background: #33415c; border-color: #33415c; }}
+QRadioButton {{ color: {TEXT}; spacing: 10px; }}
+QRadioButton#cardtitle {{ font-size: 11pt; font-weight: 600; }}
+QRadioButton:focus {{ color: white; }}
+QRadioButton::indicator {{ width: 16px; height: 16px; border-radius: 9px; border: 1px solid #4a5160;
+                          background: #1f2229; }}
+QRadioButton::indicator:hover {{ border-color: #6b7486; }}
+QRadioButton::indicator:focus {{ border-color: #6f97e0; }}
+QRadioButton::indicator:checked {{ border-color: {ACCENT}; background: qradialgradient(cx:0.5, cy:0.5, radius:0.5,
+    fx:0.5, fy:0.5, stop:0 #ffffff, stop:0.32 #ffffff, stop:0.42 {ACCENT}, stop:1 {ACCENT}); }}
 QDialogButtonBox {{ dialogbuttonbox-buttons-have-icons: 0; }}
 QScrollArea {{ background: transparent; border: none; }}
 QTreeView#folders {{ background: {SURFACE}; color: {TEXT}; border: 1px solid #23262d; border-radius: 8px;
