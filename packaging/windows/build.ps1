@@ -37,7 +37,7 @@ if (-not (Test-Path $stamp) -or (Get-Content $stamp) -ne $wanted) {
 $python = Join-Path $Venv 'Scripts\python.exe'
 
 $icon = Join-Path $work 'Scuffle.ico'
-Invoke-Native $python (Join-Path $root 'packaging\make_icon.py') (Join-Path $root 'src\scuffle\ui\icon.svg') $icon
+Invoke-Native $python (Join-Path $root 'packaging\make_icon.py') (Join-Path $root 'src\scuffle\ui\icon.svg') $icon (Join-Path $root 'src\scuffle\ui\icon-small.svg')
 
 $env:SCUFFLE_ICON = $icon
 Invoke-Native $python -m PyInstaller --noconfirm --clean --log-level WARN `

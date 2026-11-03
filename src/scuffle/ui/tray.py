@@ -21,7 +21,7 @@ class Tray(QObject):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.icon = QSystemTrayIcon(QIcon(str(Path(__file__).with_name('icon.svg'))), self)
+        self.icon = QSystemTrayIcon(QIcon(str(Path(__file__).with_name('icon-small.svg'))), self)  # drawn for tray sizes
         self.icon.setToolTip('Scuffle')
         self.icon.activated.connect(self.on_activated)
         # A menu has no parent widget here, so it lives as long as the tray does.

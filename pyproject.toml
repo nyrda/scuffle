@@ -19,7 +19,7 @@ scuffle = "scuffle.cli:entrypoint"
 where = ["src"]
 
 [tool.setuptools.package-data]
-"scuffle.ui" = ["icon.svg"]
+"scuffle.ui" = ["icon.svg", "icon-small.svg"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

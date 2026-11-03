@@ -48,6 +48,10 @@
         ];
         postInstall = ''
           install -Dm644 src/scuffle/ui/icon.svg $out/share/icons/hicolor/scalable/apps/scuffle.svg
+          # Launchers and panels that ask for a small icon get the version drawn for it.
+          for size in 16 22 24; do
+            install -Dm644 src/scuffle/ui/icon-small.svg $out/share/icons/hicolor/''${size}x''${size}/apps/scuffle.svg
+          done
         '';
         makeWrapperArgs = [
           "--set" "SCUFFLE_BRIDGE" "${bridge}/libexec/wow_auth_bridge.exe"

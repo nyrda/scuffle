@@ -170,6 +170,13 @@ the glyph large and faint at its top right. The main button and the progress
 bar take the client's color, darkened until white text on it reaches 4.5:1.
 Pause and the other secondary states keep the neutral button.
 
+The app icon is a plank club with a nail driven through its head, an original
+drawing for the name. `ui/icon.svg` is the detailed one for 32 px and up.
+`ui/icon-small.svg` drops the grain, the wrapping and the shadow and thickens
+the nail, so it still reads at 16 to 24 px. The tray icon always uses it, the
+Nix package installs it in the 16, 22 and 24 px icon folders, and the Windows
+`.ico` takes its small sizes from it.
+
 ### Discovery
 
 `discovery` reads the version service's summary at

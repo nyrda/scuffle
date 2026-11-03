@@ -29,7 +29,7 @@ version = VSVersionInfo(
 analysis = Analysis(
     [str(ROOT / 'packaging' / 'entry.py')],
     pathex=[str(ROOT / 'src')],
-    datas=[(str(ROOT / 'src' / 'scuffle' / 'ui' / 'icon.svg'), 'scuffle/ui')],
+    datas=[(str(ROOT / 'src' / 'scuffle' / 'ui' / name), 'scuffle/ui') for name in ('icon.svg', 'icon-small.svg')],
     excludes=['tkinter', 'unittest', 'pydoc', 'doctest'],
 )
 # Software OpenGL is a fallback for Qt Quick and OpenGL widgets. Scuffle uses neither.

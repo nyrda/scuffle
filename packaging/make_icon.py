@@ -1,6 +1,8 @@
 """Render the app icon into a Windows .ico with one PNG image per size.
 
-Usage: python make_icon.py <icon.svg> <output.ico>
+Usage: python make_icon.py <icon.svg> <output.ico> [<icon-small.svg>]
+
+The small icon, drawn for the small sizes, renders 24 px and below.
 """
 from pathlib import Path
 import struct
@@ -25,12 +27,14 @@ def png(renderer: QSvgRenderer, size: int) -> bytes:
     return bytes(buffer.data())
 
 
-def main(svg: str, ico: str) -> None:
+def main(svg: str, ico: str, small_svg: str | None = None) -> None:
     application = QGuiApplication(['make_icon', '-platform', 'offscreen'])  # noqa: F841, QPainter needs it
     renderer = QSvgRenderer(svg)
-    if not renderer.isValid():
-        raise SystemExit(f'{svg} is not a valid SVG')
-    images = [png(renderer, size) for size in SIZES]
+    small = QSvgRenderer(small_svg) if small_svg else renderer
+    for path, each in ((svg, renderer), (small_svg, small)):
+        if path and not each.isValid():
+            raise SystemExit(f'{path} is not a valid SVG')
+    images = [png(small if size <= 24 else renderer, size) for size in SIZES]
     offset = 6 + 16 * len(images)
     header = struct.pack('<HHH', 0, 1, len(images))
     for size, data in zip(SIZES, images):
