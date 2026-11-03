@@ -33,6 +33,20 @@ downloads and sign-in in memory, with a fixed client catalog from
 The README picture only changes when the window does, so run the script and
 commit the new picture after changing the window.
 
+## Client snapshot
+
+```sh
+nix develop -c env PYTHONPATH=src python3 tools/catalog_snapshot.py
+```
+
+Scuffle reads Battle.net's public catalog at run time.
+`src/scuffle/catalog_snapshot.py` holds a copy of what it read, for a first
+start without a network. The script reads the catalog from Blizzard's CDN and
+writes that file again, one product to a line. Run it before a release, or when
+Blizzard adds or renames a client, and commit the result. The tests read the
+captured catalog in `tests/fixtures/battlenet` instead, see
+`tests/fixtures/README.md`.
+
 ## AppImage
 
 ```sh

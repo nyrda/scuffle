@@ -85,7 +85,7 @@ class Settings:
             return cls()
         if 'show_test_clients' in data and 'extra_clients' not in data:
             # Earlier versions had one switch for every test client.
-            data['extra_clients'] = [c.code for c in catalog.CLIENTS if c.test] if data['show_test_clients'] else []
+            data['extra_clients'] = [c.code for c in catalog.clients() if c.test] if data['show_test_clients'] else []
         known = {k: v for k, v in data.items() if k in cls.__dataclass_fields__}
         for name in ['extra_clients', 'hidden_clients']:
             # The catalog changes with what Blizzard publishes, so a code it does not know

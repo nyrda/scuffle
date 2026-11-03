@@ -31,7 +31,21 @@ Captured anonymously from Blizzard's public version service on 28 October 2026.
   tables. `wow_classic_titan` publishes only a Chinese row.
 * `catalog-us.json` is what discovery saved for the US region that day. The
   failure reasons are cut to the error type.
-* `battlenet-installs.json` is the `installs` table of Battle.net's public
-  `world_of_warcraft` catalog fragment, reduced to each install UID and its
-  product code. The catalog is the `catalogs` product on the same CDN, read
-  through its build configuration's `root` and the fragment it names.
+
+# Battle.net catalog fixtures
+
+Captured anonymously from Battle.net's public catalog, the `catalogs` product on
+Blizzard's CDN, on 3 November 2026.
+
+* `battlenet/versions.psv` and `battlenet/cdns.psv` are the unchanged
+  `us.version.battle.net` tables of the `catalogs` product. Its versions table
+  has one row per catalog format, PUB-23 to PUB-30, instead of one per region.
+* `battlenet/build-config` is PUB-30's unchanged build configuration. Its `root`
+  names the catalog's root file.
+* `battlenet/root.json` is that root file cut to what Scuffle reads: the fragment
+  list, the type and category definitions and the `default` strings. The other
+  languages' strings are left out. Tests serve it under its own MD5.
+* `battlenet/world_of_warcraft.json` is the unchanged `world_of_warcraft`
+  fragment, MD5 `17c845cc0a048338caa9faa21b8ffbdf`. Its `installs` table maps
+  each install UID to its product, and the `WoW` product's `types` name each UID
+  and give Classic Era's game modes.

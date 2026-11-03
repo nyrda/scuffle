@@ -175,7 +175,8 @@ def test_an_unnamed_public_product_gets_a_label_from_its_code_and_version():
 
 
 def test_a_client_known_only_from_an_old_install_still_has_a_name():
-    assert catalog.get('wowv7').label == 'wowv7'
+    assert catalog.get('wowv7').label == 'WoW Vendor 7'          # Battle.net's name for it
+    assert catalog.get('wowq').label == 'wowq'
     with pytest.raises(ValueError):
         catalog.get('../wow')
 
@@ -234,10 +235,3 @@ def test_a_server_error_is_retried_and_a_missing_object_is_a_verdict():
     assert discovery.passing(ConnectionResetError())
     assert not discovery.passing(HTTPStatusError(404, 'https://cdn.invalid/x'))
     assert not discovery.passing(IntegrityError('Configuration MD5 does not match its key'))
-
-
-def test_every_install_uid_is_the_one_battle_net_gives_its_product():
-    installs = json.loads((FIXTURES / 'battlenet-installs.json').read_text())
-    products = {product: uid for uid, product in installs.items()}
-    for client in catalog.CLIENTS + catalog.OTHERS:
-        assert products[client.code] == client.uid, client.code

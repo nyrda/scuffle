@@ -133,42 +133,115 @@ the prefix and the Windows registry alone.
 
 ## Clients
 
-Clients come in three categories.
+The client list is built from Blizzard's own data when Scuffle runs. Three
+sources feed it.
 
-| Category | Shown as | NGDP product | Launch `-uid` | Listed |
-| --- | --- | --- | --- | --- |
-| Live | World of Warcraft | `wow` | `wow` | unless hidden |
-| Live | Mists of Pandaria Classic | `wow_classic` | `wow_classic` | unless hidden |
-| Live | Burning Crusade Anniversary | `wow_anniversary` | `wow_classic_anniversary` | unless hidden |
-| Live | Classic Era, with Era, Hardcore and Season of Discovery modes | `wow_classic_era` | `wow_classic_era` | unless hidden |
-| Live | Forever | `wowf` | `wowf` | unless hidden |
-| Test | Retail PTR, Retail PTR 2, MoP Classic PTR, Classic Era PTR | `wowt`, `wowxptr`, `wow_classic_ptr`, `wow_classic_era_ptr` | install UID | when chosen or installed |
-| Test | Retail Beta, Forever Beta | `wow_beta`, `wow_classic_beta` | install UID | when chosen or installed |
-| Other | Dark Realm Test, Retail Event, Classic Submission, Forever China Beta | `wowlivetest`, `wowe1`, `wowz`, `wow_cn_beta`, found by discovery | install UID | when shown, and chosen or installed |
-| Other | any other public product | found by discovery | the product code | when installed, or shown and chosen |
+- **Battle.net's public catalog**, the `catalogs` product on the CDN, says which
+  World of Warcraft installs Battle.net offers. `battlenet.py` reads it.
+- **The version service** gives each product's build for the chosen region, and
+  discovery checks that a product downloads without a key. `discovery.py` does
+  both, see Discovery.
+- **The product configuration** of each client gives its folder name
+  (`shared_container_default_subfolder`) and extra launch arguments at install
+  time.
 
-The live and test clients are built in. Their labels, install UIDs and modes come
-from Battle.net's public catalog (the `catalogs` product on the CDN). Its
-`world_of_warcraft` fragment has an `installs` table that names each install
-UID's product, such as `wow_ptr` for `wowt`, `wow_classic_anniversary` for
-`wow_anniversary` and `wow_dark` for `wowlivetest`. The other clients Scuffle
-has a name for take their UIDs from the same table. Each client's folder name comes from its public
-product configuration (`shared_container_default_subfolder`). Its `.flavor.info`
-holds the NGDP product code. Every client launches its own executable, such as
-`Wow.exe`, `WowT.exe` or `WowB.exe`, with `-launcherlogin -uid <install UID>`.
-Classic Era modes add `-initialgamemode=cera`, `chc` or `csod`.
+### The Battle.net catalog
+
+The `catalogs` product's versions table has a row per catalog format, such as
+PUB-30, instead of a row per region. Each row's build configuration names a root
+file, and every file is plain JSON whose MD5 is its key, not BLTE. The root lists
+fragments. The `world_of_warcraft` fragment without a `requires` condition has
+
+- an `installs` table that maps each install UID to its NGDP product, such as
+  `wow_ptr` to `wowt` and `wow_classic_anniversary` to `wow_anniversary`, and
+- the `WoW` product's `types`, one per install UID, with a name, a category such
+  as live or in development, a `deprecated` flag, the Battle.net product it shows
+  under (`WoWC` for Classic, `WoWF` for Forever) and game packages. Classic Era's
+  packages carry the `-initialgamemode=cera`, `chc` and `csod` arguments.
+
+Scuffle reads the newest format first and falls back to an older one when the
+newer one cannot be read. The result is a table keyed by product code with the
+install UID, the name, a kind and the game modes. The kind is live when the
+type's category is a live one and it is not deprecated, test when its type, UID
+or code names a PTR or a beta, and other otherwise. A table without World of
+Warcraft itself is rejected.
+
+The table is cached as `catalog/battlenet.json` in the cache folder and read
+again with the version service once it is six hours old. A catalog that cannot
+be read or is rejected leaves the cached table in place. `catalog_snapshot.py`
+holds the table as `tools/catalog_snapshot.py` read it, so a first start without
+a network lists the clients. Scuffle uses whichever of the cache and the
+snapshot is newer.
+
+### What Scuffle adds
+
+`catalog.py` keeps what Blizzard's data does not hold, for the games Scuffle
+knows: the family the selector groups by, a short description, the preferred
+order, whether a build that is not live is a test or an other client, the mode
+ids settings and shortcuts store, and Classic Era's modes for the Era PTR, which
+the catalog lists without them.
+
+Known clients keep Scuffle's names. Battle.net's are no clearer for them, and
+several would go out of date: Classic Era is "World of Warcraft Classic", which
+does not tell it from the other Classic clients, the PTRs are named after the
+patch they test, such as "Midnight 12.1.7 PTR", and Forever is "WoW: Forever",
+whose prefix every client in Scuffle shares. A product Scuffle does not know
+takes Battle.net's name without that prefix, its family from the Battle.net
+product it shows under, or from its version as `lineage()` reads it, and its
+family's glyph.
+
+| Field | Comes from |
+| --- | --- |
+| Product code | the catalog's `installs` and the version service |
+| Install UID (`-uid`) | the catalog, or the snapshot for a product the catalog dropped, or the code |
+| Live, test or other | live from the catalog, test or other from Scuffle's table, then the catalog |
+| Name | Scuffle's table, then the catalog, then the version line, version and code |
+| Family | Scuffle's table, then the catalog's product, then the version |
+| Modes | the catalog, with Scuffle's mode ids and short names, then Scuffle's table |
+| Version | the version service |
+| Folder name | the product configuration |
+| Glyph, colour, description, order | Scuffle's table, then the family |
+
+### What is listed
+
+| Category | Listed |
+| --- | --- |
+| Live | unless hidden |
+| Test, the PTRs and betas | when chosen or installed |
+| Other | when shown, and chosen or installed |
+
+A live or test client Scuffle knows is offered while the catalog or the version
+service names it, and needs no check that it is public. Every other product is
+offered once discovery finds it public, as the category the catalog gives it. So
+a game Battle.net starts to offer as live, under a product code Scuffle has never
+seen, is listed as a live client after one check, with no change to Scuffle. A
+live game the catalog no longer offers, because it is deprecated or gone, becomes
+an other client. When two listed clients would share a name, the live one keeps
+it and the other takes Battle.net's name or adds its code, such as
+`Forever (wow_forever)`. A test or other client whose live client is gone belongs
+with the first live client of its family.
+
+An installed or downloading client stays listed whatever the catalog says, and
+keeps the install UID and name it had. Settings, launch options, shortcuts, Steam
+entries and game accounts are keyed by product code, so they follow a client
+through these changes.
+
+Each client's `.flavor.info` holds the NGDP product code. Every client launches
+its own executable, such as `Wow.exe`, `WowT.exe` or `WowB.exe`, with
+`-launcherlogin -uid <install UID>`, plus its mode's arguments.
 
 ### Look
 
 Scuffle ships no Blizzard artwork, logos or icons. Each client's tile is drawn
-in code: a gradient in the client's color with a plain glyph. Retail has a
-star, Mists of Pandaria Classic a crescent, Burning Crusade Anniversary a flame,
+in code: a gradient in the client's color with a plain glyph. Retail has a star,
+Mists of Pandaria Classic a crescent, Burning Crusade Anniversary a flame,
 Classic Era an hourglass and Forever a loop. Test and other public clients take
 their live client's glyph, with stripes for a test client and dots for an other
-one. The client page tints its header band with the client's color and draws
-the glyph large and faint at its top right. The main button and the progress
-bar take the client's color, darkened until white text on it reaches 4.5:1.
-Pause and the other secondary states keep the neutral button.
+one. A live client Scuffle does not know takes its family's glyph and color. The
+client page tints its header band with the client's color and draws the glyph
+large and faint at its top right. The main button and the progress bar take the
+client's color, darkened until white text on it reaches 4.5:1. Pause and the
+other secondary states keep the neutral button.
 
 The app icon is a plank club with a nail driven through its head, an original
 drawing for the name. `ui/icon.svg` is the detailed one for 32 px and up.
@@ -185,17 +258,18 @@ Warcraft product for the chosen region. The selector shows each client's
 published version and marks a test or other build whose patch is behind its
 live client as older than live, or as an old build.
 
-A product without a built-in entry is offered only when it is public. Scuffle
+A product that is not a live or test client Scuffle knows is offered only when it
+is public. Scuffle
 reads it as an install would: the product configuration, the build
 configuration and the install manifest must download and decode without a
 decryption key, and the manifest must hold a game executable. The vendor,
 development and NEV products (`wowv*`, `wowdev*`, `wownev*`) and
 `wowlivetest2` fail this check. `wow_cn_beta` passes it but supports only
 Simplified Chinese, so it is offered only when the language is Chinese.
-`wow_classic_titan` publishes only a Chinese build and is not listed. Unknown
-public products get a label from their version line, version and code, such as
-`Classic 3.4.1 (wowq)`. The catalog has no UID for them, so they launch with
-their code as the install UID.
+`wow_classic_titan` publishes only a Chinese build, so it is not listed in the
+other regions. A public product the Battle.net catalog does not name gets a label
+from its version line, version and code, such as `Classic 3.4.1 (wowq)`, and
+launches with its code as the install UID.
 
 A failed check is kept as a verdict only when it would fail again, such as a
 configuration that needs a key. A timeout, a connection error or a server error
@@ -205,9 +279,9 @@ folder of its own, so an install whose published folder another client already
 uses is refused.
 
 The result is cached per region in the cache folder for six hours. The window
-starts with the cached list, or with the built-in clients when there is none,
-and refreshes it on a worker thread. A product whose build did not change is
-not checked again.
+starts with the cached list and the last good Battle.net catalog, or with the
+snapshot's clients when there is none, and refreshes both on a worker thread. A
+product whose build did not change is not checked again.
 
 ## Installation folder
 

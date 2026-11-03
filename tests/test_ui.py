@@ -183,7 +183,7 @@ def test_settings_never_scroll_sideways_at_the_minimum_size(qt, styled, window):
     window.on_catalog(window.settings.region, snapshot)
     window.settings.show_other_clients = True
     window.open_settings()
-    window.settings_page.load(window.settings, [c.code for c in catalog.CLIENTS if c.test],
+    window.settings_page.load(window.settings, [c.code for c in catalog.clients() if c.test],
                               {'wowlivetest': 'Install failed'})
     window.resize(960, 650)
     for section, _ in window.settings_page.SECTIONS:

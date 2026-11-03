@@ -1,10 +1,12 @@
 """Find the World of Warcraft products Blizzard publishes, and which of them are public.
 
 The version service's summary names every product. Each product's versions table
-names its build for a region. A product Scuffle has no entry for counts as public
-when its product configuration, build configuration and install manifest download
-and decode without a decryption key, as an install would read them. The result is
-cached, so the window starts with the last list and refreshes it in the background.
+names its build for a region. A product that is not a live or test client Scuffle
+knows counts as public when its product configuration, build configuration and
+install manifest download and decode without a decryption key, as an install would
+read them. Battle.net's catalog is read again on the same check, see battlenet.py.
+The results are cached, so the window starts with the last list and refreshes it in
+the background.
 """
 from __future__ import annotations
 
@@ -18,7 +20,7 @@ import time
 from typing import Callable
 import urllib.request
 
-from . import catalog
+from . import battlenet, catalog
 from .ngdp.cdn import CDNClient, HTTPStatusError, parse_psv
 from .ngdp.formats import decode_blte, read_config, read_install
 
@@ -100,9 +102,14 @@ def probe(code: str, region: str, cache: Path, *, factory: Callable = CDNClient)
 
 def refresh(region: str, cache: Path, previous: dict | None = None, *, get: Callable | None = None,
             check: Callable | None = None, workers: int = 8) -> dict:
-    """Ask the version service again. Raises when its summary cannot be read."""
+    """Ask the version service again, and Battle.net's catalog when it is old.
+
+    Raises when the version service's summary cannot be read. A catalog that cannot be
+    read keeps the last good one.
+    """
     get, check = get or fetch, check or probe
     codes = parse_summary(get(SUMMARY))
+    battlenet.update(region, cache, get=get)
     earlier = (previous or {}).get('products', {})
 
     def version(code):
@@ -116,7 +123,7 @@ def refresh(region: str, cache: Path, previous: dict | None = None, *, get: Call
         rows = {code: row for code, row in zip(codes, pool.map(version, codes)) if row}
         unknown = []
         for code, row in rows.items():
-            if code in catalog.BY_CODE:
+            if catalog.trusted(code):
                 continue
             seen = earlier.get(code, {})
             if seen.get('build_config') == row['build_config'] and 'public' in seen and not seen.get('retry'):
@@ -146,6 +153,16 @@ def load(cache: Path, region: str) -> dict | None:
     if not isinstance(snapshot, dict) or snapshot.get('format') != FORMAT or snapshot.get('region') != region \
             or not isinstance(snapshot.get('products'), dict) or not isinstance(snapshot.get('checked_at'), int):
         return None
+    return snapshot
+
+
+def restore(cache: Path, region: str) -> dict | None:
+    """Use the last versions found for a region and the last good Battle.net catalog.
+
+    Returns the versions, or None when there are none yet.
+    """
+    snapshot = load(cache, region)
+    catalog.apply((snapshot or {}).get('products'), battlenet.current(cache)['installs'])
     return snapshot
 
 

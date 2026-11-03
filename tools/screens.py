@@ -176,14 +176,14 @@ def main(output: Path) -> None:
     window.clear_notice('wowf')
     window.client_list.select('wow_classic_era_ptr')
     shot('09-test-client')
-    window.settings.extra_clients = [c.code for c in ui.catalog.CLIENTS if c.test]
+    window.settings.extra_clients = [c.code for c in ui.catalog.clients() if c.test]
     window.populate()
     shot('09b-all-test-clients')
     window.settings.extra_clients = ['wow_classic_era_ptr']
     window.populate()
     window.open_settings()
     shot('10-settings')
-    tests = [c.code for c in ui.catalog.CLIENTS if c.test]
+    tests = [c.code for c in ui.catalog.clients() if c.test]
     window.settings.extra_clients = tests          # installed test clients are always listed
     window.populate()
     ptr = Job('wow_classic_era_ptr', 'install', status=QUEUED)       # one test client waiting to download
