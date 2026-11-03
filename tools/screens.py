@@ -191,6 +191,7 @@ def main(output: Path) -> None:
     shot('10f-settings-downloads')
     window.settings_page.show_section('launch')
     shot('10g-settings-launch')
+    diagnostics_states(window, shot, application)
     window.settings_page.show_section('general')
     window.downloads.jobs.clear() if window.downloads else None
     window.settings.extra_clients = ['wow_classic_era_ptr']
@@ -228,6 +229,24 @@ def main(output: Path) -> None:
     window.on_sign_in_requested('https://eu.account.battle.net/login/?externalChallenge=login&app=wow')
     shot('11-sign-in')
     print(f'Wrote {len(list(output.glob("*.png")))} screenshots to {output}')
+
+
+def diagnostics_states(window, shot, application) -> None:
+    """Before a game wrote a Proton log, then with one and the report just copied."""
+    from waystone.launch import log_dir
+    page = window.settings_page
+    page.show_section('diagnostics')
+    shot('10h-settings-diagnostics')
+    log_dir().mkdir(parents=True, exist_ok=True)
+    (log_dir() / 'steam-battlenet.log').write_text('wine: process exited normally\n')
+    page.show_section('general')
+    page.show_section('diagnostics')
+    page.request_diagnostics()
+    deadline = time.monotonic() + 20
+    while page.collecting and time.monotonic() < deadline:
+        application.processEvents()
+        time.sleep(0.02)
+    shot('10i-settings-diagnostics-copied')
 
 
 def launch_states(window, shot) -> None:

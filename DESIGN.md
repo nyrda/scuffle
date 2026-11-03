@@ -213,6 +213,7 @@ locations in all.
 | `runtime` | Wine or native Windows, the bridge, Proton discovery, game processes |
 | `ui` | the PySide6 interface |
 | `cli` | the same operations for scripts and tests |
+| `diagnostics` | the plain-text report for bug reports, without private data |
 
 The interface only calls the library, downloads, auth and runtime APIs. All
 long operations report progress as events. Downloads and sign-in can be
@@ -379,9 +380,10 @@ installed client the catalog does not offer now still gets a row in Settings, so
 it can be shown again after it was hidden. Entries that cannot be a product code
 are dropped when loading.
 
-The settings page has four sections: General for the folder, region and
-language, Clients for the three categories, Downloads for transfer controls, and
-Launch for the Proton build and the Linux launch options.
+The settings page has five sections: General for the folder, region and
+language, Clients for the three categories, Downloads for transfer controls,
+Launch for the Proton build and the Linux launch options, and Diagnostics for
+bug reports.
 `SettingsPage.add_launch_widget` and `add_download_row` add further settings to
 those sections.
 
@@ -409,3 +411,33 @@ percentage, time, speed and size fields through warm-up and stalls, using
 "Estimating…" for unavailable time and speed. Rates of at least 10 MB/s use
 whole MB/s. The queue total uses all known remaining sizes and the current rate,
 with an explicit qualification when paused jobs need to resume.
+
+## Diagnostics
+
+`diagnostics.report` builds a plain-text report from the settings, the library,
+a copy of the queue and the window's last update check. `waystone diagnostics`
+builds it from the saved settings and `downloads.json` instead. The window
+builds it on a worker thread, since it asks `umu-run --version` with a five
+second limit and reads the library, and copies it to the clipboard. The
+settings page's note confirms the copy.
+
+Each part is collected on its own. A part that raises becomes one line naming
+the error type, never its message, so a missing Proton, umu-run, log or
+library leaves the rest intact. Windows leaves out the runtime and the Proton
+log, since the game starts directly and Proton writes the only log.
+
+Privacy holds in three layers.
+
+- What is read: the session, the game ticket and the credential history are
+  never opened. Only the WoW account list is read, to learn the names and ids
+  to remove. Launch option variables and wrapper arguments appear by name
+  only. Desktop entries and Steam files are never read.
+- What is kept from the Proton log: its last 10 lines from the final 64 KB,
+  without lines that mention a token, a ticket or a game account.
+- What the finished text loses: query strings of addresses, values after
+  names such as `ST`, `WEB_TOKEN` and `GAME_ACCOUNT`, ticket shapes, emails,
+  BattleTags, long base64 or hex runs with a digit, the home folder in either
+  separator style as `~`, the user name, account names and account ids. The
+  user name and account names are replaced as whole words. The ids are
+  replaced as whole numbers, outside version strings.
+

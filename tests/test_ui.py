@@ -1569,3 +1569,35 @@ def test_a_running_game_closes_and_shift_turns_the_button_into_force_quit(qt, wi
     monkeypatch.setattr(ui, 'CLOSE_GRACE', 0)
     window.close_overdue('wow', window.closing['wow'])
     assert 'wow' not in window.closing and 'Force quit' in page.banner.text.text()
+
+
+def test_diagnostics_copy_a_report_and_open_the_proton_log_once_there_is_one(qt, window, monkeypatch):
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QDesktopServices
+    from PySide6.QtTest import QTest
+    from waystone.launch import log_dir
+    opened = []
+    monkeypatch.setattr(QDesktopServices, 'openUrl', lambda url: opened.append(url.toLocalFile()))
+    page = window.settings_page
+    window.open_settings('diagnostics')
+    assert page.focus_chain()[-1 - len(page.log_buttons):] == [page.copy_button, *page.log_buttons]
+    if page.log_buttons:
+        assert not page.open_log.isEnabled() and page.log_note.isVisibleTo(page)
+        log = log_dir() / 'steam-battlenet.log'
+        log.parent.mkdir(parents=True)
+        log.write_text('wine: process exited normally\n')
+        page.show_section('general')
+        page.show_section('diagnostics')        # coming back finds the log a game wrote meanwhile
+        assert page.open_log.isEnabled() and not page.log_note.isVisibleTo(page)
+        page.open_log.click()
+        assert opened == [str(log)]
+    qt.clipboard().setText('')
+    page.copy_button.setFocus()
+    QTest.keyClick(page.copy_button, Qt.Key_Space)
+    deadline = time.monotonic() + 20
+    while page.collecting and time.monotonic() < deadline:
+        qt.processEvents()
+        time.sleep(0.01)
+    assert qt.clipboard().text().startswith('Waystone diagnostics\n')
+    assert page.saved_note.text() == 'Diagnostics copied. Paste them into your bug report.'
+    assert page.copy_button.hasFocus() and page.copy_button.text() == 'Copy diagnostics'

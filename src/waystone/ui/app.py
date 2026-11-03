@@ -1,6 +1,8 @@
 """The Waystone window."""
 from __future__ import annotations
 
+import copy
+from dataclasses import replace
 from datetime import datetime
 import os
 from pathlib import Path
@@ -15,7 +17,7 @@ from PySide6.QtGui import QDesktopServices, QIcon
 from PySide6.QtWidgets import (QApplication, QFrame, QGraphicsOpacityEffect, QHBoxLayout, QMainWindow, QPushButton, QStackedWidget,
                                QMenu, QStyleFactory, QVBoxLayout, QWidget)
 
-from .. import catalog, discovery, system
+from .. import catalog, diagnostics, discovery, system
 from ..downloads import DONE, FAILED, PAUSED, QUEUED, RUNNING, DownloadManager, Job
 from ..launch import Launcher, LaunchError
 from ..library import Library, LibraryError, update_available
@@ -42,6 +44,7 @@ class Bus(QObject):
     catalog_checked = Signal(str, object)   # region, what discovery found or None
     game_closed = Signal(str, str, bool)    # client, what closing did or an error, forced
     running_scanned = Signal(object, object)   # library, clients whose game runs
+    diagnostics_ready = Signal(str)            # the report, or '' when it could not be built
 
 
 class MainWindow(QMainWindow):
@@ -69,6 +72,7 @@ class MainWindow(QMainWindow):
         self.bus.catalog_checked.connect(self.on_catalog)
         self.bus.game_closed.connect(self.on_game_closed)
         self.bus.running_scanned.connect(self.on_running_scanned)
+        self.bus.diagnostics_ready.connect(self.on_diagnostics)
         # Shift turns Close game into Force quit while it is held.
         QApplication.instance().installEventFilter(self)
         self.storage: dict = {}
@@ -114,6 +118,7 @@ class MainWindow(QMainWindow):
         self.settings_page.recheck_catalog.connect(lambda: self.discover(force=True))
         self.settings_page.closed.connect(self.show_client_page)
         self.settings_page.choose_folder.connect(self.open_folder_picker)
+        self.settings_page.copy_diagnostics.connect(self.collect_diagnostics)
         self.sign_in_page = SignInPage()
         self.sign_in_page.finished.connect(self.on_sign_in_finished)
         self.folder_page = FolderPage()
@@ -1183,6 +1188,27 @@ class MainWindow(QMainWindow):
         key = (self.settings.root, self.settings.region, self.settings.locale)
         if key != self._update_key:
             self.check_updates()
+
+    def collect_diagnostics(self):
+        """Build the report on a worker, since it asks umu-run for its version and reads the library."""
+        # Copies, so the worker reads a fixed picture while the window and the queue carry on.
+        settings, updates = copy.deepcopy(self.settings), dict(self.updates)
+        jobs = [replace(job) for job in self.downloads.jobs] if self.downloads else []
+        library, platform = self.library, QApplication.platformName()
+
+        def work():
+            try:
+                text = diagnostics.report(settings, library, jobs, updates=updates, qt_platform=platform)
+            except Exception:       # report() collects each part on its own. This is the last guard.
+                text = ''
+            self.bus.diagnostics_ready.emit(text)
+
+        threading.Thread(target=work, name='waystone-diagnostics', daemon=True).start()
+
+    def on_diagnostics(self, text: str):
+        if text:
+            QApplication.clipboard().setText(text)
+        self.settings_page.diagnostics_copied(bool(text))
 
     def closeEvent(self, event):
         # Every event in the application passes the filter, so it goes with the window.
