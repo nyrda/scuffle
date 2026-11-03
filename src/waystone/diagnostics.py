@@ -29,8 +29,7 @@ from .settings import LOCALE_NAMES, MEGABYTE, REGIONS, Settings, cache_dir, data
 LOG_NAME = 'steam-battlenet.log'
 LOG_LINES = 10             # the end of the Proton log, where a crash or an exit shows
 LOG_TAIL = 64 * 1024       # bytes read from its end, since the log can grow to gigabytes
-LINE_LIMIT = 200
-ERROR_LIMIT = 300
+LINE_LIMIT = 300           # applied after the scrub, so a cut never hides a secret from it
 VERSION_TIMEOUT = 5        # seconds umu-run gets to print its version
 
 # Log lines that can carry a ticket or an account are left out entirely.
@@ -38,11 +37,14 @@ SECRET_WORDS = re.compile(r'web_token|account_ts|game_account|game-account|\bst=
                           re.IGNORECASE)
 GENERIC = [
     # Values after names that hold secrets, as in a query, a registry dump or an environment.
-    (re.compile(r'\b(ST|WEB_TOKEN|ACCOUNT_TS|GAME_ACCOUNT|token|ticket|password|secret)'
+    # Prefixed names such as access_token count too.
+    (re.compile(r'(?<![A-Za-z0-9])(ST|WEB_TOKEN|ACCOUNT_TS|GAME_ACCOUNT|[\w-]*(?:token|ticket|password|secret))'
                 r'(["\']?\s*[=:]\s*["\']?)[^\s"\'&,]+', re.IGNORECASE), r'\1\2<redacted>'),
     (re.compile(r'--game-account\s+\S+(\s+[A-Z]{2}\b)?'), '--game-account <account>'),
     # A query string can hold a ticket. CDN addresses have none, so every one goes.
     (re.compile(r'(\b[a-z][a-z0-9+.-]*://[^\s?#"\']+)\?[^\s"\']*', re.IGNORECASE), r'\1?<redacted>'),
+    # The same for a relative address, such as /download?key=value.
+    (re.compile(r'(?<=\S)\?(?=[\w.-]+=)[^\s"\']*'), '?<redacted>'),
     # Battle.net tickets look like EU-<hex>-<number>.
     (re.compile(r'\b[A-Z]{2,4}-[0-9A-Fa-f]{8,}-\d{6,}\b'), '<ticket>'),
     (re.compile(r'[\w.+-]+@[\w-]+(\.[\w-]+)+'), '<email>'),
@@ -76,7 +78,9 @@ def report(settings: Settings, library=None, jobs=(), *, updates: dict | None = 
         if title:
             lines.append(title)
         lines += [f'  {line}' if title else line for line in body]
-    return scrub('\n'.join(lines) + '\n', private_patterns(settings))
+    text = scrub('\n'.join(lines), private_patterns(settings))
+    return '\n'.join(line if len(line) <= LINE_LIMIT else line[:LINE_LIMIT] + '…'
+                     for line in text.split('\n')) + '\n'
 
 
 def command_line_report(root: Path | None) -> str:
@@ -323,9 +327,8 @@ def queue(jobs) -> list[str]:
             parts.append(f'{job.done_bytes / job.total_bytes:.0%}')
         lines.append(f'{name(job.client)}: {", ".join(parts)}')
         if job.error:
-            # On one line and short. The scrub below removes paths, addresses and accounts in it.
-            error = ' '.join(job.error.split())
-            lines.append(f'  Error: {error[:ERROR_LIMIT]}{"…" if len(error) > ERROR_LIMIT else ""}')
+            # On one line. The scrub removes paths, addresses and accounts in it, then it is shortened.
+            lines.append(f'  Error: {" ".join(job.error.split())}')
     return lines or ['None']
 
 
@@ -346,7 +349,7 @@ def proton_log() -> list[str] | None:
     if start:
         lines = lines[1:]           # cut in the middle
     printable = lambda text: ''.join(c if c.isprintable() else ' ' for c in text).strip()
-    kept = [printable(line)[:LINE_LIMIT] for line in lines if line.strip() and not SECRET_WORDS.search(line)]
+    kept = [printable(line) for line in lines if line.strip() and not SECRET_WORDS.search(line)]
     return [f'File: {path}, {info.st_size / 1e6:.1f} MB, written {written}',
             *(f'| {line}' for line in kept[-LOG_LINES:])]
 
@@ -376,7 +379,9 @@ def private_patterns(settings: Settings) -> list[tuple[re.Pattern, str]]:
     names, ids = account_words(settings)
     patterns += [(re.compile(rf'(?<!\w){re.escape(word)}(?!\w)', re.IGNORECASE), '<account>')
                  for word in sorted(names, key=len, reverse=True)]
-    patterns += [(re.compile(rf'(?<![\w.]){number}(?![\w.])'), '<id>') for number in sorted(ids, key=len, reverse=True)]
+    # Whole numbers, also at the end of a sentence, but not a part of a version such as 11.2.5.64253.
+    patterns += [(re.compile(rf'(?<!\w)(?<!\d\.){number}(?!\w)(?!\.\d)'), '<id>')
+                 for number in sorted(ids, key=len, reverse=True)]
     return patterns
 
 

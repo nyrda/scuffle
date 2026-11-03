@@ -1075,19 +1075,20 @@ class SettingsPage(Page):
         if not self.log_buttons:
             return
         folder = log_dir()
-        log = folder / LOG_NAME
-        reason = '' if log.is_file() else 'No Proton log yet. Turn on Proton log under Launch, then start a game.'
+        try:
+            has_log, has_folder = (folder / LOG_NAME).is_file(), folder.is_dir()
+        except OSError:         # an unreadable folder before Python 3.13 raises instead of saying no
+            has_log = has_folder = False
+        reason = '' if has_log else 'No Proton log yet. Turn on Proton log under Launch, then start a game.'
         self.open_log.setEnabled(not reason)
         self.open_log.setToolTip(reason or f'Opens {LOG_NAME}')
-        self.open_logs.setEnabled(folder.is_dir())
-        self.open_logs.setToolTip('' if folder.is_dir() else 'Waystone has written no logs yet.')
+        self.open_logs.setEnabled(has_folder)
+        self.open_logs.setToolTip('' if has_folder else 'Waystone has written no logs yet.')
         self.log_note.setText(reason)
         self.log_note.setVisible(bool(reason))
 
     def reveal(self, path: Path) -> None:
-        self.update_logs()
-        if path.exists():
-            QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
     def request_diagnostics(self) -> None:
         # The button stays enabled while the report is collected, so keyboard focus stays on it.

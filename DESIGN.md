@@ -439,5 +439,7 @@ Privacy holds in three layers.
   BattleTags, long base64 or hex runs with a digit, the home folder in either
   separator style as `~`, the user name, account names and account ids. The
   user name and account names are replaced as whole words. The ids are
-  replaced as whole numbers, outside version strings.
+  replaced as whole numbers, outside version strings. Lines are shortened to
+  300 characters only after this, so a cut never hides part of a secret from
+  the patterns.
 
