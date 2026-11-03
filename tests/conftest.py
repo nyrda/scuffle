@@ -42,3 +42,13 @@ def private_folders(tmp_path, monkeypatch):
     # The user's real settings, sign-in and caches are never read or written by a test.
     for name in FOLDERS:
         monkeypatch.setenv(name, str(tmp_path / 'home' / name.lower()))
+
+
+@pytest.fixture
+def save_login():
+    """Save a signed-in Battle.net login as a sign-in leaves it, without Battle.net or a bridge."""
+    def save(vault, owner=None, ticket=b'protected'):
+        with vault.adding(owner) as login:
+            login.session.write_bytes(ticket)
+        return login
+    return save

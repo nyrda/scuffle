@@ -57,16 +57,17 @@ def test_names_that_cannot_be_read_are_unknown_rather_than_no_accounts(fail, nam
     assert Server(names, fail).game_accounts(record(handle(MAIN['id'], region=region))) is None
 
 
-def test_a_failed_lookup_keeps_the_list_of_the_same_login_only(tmp_path):
+def test_a_failed_lookup_keeps_the_list_of_the_same_login_only(tmp_path, save_login):
     vault = Vault(tmp_path / 'session', bridge=None)
-    vault.save_accounts(OWNER, [MAIN, SECOND])
-    vault.save_accounts(OWNER, None)
-    assert vault.accounts() == {'owner': OWNER, 'game_accounts': [MAIN, SECOND]}
-    vault.save_accounts(OWNER + 1, None)
-    assert vault.accounts() is None
-    vault.save_accounts(OWNER, [MAIN])
+    login = save_login(vault)           # an older Waystone's session, whose account id is not known yet
+    login.save_accounts(OWNER, [MAIN, SECOND])
+    login.save_accounts(OWNER, None)
+    assert login.accounts() == {'owner': OWNER, 'game_accounts': [MAIN, SECOND]}
+    login.save_accounts(OWNER + 1, None)
+    assert login.accounts() is None
+    login.save_accounts(OWNER, [MAIN])
     vault.forget()
-    assert vault.accounts() is None
+    assert login.accounts() is None
 
 
 @pytest.mark.parametrize('saved, listed, expected', [
@@ -108,12 +109,11 @@ class Library:
         return self.root / 'Wow.exe'
 
 
-def test_a_launch_passes_the_account_chosen_for_this_login(tmp_path, monkeypatch):
+def test_a_launch_passes_the_account_chosen_for_this_login(tmp_path, monkeypatch, save_login):
     vault = Vault(tmp_path / 'session', bridge=None)
-    vault.directory.mkdir()
-    vault.session.write_bytes(b'protected')
+    save_login(vault, OWNER)
     # The renewal lists the accounts again, so the launch reads the list it wrote.
-    monkeypatch.setattr(launch, 'renew', lambda *_: vault.save_accounts(OWNER, [MAIN, SECOND]))
+    monkeypatch.setattr(launch, 'renew', lambda login, *_: login.save_accounts(OWNER, [MAIN, SECOND]))
     started = []
 
     class Runtime:

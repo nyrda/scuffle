@@ -1488,17 +1488,16 @@ def test_uninstall_completion_refreshes_storage_and_not_installed_notice(qt, win
     assert 'Waystone-backup-wow-test' in window.client_page.banner.text.text()
 
 
-def test_the_wow_account_choice_shows_only_with_several_accounts_and_is_saved(qt, window, tmp_path):
+def test_the_wow_account_choice_shows_only_with_several_accounts_and_is_saved(qt, window, tmp_path, save_login):
     from waystone.auth.vault import Vault
     from waystone.settings import Settings
     vault = Vault(tmp_path / 'data_dir' / 'session', bridge=None)
-    vault.directory.mkdir(parents=True)
-    vault.session.write_bytes(b'protected')
+    login = save_login(vault, 5)
     main, second = {'id': 11, 'name': 'WANDERER', 'region': 'EU'}, {'id': 12, 'name': 'WoW1', 'region': 'EU'}
-    vault.save_accounts(5, [main])
+    login.save_accounts(5, [main])
     window.refresh()
     assert window.game_account_row.isHidden()
-    vault.save_accounts(5, [main, second])
+    login.save_accounts(5, [main, second])
     window.refresh()
     assert not window.game_account_row.isHidden()
     assert 'Ask in the game' in window.game_account_button.text()
@@ -1515,6 +1514,43 @@ def test_the_wow_account_choice_shows_only_with_several_accounts_and_is_saved(qt
     window.refresh()
     assert window.game_account_row.isHidden()
 
+
+
+def test_the_sidebar_switches_battle_net_accounts_and_signs_out_of_one(qt, window, tmp_path, save_login):
+    from waystone.auth.vault import Vault
+    vault = Vault(tmp_path / 'data_dir' / 'session', bridge=None)
+    first = save_login(vault, 5)
+    first.save_battle_tag('Wanderer#7395')
+    first.save_accounts(5, [{'id': 11, 'name': 'WANDERER', 'region': 'EU'}, {'id': 12, 'name': 'WoW1', 'region': 'EU'}])
+    window.refresh()
+    # One account reads as before, with the account's name on the button that offers adding another.
+    assert 'Signed in' in window.account.text() and window.account_button.text() == 'Wanderer#7395 ▾'
+    assert not window.game_account_row.isHidden()
+    actions = {action.text(): action for action in window.account_menu().actions()}
+    assert list(actions) == ['Wanderer#7395', '', 'Add account…', 'Sign out of this account']
+    assert actions['Wanderer#7395'].isChecked()
+
+    second = save_login(vault, 6)       # added and active, without a BattleTag
+    window.refresh()
+    assert window.account_button.text() == 'Account 2 ▾' and window.game_account_row.isHidden()
+    actions = {action.text(): action for action in window.account_menu().actions()}
+    assert actions['Account 2'].isChecked() and not actions['Wanderer#7395'].isChecked()
+    actions['Wanderer#7395'].trigger()
+    assert window.account_button.text() == 'Wanderer#7395 ▾' and not window.game_account_row.isHidden()
+
+    # No switching or signing out while a game starts with the active account's session.
+    window.phases['wow'] = 'Connecting'
+    window.refresh()
+    assert not window.account_button.isEnabled()
+    window.phases.clear()
+    window.refresh()
+
+    {action.text(): action for action in window.account_menu().actions()}['Sign out of this account'].trigger()
+    assert [login.key for login in vault.logins()] == [second.key] and second.has_session()
+    assert window.account_button.text() == 'Account 2 ▾'
+    {action.text(): action for action in window.account_menu().actions()}['Sign out of this account'].trigger()
+    assert window.account.text() == 'Not signed in' and window.account_button.text() == 'Sign in'
+    assert window.account_menu() is None
 
 def test_a_running_game_closes_and_shift_turns_the_button_into_force_quit(qt, window, tmp_path, monkeypatch):
     from types import SimpleNamespace

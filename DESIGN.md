@@ -346,8 +346,8 @@ A crash before the rename leaves the old session in place, and the next start
 repeats the steps. A crash after it leaves a complete login and an old
 `accounts.json`, which the next start deletes. No ticket is used or renewed by
 the migration, so the user stays signed in. Every read of the logins migrates
-when it can take the lock. While another process holds it, the old session is
-listed in place under the same key. A session that an older Waystone writes
+when it can take the lock. While another process holds it, or while the move
+fails, the old session is listed and renewed in place under the same key. A session that an older Waystone writes
 later, after a new sign-in, is newer and replaces the login with its key.
 Going back to an older Waystone afterwards needs a new sign-in.
 

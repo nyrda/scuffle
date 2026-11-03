@@ -16,7 +16,7 @@ import time
 
 # Folders of its own, so no state reads or touches the user's settings, sign-in or library.
 _home = tempfile.mkdtemp(prefix='waystone-screens-')
-for _name in ['XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'APPDATA', 'LOCALAPPDATA']:
+for _name in ['XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'APPDATA', 'LOCALAPPDATA']:
     os.environ[_name] = os.path.join(_home, _name.lower())
 
 from PySide6.QtWidgets import QApplication, QScrollArea
@@ -71,10 +71,10 @@ def main(output: Path) -> None:
     window.client_list.select('wow')
     shot('01-installed-ready')
     # Signed in with two WoW accounts: the game asks until one is picked in the sidebar.
-    signed_in, game_accounts = window.signed_in, window.game_accounts
-    window.signed_in = lambda: True
-    window.game_accounts = lambda: {'owner': 1, 'game_accounts': [
-        {'id': 11, 'name': 'WANDERER', 'region': 'EU'}, {'id': 12, 'name': 'WoW1', 'region': 'EU'}]}
+    vault = window.vault()
+    main = fake_login(vault, 1)
+    main.save_battle_tag('Wanderer#7395')
+    main.save_accounts(1, [{'id': 11, 'name': 'WANDERER', 'region': 'EU'}, {'id': 12, 'name': 'WoW1', 'region': 'EU'}])
     shot('01d-two-accounts-ask')
     window.settings.game_accounts = {'1': 11}
     shot('01e-two-accounts-chosen')
@@ -83,8 +83,18 @@ def main(output: Path) -> None:
     application.processEvents()
     menu.grab().save(str(output / '01f-account-menu.png'))
     menu.close()
+    # The Battle.net account switcher with one account, then with a second one added without a BattleTag.
+    battle_net_menu(window, application, output / '01g-battle-net-menu-one.png')
+    second = fake_login(vault, 2)
+    second.save_accounts(2, [{'id': 21, 'name': 'ALTACCOUNT', 'region': 'EU'}])
+    shot('01h-second-battle-net-account')
+    battle_net_menu(window, application, output / '01i-battle-net-menu-two.png')
+    window.phases['wowf'] = 'Connecting'          # no switching while a game starts
+    shot('01j-switcher-during-launch')
+    window.phases.clear()
+    for login in vault.logins():
+        vault.forget(login)
     window.settings.game_accounts = {}
-    window.signed_in, window.game_accounts = signed_in, game_accounts
     window.storage['clients']['wow'] = 92_400_000_000
     window.open_uninstall()
     shot('01b-uninstall-confirmation')
@@ -268,6 +278,22 @@ def launch_states(window, shot) -> None:
     window.show_client_page()
     shot('22-client-with-launch-options')
     window.settings.client_launch.pop(code)
+
+
+def fake_login(vault, owner: int):
+    """A signed-in Battle.net login in the throwaway data folder. Its ticket is a placeholder."""
+    with vault.adding(owner) as login:
+        login.session.write_bytes(b'placeholder')
+    return login
+
+
+def battle_net_menu(window, application, path: Path) -> None:
+    window.refresh()
+    menu = window.account_menu()
+    menu.popup(window.account_button.mapToGlobal(window.account_button.rect().bottomLeft()))
+    application.processEvents()
+    menu.grab().save(str(path))
+    menu.close()
 
 
 def fake_installed(window, code: str) -> None:

@@ -208,7 +208,7 @@ class Library:
 
 @pytest.mark.skipif(sys.platform == 'win32', reason='Linux launch through umu-run')
 def test_the_game_runs_inside_the_wrappers_with_the_options_and_the_prefix_without_them(
-        tmp_path, programs, monkeypatch):
+        tmp_path, programs, monkeypatch, save_login):
     log = tmp_path / 'calls.jsonl'
     monkeypatch.setenv('FAKE_LOG', str(log))
     monkeypatch.setenv('UMU_CONTAINER_NSENTER', '1')
@@ -228,8 +228,7 @@ def test_the_game_runs_inside_the_wrappers_with_the_options_and_the_prefix_witho
     settings.client_launch['wow_classic_era'] = ClientOptions(
         graphics='-d3d11', switches=['-console'], arguments='-config Era.wtf', environment={'SHARED': 'client'})
     vault = Vault(tmp_path / 'session', bridge=None)
-    vault.directory.mkdir()
-    vault.session.write_bytes(b'protected')
+    save_login(vault, 7)
     runtime = LinuxRuntime(tmp_path / 'bridge.exe', tmp_path / 'prefix', Proton('GE-Proton', proton), umu)
     library = Library(tmp_path / 'games')
     process = launch.Launcher(settings, library, runtime=runtime, vault=vault).play(
@@ -287,7 +286,7 @@ def test_a_missing_wrapper_stops_the_launch_before_the_sign_in_is_used(tmp_path,
 
 @pytest.mark.parametrize('options, hint', [(ClientOptions(), False), (ClientOptions(switches=['-console']), True)])
 def test_a_game_that_does_not_start_points_at_the_launch_options_when_there_are_any(
-        tmp_path, monkeypatch, options, hint):
+        tmp_path, monkeypatch, save_login, options, hint):
     from types import SimpleNamespace
     monkeypatch.setattr(launch, 'renew', lambda *args: None)
 
@@ -303,8 +302,7 @@ def test_a_game_that_does_not_start_points_at_the_launch_options_when_there_are_
     settings = Settings()
     settings.client_launch['wow_classic_era'] = options
     vault = Vault(tmp_path / 'session', bridge=None)
-    vault.directory.mkdir()
-    vault.session.write_bytes(b'protected')
+    save_login(vault, 7)
     launcher = launch.Launcher(settings, Library(tmp_path / 'games'), runtime=Runtime(), vault=vault)
     with pytest.raises(launch.LaunchError, match='did not start') as raised:
         launcher.play('wow_classic_era', sign_in=None)
