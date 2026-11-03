@@ -16,7 +16,7 @@ import pytest
 
 from test_library import FixtureCDN, SyntheticBuild, run_build
 
-from scuffle import move
+from scuffle import move, settings as settings_module
 from scuffle.library import Library, LibraryError, Updater
 from scuffle.ngdp.store import StoreError
 from scuffle.settings import Settings
@@ -268,8 +268,10 @@ def test_nothing_starts_during_a_move_and_cancel_leaves_the_source_as_it_was(ins
         pass
 
 
-def crashing_move(crash_at: int, drives: str, source: Path, target: Path) -> None:
+def crashing_move(crash_at: int, drives: str, source: Path, target: Path, folders: dict | None = None) -> None:
     """Move, dying like a power loss at the crash_at-th file operation. Runs in a child process."""
+    for name, folder in (folders or {}).items():
+        setattr(settings_module, name, lambda folder=folder: Path(folder))
     count = 0
 
     def crashing(original):
@@ -309,9 +311,12 @@ def crash(step: int, drives: str, source: Path, target: Path) -> bool:
                 os._exit(1)
         code = os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1])
     else:
-        code = subprocess.run([sys.executable, '-c', 'import sys, test_move; from pathlib import Path; '
-                               'test_move.crashing_move(int(sys.argv[1]), sys.argv[2], Path(sys.argv[3]), Path(sys.argv[4]))',
-                               str(step), drives, str(source), str(target)], timeout=60,
+        # A new process, unlike a fork, does not inherit folders a test patched, so they go along.
+        folders = {name: str(getattr(settings_module, name)()) for name in ('config_dir', 'data_dir', 'cache_dir')}
+        code = subprocess.run([sys.executable, '-c', 'import json, sys, test_move; from pathlib import Path; '
+                               'test_move.crashing_move(int(sys.argv[1]), sys.argv[2], Path(sys.argv[3]), Path(sys.argv[4]), '
+                               'json.loads(sys.argv[5]))',
+                               str(step), drives, str(source), str(target), json.dumps(folders)], timeout=60,
                               env=os.environ | {'PYTHONPATH': os.pathsep.join([str(SRC), str(Path(__file__).parent)])}).returncode
     assert code in (0, 70), f'the move failed at step {step} instead of crashing'
     return code == 0

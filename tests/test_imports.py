@@ -1,6 +1,7 @@
 """Finding installations to import and copying their settings, with folders made in a temporary home."""
 import os
 from pathlib import Path
+import sys
 
 import pytest
 
@@ -75,6 +76,7 @@ def product_db(paths: list[str]) -> bytes:
     return b''.join(protobuf.blob(1, install(path)) for path in paths)
 
 
+@pytest.mark.skipif(sys.platform == 'win32', reason='Wine prefixes are Linux only, and Windows has no d: file name')
 def test_search_finds_prefixes_steam_and_drives_and_leaves_the_scuffle_folder_out(tmp_path):
     home = tmp_path / 'home'
     battle_net(home / '.wine/drive_c/Program Files (x86)/World of Warcraft', {'_retail_': 'wow'})

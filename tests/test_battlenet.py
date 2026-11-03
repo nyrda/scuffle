@@ -26,11 +26,11 @@ def builtin_catalog():
 
 
 def root():
-    return json.loads((CAPTURED / 'root.json').read_text())
+    return json.loads((CAPTURED / 'root.json').read_text(encoding='utf-8'))
 
 
 def fragment():
-    return json.loads((CAPTURED / 'world_of_warcraft.json').read_text())
+    return json.loads((CAPTURED / 'world_of_warcraft.json').read_text(encoding='utf-8'))
 
 
 def table(document=None) -> dict:
@@ -40,7 +40,7 @@ def table(document=None) -> dict:
 
 def products(*extra: str) -> dict:
     """What discovery saved for the US, with more public products, as code=version."""
-    found = json.loads((FIXTURES / 'catalog-us.json').read_text())['products']
+    found = json.loads((FIXTURES / 'catalog-us.json').read_text(encoding='utf-8'))['products']
     for item in extra:
         code, version = item.split('=')
         found[code] = {'version': version, 'build_config': 'a' * 32, 'public': True, 'locales': ['enUS']}
@@ -82,7 +82,7 @@ class CDN:
         for entry in document['fragments']:
             if entry['name'] == battlenet.FRAGMENT:
                 entry['hash'] = fragment_key
-        captured = (CAPTURED / 'build-config').read_text()
+        captured = (CAPTURED / 'build-config').read_text(encoding='utf-8')
         original = next(line.split()[-1] for line in captured.splitlines() if line.startswith('root ='))
         build = self.add(captured.replace(original, self.add(json.dumps(document).encode())).encode())
         self.versions.append(f'{name}|{build}|{"b" * 32}||1|1|')
@@ -90,7 +90,7 @@ class CDN:
     def get(self, url: str) -> bytes:
         """The version service, for the catalogs product only."""
         if url == battlenet.VERSIONS.format(region='us'):
-            header = (CAPTURED / 'versions.psv').read_text().splitlines()[:2]
+            header = (CAPTURED / 'versions.psv').read_text(encoding='utf-8').splitlines()[:2]
             return '\n'.join(header + self.versions).encode()
         if url == battlenet.CDNS.format(region='us'):
             port = self.server.server_address[1]
