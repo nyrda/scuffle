@@ -93,14 +93,19 @@ recovering at the same time.
   and every size. It compares the store's records in `.waystone` and the
   published indexes whole, and both ends of every other file over 4 MB. The
   copied store must then open and read back the newest object of each segment.
-  Then the journal's phase becomes `switched`, the setting is saved, the copy's
-  marker is cleared and the source is deleted, its marker last. Cancel works
-  until the switch. It raises inside the copy, and the rollback deletes what
-  carries the token.
+  Then the journal's phase becomes `switched` and the setting is saved. The
+  phase becomes `deleting` and the source is deleted, its marker last. The
+  copy's marker is cleared only after that, so no other process starts a job in
+  it meanwhile. Cancel works until the switch. It raises inside the copy, and
+  the rollback deletes what carries the token.
 
 Recovery reads the journal. A move that switched is finished: the setting is
 saved, unless the user pointed it at a third folder since, and the source is
-deleted. Any other move is undone: the partial copy is deleted, its own folder
+deleted. That needs the copy to still be an installation. If it is gone and
+the phase is still `switched`, the source is whole and the move is undone.
+Once deleting began, nothing more is deleted and the error is shown. A setting
+that fails to save keeps its old value in memory too, so no later step takes
+the new folder as saved and deletes the source. Any other move is undone: the partial copy is deleted, its own folder
 too when the move created it, and the source's marker is cleared. Recovery
 deletes only a folder that carries the journal's token, so a folder the user
 put there after a crash stays. It also removes the debris of a marker write
@@ -110,7 +115,8 @@ window settles the setting and the markers before it opens the library, which
 takes no time. The worker then deletes the other folder as a settling
 `MoveTask`, so a large deletion never holds up the window. The command line
 recovers in full before it opens the library. Within a running Waystone, a
-failed or cancelled move runs the same recovery at once. A test kills a real
+failed or cancelled move runs the same recovery at once, from the journal on
+disk rather than from its own copy, which a failed write can leave ahead. A test kills a real
 process at every rename, write, copy and deletion of both modes and checks that
 one complete root remains and that recovery ends at it.
 

@@ -199,7 +199,7 @@ def read_journal() -> dict | None:
                  and all(isinstance(record.get(k), str) and Path(record[k]).is_absolute()
                          for k in ('source', 'destination'))
                  and record.get('mode') in ('rename', 'copy')
-                 and record.get('phase') in ('moving', 'copying', 'switched')
+                 and record.get('phase') in ('moving', 'copying', 'switched', 'deleting')
                  and isinstance(record.get('created'), bool))
     except FileNotFoundError:
         return None
@@ -253,8 +253,13 @@ def clear_marker(root: Path) -> None:
 
 
 def save_root(settings, root: Path) -> None:
-    settings.root = str(root)
-    settings.save()
+    """Point the settings at root. When saving fails, they keep naming the folder the file names."""
+    previous, settings.root = settings.root, str(root)
+    try:
+        settings.save()
+    except BaseException:
+        settings.root = previous
+        raise
 
 
 # Moving
@@ -302,10 +307,13 @@ def move(library: Library, destination, settings, *, progress=None, cancelled=No
                 write_journal(record)
             return _copy(record, folders, files, settings, emit, cancelled)
         except BaseException:
-            # Before the switch the move is undone, after it finished. The next start
-            # does the same if this fails too.
+            # Before the switch the move is undone, after it finished. The journal on disk
+            # decides, not this copy of it, which a failed write can leave ahead. The next
+            # start does the same if this fails too.
             try:
-                _resolve(record, settings, emit=emit)
+                persisted = read_journal()
+                if persisted is not None:
+                    _resolve(persisted, settings, emit=emit)
             except (LibraryError, OSError, ValueError):
                 pass
             raise
@@ -365,8 +373,9 @@ def _finish_rename(record: dict, settings, emit) -> dict:
         save_root(settings, target)
     except OSError as error:
         # The setting still names the old place, so the folder goes back there.
-        settings.root = str(source)
         os.rename(target, source)
+        system.sync_directory(source.parent)
+        system.sync_directory(target.parent)
         raise LibraryError(f'The settings could not be saved, so the folder stays where it was. '
                            f'{error.strerror or error}') from None
     clear_marker(target)
@@ -421,14 +430,17 @@ def _copy(record: dict, folders: list[str], files: dict[str, int], settings, emi
     try:
         save_root(settings, target)
     except OSError as error:
-        settings.root = str(source)
         record['phase'] = 'copying'
         write_journal(record)
         raise LibraryError(f'The settings could not be saved, so the installation stays where it was. '
                            f'{error.strerror or error}') from None
-    clear_marker(target)
     emit({'stage': 'removing_old'})
+    record['phase'] = 'deleting'         # from here the old folder may be partly gone
+    write_journal(record)
     leftover = _delete_marked(source, record['token'], keep_folder=False)
+    # The new folder stays closed to other processes until the old one is gone. What cannot
+    # be deleted waits for the next start, and does not keep the new folder closed.
+    clear_marker(target)
     if not leftover:
         drop_journal()
     return {'moved': True, 'copied': True, 'source': str(source), 'destination': str(target), 'leftover': leftover}
@@ -516,21 +528,31 @@ def _resolve(record: dict, settings, *, delete: bool = True, emit=lambda event: 
             drop_journal()          # the marker was never written, or already removed
             return {'recovered': 'nothing', 'source': str(source), 'destination': str(target), 'leftover': ''}
     else:
-        switched = record['phase'] == 'switched'
+        switched = record['phase'] in ('switched', 'deleting')
+        if switched and not Library(target).exists():
+            # The checked copy is gone or was replaced since. Before deleting began the old
+            # folder is whole, so the move is undone. After it, nothing more is deleted.
+            if record['phase'] == 'deleting':
+                raise LibraryError(f'The new installation folder {target} is gone, and the old one '
+                                   f'at {source} is partly removed. Waystone deletes nothing more.')
+            switched = False
     result = {'recovered': 'finished' if switched else 'undone', 'source': str(source),
               'destination': str(target), 'leftover': ''}
     if switched:
         # A setting the user pointed elsewhere since is theirs. Only the old place is replaced.
         if not same_place(settings.root, target) and (not settings.root or same_place(settings.root, source)):
             save_root(settings, target)
-        clear_marker(target)
         if record['mode'] == 'rename':
+            clear_marker(target)
             drop_journal()
             return result
         if not delete:
             return result | {'pending': True}
         emit({'stage': 'removing_old'})
+        if record['phase'] != 'deleting':
+            write_journal(record | {'phase': 'deleting'})
         result['leftover'] = _delete_marked(source, token, keep_folder=False)
+        clear_marker(target)
     else:
         if same_place(settings.root, target):
             save_root(settings, source)

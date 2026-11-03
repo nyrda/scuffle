@@ -100,8 +100,18 @@ def test_move_carries_every_client_to_the_new_folder(installed, tmp_path, monkey
         target.mkdir()
     if drives == 'other':
         across_drives(monkeypatch, source)
-    result = move.move(Library(source), target, settings)
+    closed = []
+
+    def removing(event):
+        # While the old folder goes, the new one stays closed to other processes' jobs.
+        if event['stage'] == 'removing_old':
+            with pytest.raises(LibraryError, match='being moved'):
+                with Library(target).locked():
+                    pass
+            closed.append(True)
+    result = move.move(Library(source), target, settings, progress=removing)
     assert result['moved'] and result['copied'] == (drives == 'other') and not result['leftover']
+    assert closed == ([True] if drives == 'other' else [])
     assert_moved(source, target, settings, builds, tmp_path)
     after = tree(target)
     # The copy's check opens the copied catalogue, which may rewrite its pages but not its rows.
@@ -129,6 +139,28 @@ def test_a_copy_that_lost_bytes_on_the_new_drive_is_never_switched_to(installed,
     assert damaged and not target.exists()
     assert tree(source) == before and Settings.load().root == str(source)
     assert not move.journal_path().exists()
+
+
+@pytest.mark.skipif(sys.platform == 'win32' or os.geteuid() == 0, reason='needs a folder this user cannot write')
+def test_a_switch_the_journal_could_not_record_is_undone(installed, tmp_path, monkeypatch):
+    source, settings, builds = installed
+    across_drives(monkeypatch, source)
+    target = tmp_path / 'drive-b' / 'Games'
+    target.parent.mkdir()
+    data = move.journal_path().parent
+
+    def full_data_folder(event):
+        if event['stage'] == 'verifying':
+            data.chmod(0o500)       # the journal cannot record the switch now
+    try:
+        with pytest.raises(OSError):
+            move.move(Library(source), target, settings, progress=full_data_folder)
+        assert settings.root == Settings.load().root == str(source)
+        assert complete(source, builds, tmp_path)
+    finally:
+        data.chmod(0o700)
+    move.recover(settings)
+    assert settings.root == str(source) and complete(source, builds, tmp_path) and not target.exists()
 
 
 def refusal(case, source, target, monkeypatch):
@@ -366,3 +398,65 @@ def test_recovery_never_deletes_a_folder_the_move_did_not_make(scratch, monkeypa
     assert (target / 'mine.txt').read_text() == 'the user\'s own file'
     assert settings.root == str(source) and complete(source, {'wowf': build}, scratch)
     assert not move.journal_path().exists()
+
+
+def crash_in_phase(scratch, monkeypatch, phase):
+    """A real installation whose move to another drive died with its journal in phase."""
+    for name in ('XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME'):
+        monkeypatch.setenv(name, str(scratch / 'home' / name.lower()))
+    monkeypatch.setattr(move.system, 'running_executables', lambda *names: [])
+    source, target = scratch / 'drive-a' / 'Waystone', scratch / 'drive-b' / 'Games'
+    builds = {'wowf': SyntheticBuild()}
+    run_build(source, FixtureCDN(builds['wowf'], scratch / 'cache'))
+    Settings(root=str(source)).save()
+    target.parent.mkdir()
+    pristine, settings_file = scratch / 'pristine', Settings.path().read_bytes()
+    shutil.copytree(source, pristine)
+    for step in range(1, 400):
+        assert not crash(step, 'other', source, target)
+        if move.journal_path().is_file() and json.loads(move.journal_path().read_text())['phase'] == phase:
+            return source, target, builds
+        move.recover(Settings.load())
+        for root in (source, target):
+            shutil.rmtree(root, ignore_errors=True)
+        shutil.copytree(pristine, source)
+        Settings.path().write_bytes(settings_file)
+    raise AssertionError(f'the move never reached {phase}')
+
+
+@pytest.mark.parametrize('phase', ['switched', 'deleting'])
+def test_recovery_keeps_the_old_folder_when_the_new_one_vanished_after_a_crash(scratch, monkeypatch, phase):
+    """The copy was checked and switched to, then the user deleted it before Waystone started again."""
+    source, target, builds = crash_in_phase(scratch, monkeypatch, phase)
+    shutil.rmtree(target)
+    left = tree(source)
+    settings = Settings.load()
+    if phase == 'switched':
+        # Nothing was deleted yet, so the old folder is whole and the move is undone.
+        assert move.recover(settings)['recovered'] == 'undone'
+        assert settings.root == Settings.load().root == str(source)
+        assert complete(source, builds, scratch) and not move.journal_path().exists()
+    else:
+        with pytest.raises(LibraryError, match='deletes nothing more'):
+            move.recover(settings)
+        assert move.journal_path().exists()
+        assert tree(source) == left         # what is left of the old folder stays
+
+
+@pytest.mark.skipif(sys.platform == 'win32' or os.geteuid() == 0, reason='needs a folder this user cannot write')
+def test_recovery_deletes_nothing_while_the_setting_cannot_be_saved(scratch, monkeypatch):
+    """As the window and then the worker recover, with a settings folder that refuses writes."""
+    source, target, builds = crash_in_phase(scratch, monkeypatch, 'switched')
+    settings = Settings.load()
+    Settings.path().parent.chmod(0o500)
+    try:
+        for delete in (False, True):
+            with pytest.raises(OSError):
+                move.recover(settings, delete=delete)
+            # The object goes on naming what the file names, so a retry saves again first.
+            assert settings.root == Settings.load().root == str(source)
+            assert complete(source, builds, scratch) and move.journal_path().exists()
+    finally:
+        Settings.path().parent.chmod(0o700)
+    assert move.recover(settings)['recovered'] == 'finished'
+    assert Settings.load().root == str(target) and not source.exists()

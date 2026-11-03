@@ -30,8 +30,8 @@ MUTATIONS = [
         replace(MOVE, "    try:\n        save_root(settings, target)\n    except OSError as error:\n        # The setting",
                 "    try:\n        pass\n    except OSError as error:\n        # The setting")]),
     ('forget-setting-after-copy', [CARRY + '[new-other]', CARRY + '[empty-other]'], [
-        replace(MOVE, "    try:\n        save_root(settings, target)\n    except OSError as error:\n        settings.root",
-                "    try:\n        pass\n    except OSError as error:\n        settings.root")]),
+        replace(MOVE, "    try:\n        save_root(settings, target)\n    except OSError as error:\n        record['phase']",
+                "    try:\n        pass\n    except OSError as error:\n        record['phase']")]),
     ('skip-copy-check', [test('a_copy_that_lost_bytes_on_the_new_drive_is_never_switched_to')], [
         replace(MOVE, '    _verify(source, target, folders, files, cancelled)\n', '')]),
     ('delete-source-before-switch', [CRASH + '[other]'], [
@@ -39,7 +39,7 @@ MUTATIONS = [
                 "    _delete_marked(source, record['token'], keep_folder=False)\n"
                 "    record['phase'] = 'switched'\n    write_journal(record)\n    try:")]),
     ('undo-a-switched-move', [CRASH + '[other]'], [
-        replace(MOVE, "switched = record['phase'] == 'switched'", 'switched = False')]),
+        replace(MOVE, "switched = record['phase'] in ('switched', 'deleting')", 'switched = False')]),
     ('trust-the-rename-side-blindly', [CRASH + '[same]'], [
         replace(MOVE, '        if marker_token(target) == token:\n            switched = True',
                 '        if True:\n            switched = True')]),
@@ -47,6 +47,15 @@ MUTATIONS = [
         replace(MOVE, "        partial = record['mode'] == 'copy' and marker_token(target) == token",
                 "        partial = record['mode'] == 'copy'"),
         replace(MOVE, '    if marker_token(root) != token:\n        # Already deleted', '    if False:\n        # Already deleted')]),
+    ('trust-a-vanished-copy', [test('recovery_keeps_the_old_folder_when_the_new_one_vanished_after_a_crash')], [
+        replace(MOVE, '        if switched and not Library(target).exists():', '        if False:')]),
+    ('forget-the-failed-save', [test('recovery_deletes_nothing_while_the_setting_cannot_be_saved')], [
+        replace(MOVE, '        settings.root = previous\n        raise', '        raise')]),
+    ('trust-the-unrecorded-phase', [test('a_switch_the_journal_could_not_record_is_undone')], [
+        replace(MOVE, '                persisted = read_journal()', '                persisted = record')]),
+    ('open-the-copy-before-cleanup', [CARRY + '[new-other]', CARRY + '[empty-other]'], [
+        replace(MOVE, "    emit({'stage': 'removing_old'})\n    record['phase'] = 'deleting'",
+                "    clear_marker(target)\n    emit({'stage': 'removing_old'})\n    record['phase'] = 'deleting'")]),
     ('move-while-busy', [REFUSE + '[running-Close World of Warcraft]', REFUSE + '[job-Finish or remove every download]'], [
         replace(MOVE, '            refuse_busy(library, has_jobs)\n', '')]),
     ('move-links-and-mounts', [REFUSE + '[link-link at _retail_/INTERFACE/elsewhere]', REFUSE + '[mount-mounted at]'], [
