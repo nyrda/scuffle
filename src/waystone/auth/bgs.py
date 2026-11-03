@@ -233,11 +233,25 @@ class BGS:
         return token
 
 
+def logon_battle_tag(record):
+    """The BattleTag the LogonRecord names, as the only text field with its form, or None."""
+    from .vault import battle_tag
+    for _, _, value in record:
+        if isinstance(value, bytes):
+            try:
+                tag = battle_tag(value.decode())
+            except UnicodeDecodeError:
+                continue
+            if tag:
+                return tag
+    return None
+
+
 def login(vault, host, version, sign_in):
-    """Sign in through the browser and save a fresh broker credential.
+    """Sign in through the browser and save a fresh broker credential for the account signed in to.
 
     sign_in receives the battle.net URL and returns the ticket from its redirect.
-    No connection stays open while the user signs in.
+    No connection stays open while the user signs in. Returns the login the session was saved to.
     """
     device = vault.device_id()
     bgs = BGS(host)
@@ -252,32 +266,40 @@ def login(vault, host, version, sign_in):
         bgs.connect()
         bgs.web_challenge(device, version)
         record = bgs.verify_web_ticket(ticket)
-        vault.save_session(bgs.generate_auth_token(WOW_TITLE))
-        log('unused_broker_credential_saved_protected')
-        # After the credential is saved, so a failed lookup never costs the sign-in.
-        vault.save_accounts(first(record, 1), bgs.game_accounts(record))
+        # Keyed by the account id the logon names, so the session is saved as that account only.
+        with vault.adding(first(record, 1)) as added:
+            added.save_session(bgs.generate_auth_token(WOW_TITLE))
+            log('unused_broker_credential_saved_protected')
+            added.save_battle_tag(logon_battle_tag(record))
+            # After the credential is saved, so a failed lookup never costs the sign-in.
+            added.save_accounts(first(record, 1), bgs.game_accounts(record))
+        return added
     finally:
         bgs.socket.close()
 
 
-def renew(vault, host, version):
-    """Consume the saved broker credential, then save its successor and a game credential."""
-    credential = vault.load_session()
+def renew(login, host, version):
+    """Consume a login's broker credential, then save its successor and a game credential."""
+    credential = login.load_session()
     log('credential_loaded', 'bytes', len(credential))
     bgs = BGS(host)
     try:
         bgs.connect()
-        device = vault.device_id()
+        device = login.device_id()
         log('logon_device_id', 'bytes', len(device))
         record = bgs.logon(credential, device, version)
+        # Before anything is saved, so one account's session is never renewed as another's.
+        if not login.claim(first(record, 1)):
+            raise CredentialRejected('The saved session signed in to another Battle.net account')
         # Keep a distinct, unused SSO ticket for the next broker connection.
         # LogonRecord.login_ticket can echo the already consumed input.
-        vault.save_session(bgs.generate_auth_token(WOW_TITLE))
+        login.save_session(bgs.generate_auth_token(WOW_TITLE))
         log('unused_broker_credential_saved_protected')
         token = bgs.generate_auth_token(WOW_TITLE)
         log('wow_auth_token_generated', 'bytes', len(token))
-        vault.save_game_token(token)
+        login.save_game_token(token)
         log('game_credential_saved_protected')
-        vault.save_accounts(first(record, 1), bgs.game_accounts(record))
+        login.save_battle_tag(logon_battle_tag(record))
+        login.save_accounts(first(record, 1), bgs.game_accounts(record))
     finally:
         bgs.socket.close()

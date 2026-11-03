@@ -14,7 +14,7 @@ import webbrowser
 
 from . import catalog, system
 from .auth.bgs import CredentialRejected, login, renew
-from .auth.vault import Vault
+from .auth.vault import Login, Vault
 from .launch_options import ClientOptions, OptionError, linux_environment, wrapper_command
 from .library import Library, LibraryError
 from .runtime.bridge import bridge_executable
@@ -142,26 +142,39 @@ class Launcher:
     def signed_in(self) -> bool:
         return self.vault.has_session()
 
-    def sign_in(self, version: int, sign_in: SignIn) -> None:
+    def sign_in(self, version: int, sign_in: SignIn) -> Login:
+        """Add the account the browser signs in to, or renew its session if it is listed. It becomes active."""
         self.runtime.prepare()
-        login(self.vault, self.settings.auth_host, version, sign_in)
+        added = login(self.vault, self.settings.auth_host, version, sign_in)
         self.vault.record('signed_in')
+        return added
 
-    def renew(self, version: int, sign_in: SignIn) -> None:
-        """Renew the session, signing in through the browser when needed."""
+    def renew(self, version: int, sign_in: SignIn, account: Login | None = None) -> Login:
+        """Renew a login's session, the active one's by default, signing in through the browser when needed.
+
+        Returns the login renewed. A browser sign-in to another account adds that account and stops,
+        so a launch never starts an account other than the one it was for.
+        """
         self.runtime.prepare()
-        if self.vault.has_session():
+        account = account or self.vault.active()
+        wanted = account.label if account is not None else ''     # read before a rejection deletes it
+        if account is not None and account.has_session():
             try:
-                renew(self.vault, self.settings.auth_host, version)
+                renew(account, self.settings.auth_host, version)
                 self.vault.record('renewed')
-                return
+                return account
             except CredentialRejected as error:
                 self.vault.record('rejected', str(error))
-                # The ticket is spent. Keeping it would claim a sign-in that is gone.
-                self.vault.session.unlink(missing_ok=True)
-        self.sign_in(version, sign_in)
-        renew(self.vault, self.settings.auth_host, version)
+                # The ticket is spent. Keeping it would claim a sign-in that is gone. Other logins stay.
+                self.vault.remove(account)
+        added = self.sign_in(version, sign_in)
+        if account is not None and account.id is not None and added.id != account.id:
+            raise LaunchError(f'Battle.net ended the session of {wanted}, and the browser signed in to '
+                              f'{added.label} instead. {added.label} was added and is now the active account. '
+                              'Press Play to play with it.')
+        renew(added, self.settings.auth_host, version)
         self.vault.record('renewed')
+        return added
 
     def play(self, code: str, sign_in: SignIn, *, mode: str | None = None,
              status: Callable[[str], None] | None = None) -> subprocess.Popen:
@@ -181,11 +194,13 @@ class Launcher:
         version = int(state['version'].rsplit('.', 1)[-1])
         status = status or (lambda text: None)
         with self.vault.locked():
+            # Read once under the lock, so switching accounts meanwhile never changes the session used.
+            login = self.vault.active()
             status('Connecting')        # renews the saved session, or signs in if it has none
-            self.renew(version, sign_in)
+            login = self.renew(version, sign_in, login)
             status('Starting')
             ack = self.vault.directory / f'.launch-{os.getpid()}-{time.time_ns()}.ack'
-            account = chosen_account(self.settings, self.vault.accounts())
+            account = chosen_account(self.settings, login.accounts())
             process = self.runtime.start(executable, arguments, self.vault.token, ack,
                                          environment=plan.environment, wrapper=plan.wrapper,
                                          account=(account['name'], account['region']) if account else None)

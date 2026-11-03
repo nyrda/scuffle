@@ -268,9 +268,14 @@ def preferences(settings: Settings, library) -> list[str]:
     yes = lambda value: 'yes' if value else 'no'
     from .auth.vault import Vault
     vault = Vault(data_dir() / 'session', None)
-    known = vault.accounts()
-    # Whether the files exist and how many accounts the list holds. Their contents stay out.
-    sign_in = 'signed in' if vault.has_session() else 'not signed in'
+    # Listed without the lock, so a report never moves an older Waystone's session.
+    logins = attempt(vault.listed, [])
+    active = attempt(lambda: vault.pick(logins), None)
+    known = attempt(active.accounts, None) if active else None
+    # Whether the files exist and how many accounts the lists hold. Their contents stay out.
+    sign_in = 'signed in' if active else 'not signed in'
+    if len(logins) > 1:
+        sign_in += f', {len(logins)} Battle.net accounts'
     if known:
         count = len(known['game_accounts'])
         chosen = str(known['owner']) in settings.game_accounts
@@ -388,7 +393,7 @@ def private_patterns(settings: Settings) -> list[tuple[re.Pattern, str]]:
 def account_words(settings: Settings) -> tuple[set[str], set[str]]:
     """Every name and id from the saved WoW account list and the account choice, read leniently.
 
-    Only the account list is read. It holds no credentials, and its names must be known
+    Only the account lists and account labels are read. They hold no credentials, and their names must be known
     to remove them from errors and logs.
     """
     names, ids = set(), set()
@@ -410,7 +415,15 @@ def account_words(settings: Settings) -> tuple[set[str], set[str]]:
             names.add(value.strip())
 
     from .auth.vault import Vault
-    walk(attempt(lambda: json.loads(Vault(data_dir() / 'session', None).account_list.read_text()), None))
+    vault = Vault(data_dir() / 'session', None)
+    # Every Battle.net account's WoW account list and label, and an older Waystone's single list.
+    files = [vault.legacy_accounts]
+    for login in attempt(vault.listed, []):
+        files += [login.account_list, login.details_file]
+        if login.id is not None:
+            ids.add(str(login.id))
+    for path in files:
+        walk(attempt(lambda: json.loads(path.read_text()), None))
     return names, {number for number in ids if number.lstrip('-').isdigit()}
 
 

@@ -84,11 +84,11 @@ class FakeRuntime:
     (True, ['renew', 'sign_in', 'renew']),
     (False, ['sign_in', 'renew']),
 ])
-def test_launch_signs_in_when_the_saved_session_is_rejected_or_missing(tmp_path, monkeypatch, saved, expected):
+def test_launch_signs_in_when_the_saved_session_is_rejected_or_missing(tmp_path, monkeypatch, save_login,
+                                                                      saved, expected):
     vault = Vault(tmp_path / 'session', bridge=None)
     if saved:
-        vault.directory.mkdir()
-        vault.session.write_bytes(b'protected')
+        save_login(vault, 7)
     calls = []
 
     def renew(*_):
@@ -96,8 +96,12 @@ def test_launch_signs_in_when_the_saved_session_is_rejected_or_missing(tmp_path,
         if calls.count('renew') == 1 and saved:
             raise CredentialRejected('BGS logon completed with status 3')
 
+    def login(vault, *_):
+        calls.append('sign_in')
+        return save_login(vault, 7)
+
     monkeypatch.setattr(launch, 'renew', renew)
-    monkeypatch.setattr(launch, 'login', lambda *_: calls.append('sign_in'))
+    monkeypatch.setattr(launch, 'login', login)
     Launcher(Settings(), library=None, runtime=FakeRuntime(), vault=vault).renew(70658, sign_in=None)
     assert calls == expected
     assert vault.last('renewed') is not None
@@ -105,10 +109,9 @@ def test_launch_signs_in_when_the_saved_session_is_rejected_or_missing(tmp_path,
     assert ('rejected' in events[0]) is saved
 
 
-def test_other_failures_do_not_trigger_a_sign_in(tmp_path, monkeypatch):
+def test_other_failures_do_not_trigger_a_sign_in(tmp_path, monkeypatch, save_login):
     vault = Vault(tmp_path / 'session', bridge=None)
-    vault.directory.mkdir()
-    vault.session.write_bytes(b'protected')
+    save_login(vault, 7)
 
     def renew(*_):
         raise RuntimeError('Server closed the BGS connection')

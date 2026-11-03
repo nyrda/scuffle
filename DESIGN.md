@@ -9,13 +9,14 @@ that a Windows build needs only a different runtime layer.
 - One installation folder holds every installed client and shares their content.
 - A slim selector lists the public clients. Every client can be hidden, and each test or
   other public client can be shown on its own.
-- One Battle.net sign-in through the user's own browser, renewed automatically.
+- Battle.net sign-in through the user's own browser, renewed automatically, for one
+  account or several with quick switching.
 - A download manager with a queue, pause and resume, a bandwidth limit, and
   cleanup of content no installed client needs.
 - Updates are checked before launch and can run while Waystone is open.
 
-Not in scope: account ownership filtering, several Battle.net identities,
-starting a client before its download finished, and delta patches. The game
+Not in scope: account ownership filtering, starting a client before its
+download finished, and delta patches. The game
 reports account problems itself after login.
 
 ### Client removal
@@ -265,6 +266,91 @@ use unless `GAME_ACCOUNT` names it, as the Battle.net app writes it with
 The device fingerprint is derived from a 64-byte seed under
 `HKCU\...\Battle.net\Identity`. Waystone creates it if the prefix has none and
 keeps it afterwards. See [docs/device-id.md](docs/device-id.md).
+
+### Several Battle.net accounts
+
+Waystone keeps one renewable session per Battle.net account. One of them is
+active, and every Play uses the active one. The sessions live in the data
+directory:
+
+```text
+session/
+  session.lock          one lock for renewals, sign-ins, switching, sign-outs and the migration
+  history.jsonl         credential events, without credentials or account ids
+  active                the key of the active login
+  game-token.dpapi      the game ticket, only between a renewal and the game's start
+  logins/<key>/
+    session.dpapi       the renewable ticket, protected with DPAPI
+    login.json          its number and its BattleTag, when Battle.net sent one
+    accounts.json       its WoW accounts, as described above
+```
+
+- **Key.** A login is keyed by the Battle.net account id from the logon's
+  `LogonRecord`, the same id `game_accounts` in the settings uses. It is never
+  keyed by the email, and the email is never stored. Only a session from an
+  older Waystone whose account id was never read uses the key `unknown`. Its
+  first renewal reads the id and renames the folder. A folder without
+  `session.dpapi` is not a login. Folders are `0700` and files `0600` on
+  Linux, and every ticket is DPAPI-protected as before.
+- **Label.** The sidebar names a login by its BattleTag, taken from the
+  `LogonRecord` field that has the form `Name#1234`. Without one it is
+  "Account 1", "Account 2" and so on. The number is chosen when the login is
+  added and kept, so a sign-out never renames the others. The BattleTag stays
+  in `login.json` and is never written to the settings.
+- **Active.** `active` holds the active key and is written atomically. When it
+  is missing or names a login that is gone, the login with the lowest number is
+  active. With one login that is always the one.
+- **Launch.** A launch takes the session lock, reads the active login once, and
+  uses that login for the renewal, the game ticket and the WoW account choice.
+  Switching only rewrites `active` under the same lock, so it can never swap the
+  session of a launch in progress. The sidebar also offers no switching while a
+  launch is between Play and Running. A running game already holds its ticket.
+- **Renewal.** Each renewal checks that the logon's account id is the login's
+  key before it saves anything. A different id counts as a rejected session. A
+  rejected session deletes that login's folder only, and the browser sign-in
+  starts for it. When the browser then signs in to another account, that
+  account is saved as its own login and becomes active, and the launch stops
+  with a message naming both. Play therefore never starts an account other than
+  the one the sidebar shows.
+- **Adding.** **Add account…** runs the browser sign-in. The redirect ticket goes
+  to one `VerifyAuthToken` and is then dropped. The new session is saved under
+  the id that logon returns and becomes active. Signing in again to an account
+  that is already listed replaces its session and keeps its number and choices.
+- **Signing out.** **Sign out of this account** deletes the active login's
+  folder and nothing else. The next login by number becomes active. The WoW
+  account choice in the settings stays, as it does today.
+- **Per client.** Clients do not remember the account they were last played
+  with. The sidebar shows one active account, and Play uses it. A per-client
+  account would either switch the sidebar whenever another client is selected or
+  start a game as an account the sidebar does not show. Both make it harder to
+  see which account a Play uses.
+
+The sidebar's sign-in row is the switcher. Signed out it reads "Not signed in"
+with **Sign in**, as before. Signed in it reads "Signed in" with the active
+login's label as a menu. The menu lists every login with the active one
+checked, then **Add account…** and **Sign out of this account**. The WoW account
+row below shows the active login's WoW accounts.
+
+#### Migration
+
+A session from an older Waystone is `session.dpapi` and `accounts.json`
+directly in `session/`. Waystone moves it while it holds the session lock, the
+same lock an older Waystone renews under, so the two never interleave. Its key is
+the owner in `accounts.json`, or `unknown` without one.
+
+1. The new login's folder is created, and `accounts.json` and `login.json` are
+   written into it. A folder without a session is not a login yet.
+2. `session.dpapi` is renamed into the folder. This rename is the commit.
+3. The old `accounts.json` is deleted.
+
+A crash before the rename leaves the old session in place, and the next start
+repeats the steps. A crash after it leaves a complete login and an old
+`accounts.json`, which the next start deletes. No ticket is used or renewed by
+the migration, so the user stays signed in. Every read of the logins migrates
+when it can take the lock. While another process holds it, or while the move
+fails, the old session is listed and renewed in place under the same key. A session that an older Waystone writes
+later, after a new sign-in, is newer and replaces the login with its key.
+Going back to an older Waystone afterwards needs a new sign-in.
 
 ## Runtime
 

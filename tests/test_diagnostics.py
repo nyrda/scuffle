@@ -84,6 +84,8 @@ def test_the_report_tells_what_a_bug_needs_and_leaves_out_every_private_detail(h
                    'hunter2value', 'mode-secretarg', 'OLDACCOUNT', 'desktopsecretexec', 'steamsecretaccount']:
         assert secret.lower() not in text.lower()
     assert 'World of Warcraft (wow): 11.2.5.64253, eu, enUS, up to date' in text
+    # Reading the accounts never moves an older Waystone's session into a login folder.
+    assert (data / 'session/session.dpapi').is_file() and not (data / 'session/logins').exists()
     assert f'Folder: {Path("~/Games/Waystone")}, a Waystone installation' in text
     assert 'Connections: 12, speed limit none' in text
     assert 'Battle.net: signed in, 2 WoW accounts, one chosen' in text
@@ -96,6 +98,24 @@ def test_the_report_tells_what_a_bug_needs_and_leaves_out_every_private_detail(h
         assert 'Environment: DXVK_HUD, values left out' in text
         assert 'File: ~/.local/share/waystone/logs/steam-battlenet.log' in text
         assert '| wine: process exited normally' in text
+
+
+def test_a_report_leaves_out_every_signed_in_battle_net_account(home):
+    logins = data_dir() / 'session/logins'
+    for owner, tag, number, name in [(987654321, 'Zebtag#7395', 1, 'WANDERER'), (887654321, None, 2, 'Altchar')]:
+        write(logins / f'{owner}/session.dpapi', 'sessionsecretcontent')
+        write(logins / f'{owner}/login.json', json.dumps({'number': number, 'battle_tag': tag}))
+        write(logins / f'{owner}/accounts.json', json.dumps({'owner': owner, 'game_accounts': [
+            {'id': owner + 1, 'name': name, 'region': 'EU'}]}))
+    write(data_dir() / 'session/active', '887654321')
+    error = 'Sign-in failed for Zebtag#7395 (987654321), then for Altchar (887654321, game account 887654322)'
+    jobs = [Job('wow', 'install', status=FAILED, error=error)]
+
+    text = diagnostics.report(Settings(), Library(home / 'Games/Waystone'), jobs, updates={}, qt_platform='wayland')
+
+    for secret in ['Zebtag', '2210', 'WANDERER', 'Altchar', '987654321', '887654321', '887654322', 'sessionsecretcontent']:
+        assert secret.lower() not in text.lower()
+    assert 'Battle.net: signed in, 2 Battle.net accounts, 1 WoW account' in text
 
 
 def test_a_report_comes_together_when_its_sources_are_missing_or_broken(home):

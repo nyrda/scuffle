@@ -233,9 +233,10 @@ class MainWindow(QMainWindow):
         account = QHBoxLayout()
         account.setContentsMargins(SPACING + 2, 0, 0, 0)
         self.account = label('', 'small')
+        # Signed in, it opens the account switcher. Signed out, it signs in.
         self.account_button = QPushButton('')
         self.account_button.setObjectName('flat')
-        self.account_button.clicked.connect(self.toggle_sign_in)
+        self.account_button.clicked.connect(self.account_action)
         account.addWidget(self.account, 1)
         account.addWidget(self.account_button)
         side.addLayout(account)
@@ -286,14 +287,22 @@ class MainWindow(QMainWindow):
     def launcher(self) -> Launcher:
         return Launcher(self.settings, self.library)
 
-    def signed_in(self) -> bool:
+    @staticmethod
+    def vault():
+        """The saved Battle.net logins. Reading them needs no bridge, since nothing is decrypted."""
         from ..auth.vault import Vault
-        return Vault(data_dir() / 'session', None).has_session()
+        return Vault(data_dir() / 'session', None)
+
+    def signed_in(self) -> bool:
+        return self.vault().has_session()
+
+    def active_login(self):
+        return self.vault().active()
 
     def game_accounts(self) -> dict | None:
-        """The WoW accounts of the signed-in login, as the last sign-in or launch listed them."""
-        from ..auth.vault import Vault
-        return Vault(data_dir() / 'session', None).accounts()
+        """The WoW accounts of the active login, as its last sign-in or launch listed them."""
+        login = self.active_login()
+        return login.accounts() if login else None
 
     def show_game_account(self, signed: bool) -> None:
         from ..launch import chosen_account
@@ -327,6 +336,53 @@ class MainWindow(QMainWindow):
             action.setChecked(chosen is not None and account['id'] == chosen['id'])
             action.triggered.connect(lambda _=False, chosen=account['id']: self.pick_game_account(known['owner'], chosen))
         return menu
+
+    def account_action(self) -> None:
+        menu = self.account_menu()
+        if menu is None:
+            self.sign_in_from_sidebar()
+        else:
+            menu.exec(self.account_button.mapToGlobal(QPoint(0, self.account_button.height())))
+
+    def account_menu(self) -> QMenu | None:
+        """The Battle.net accounts with the active one checked, then adding one and signing out of it."""
+        vault = self.vault()
+        logins, active = vault.logins(), vault.active()
+        if active is None:
+            return None
+        menu = QMenu(self.account_button)
+        menu.setToolTipsVisible(True)
+        for login in logins:
+            action = menu.addAction(login.label)
+            action.setCheckable(True)
+            action.setChecked(login.key == active.key)
+            action.triggered.connect(lambda _=False, key=login.key: self.switch_account(key))
+        menu.addSeparator()
+        add = menu.addAction('Add account…')
+        if not self.can_sign_in():
+            add.setEnabled(False)
+            add.setToolTip('Install a client first. Signing in needs its version.')
+        add.triggered.connect(self.sign_in_from_sidebar)
+        # The account checked when the menu opened, even if another window switched meanwhile.
+        menu.addAction('Sign out of this account').triggered.connect(lambda: self.sign_out_account(active))
+        return menu
+
+    def switch_account(self, key: str) -> None:
+        try:
+            self.vault().activate(key)
+        except RuntimeError as error:
+            self.notify(str(error), client='')
+        self.refresh()
+
+    def sign_out_account(self, login) -> None:
+        try:
+            self.vault().forget(login)
+        except RuntimeError as error:
+            self.notify(str(error), client='')
+        self.refresh()
+
+    def can_sign_in(self) -> bool:
+        return bool(self.library and self.library.installed())
 
     def pick_game_account(self, owner: int, account: int | None) -> None:
         """Save the WoW account for this Battle.net login. None lets the game ask again."""
@@ -446,21 +502,25 @@ class MainWindow(QMainWindow):
             text, _ = self.status(code)
             state = self.library.state(code) if self.library else None
             row.status.setText(f"Ready · {state['version']}" if text == 'Ready' else text)
-        signed = self.signed_in()
+        active = self.active_login()
+        signed = active is not None
         signing_in = self.stack.currentWidget() is self.sign_in_page
         self.account.setText('Signing in…' if signing_in else
                              '<span style="color:#7fcf8f">●</span> Signed in' if signed else 'Not signed in')
-        self.account_button.setText('Sign out' if signed else 'Sign in')
+        # The active account by its BattleTag or number, never by anything secret.
+        self.account_button.setText(f'{active.label} ▾' if signed else 'Sign in')
         self.show_game_account(signed and not signing_in)
-        can_sign_in = bool(self.library and self.library.installed())
+        can_sign_in = self.can_sign_in()
         # A second sign-in, or a sign-out, during a sign-in would race for the one ticket.
-        # A launch uses the saved session, so it cannot be signed out of mid-launch either.
+        # A launch uses the saved session, so it cannot be signed out of or switched mid-launch either.
         launching_any = any(phase != 'Running' for phase in self.phases.values())
-        self.account_button.setEnabled(can_sign_in and not signing_in and not self._signing_in
+        self.account_button.setEnabled((signed or can_sign_in) and not signing_in and not self._signing_in
                                        and not launching_any)
-        self.account_button.setToolTip('Install a client first. Signing in needs its version.' if not can_sign_in
-                                       else 'Available once the game has started' if launching_any
-                                       else 'Available after the sign-in' if signing_in or self._signing_in else '')
+        self.account_button.setToolTip(
+            'Available once the game has started' if launching_any
+            else 'Available after the sign-in' if signing_in or self._signing_in
+            else 'The Battle.net account Play uses. Switch, add or sign out here.' if signed
+            else 'Install a client first. Signing in needs its version.' if not can_sign_in else '')
         self.refresh_downloads()
         code = self.selected()
         if code is None:
@@ -989,12 +1049,11 @@ class MainWindow(QMainWindow):
         self.client_list.set_active(True)
         self.refresh()
 
-    def toggle_sign_in(self):
-        launcher = self.launcher()
-        if launcher.signed_in():
-            launcher.vault.forget()
-            self.refresh()
+    def sign_in_from_sidebar(self):
+        """Sign in to a Battle.net account through the browser. A second one is added and becomes active."""
+        if not self.can_sign_in():
             return
+        launcher = self.launcher()
         state = self.library.state(self.library.installed()[0])
         version = int(state['version'].rsplit('.', 1)[-1])
         self._signing_in = True

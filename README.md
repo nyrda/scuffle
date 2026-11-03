@@ -94,10 +94,35 @@ DPAPI under `~/.local/share/waystone/session` with owner-only permissions.
 Waystone never reads the Battle.net app's own saved login, so both stay signed
 in.
 
-If your Battle.net login has several WoW accounts, the game asks which one to
-use. The sidebar then shows a choice next to **Signed in**. Pick an account
-there and the game starts with it. **Ask in the game** brings the game's
-question back. With one account the game never asks.
+If your Battle.net account has several WoW accounts, the game asks which one to
+use. The sidebar then shows a **WoW account** choice above **Signed in**. Pick
+an account there and the game starts with it. **Ask in the game** brings the
+game's question back. With one WoW account the game never asks. Each Battle.net
+account keeps its own choice.
+
+### Several Battle.net accounts
+
+Once you are signed in, the sidebar shows **Signed in** with your account's
+BattleTag, or "Account 1" when Battle.net does not send one. Click it to open
+the account menu:
+
+- **Add account…** signs in to another Battle.net account through the browser,
+  the same way as the first time. The new account becomes the active one.
+- Pick an account in the list to switch to it. **Play** always uses the active
+  account, and each account keeps its own session.
+- **Sign out of this account** signs out of the active account only. The
+  others stay signed in.
+
+You cannot switch or sign out while a game is starting. A game that is already
+running keeps the account it started with. Clients do not remember an account
+of their own, so the sidebar always shows the account the next **Play** uses.
+When Battle.net ends an account's session, **Play** asks you to sign in to that
+account again. If you sign in to a different account instead, Waystone adds it,
+makes it active and stops, so a game never starts as an account you did not
+pick.
+
+When you update from a version with a single sign-in, you stay signed in.
+Waystone moves that session into its new place without signing in again.
 
 ## Downloads
 
