@@ -214,26 +214,33 @@ disappears while it is read makes the seed skip the missing objects, and the
 CDN supplies them. Every stored object is verified either way.
 
 The source is only ever read. The seed opens it read-only and keeps its index
-cache in the library's state folder, and enqueueing refuses a source that
-contains or lies inside the installation folder. Uninstalling, cleanup and
-every other library operation stay inside the installation folder, so they
-never reach it.
+cache in the library's state folder. Enqueueing refuses a source that contains
+or lies inside the installation folder by name, since it runs on the window's
+thread. Before the job creates the installation folder, it compares the
+folders themselves, through links and by device and inode, because a
+case-insensitive mount names one folder `WoW` and `wow`. Uninstalling, cleanup
+and every other library operation stay inside the installation folder, so they
+never reach it. The window touches the source only through workers, so a
+stalled drive never freezes it.
 
 `imports.Search` runs on a worker thread and yields installations as it finds
 them. It checks each place to a fixed depth, never follows a symbolic link or
 junction, visits each folder once by device and inode, reads at most a few
 thousand entries per folder and stops after 12 seconds or 20,000 folders. On
-Linux it skips network file systems listed in `/proc/self/mounts`. A folder
-that hangs in the kernel cannot be interrupted, so the page stops waiting a
-few seconds after the search's deadline and the worker is left to finish on
-its own. The places are `~/.wine`, `~/Games`, Bottles, every Steam
-`compatdata/*/pfx` of every Steam library, and `/mnt`, `/media` and
-`/run/media/<user>`. A folder holding `drive_c` is searched as a Wine prefix.
-On Windows they are Program Files and every local fixed drive. Battle.net's
-`ProgramData/Battle.net/Agent/product.db` is a protobuf file whose strings
-include each installation's path. Every string that looks like a Windows path
-is checked, which needs no knowledge of its field numbers. Inside a prefix,
-`C:` maps to `drive_c` and other drives to the prefix's `dosdevices` links.
+Linux it skips places, folders and recorded paths on network file systems
+listed in `/proc/self/mounts`. On Windows only local fixed drives are searched,
+recorded paths included. A folder that hangs in the kernel cannot be
+interrupted, so the page stops waiting a few seconds after the search's
+deadline and the worker is left to finish on its own. The places are `~/.wine`,
+`~/Games`, Bottles and Flatpak Bottles, every Steam `compatdata/*/pfx` of every
+Steam library, and `/mnt`, `/media` and `/run/media/<user>`. They are listed on
+the worker when the search starts, inside its time budget. A folder holding
+`drive_c` is searched as a Wine prefix. On Windows they are Program Files and
+every local fixed drive. Battle.net's `ProgramData/Battle.net/Agent/product.db`
+is a protobuf file whose strings include each installation's path. Every string
+that looks like a Windows path is checked, which needs no knowledge of its
+field numbers. Inside a prefix, `C:` maps to `drive_c` and other drives to the
+prefix's `dosdevices` links.
 
 A folder is an installation when it has `.build.info` and a `Data` folder with
 CASC indexes and is not a Waystone folder. Its clients are its subfolders whose

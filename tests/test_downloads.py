@@ -404,11 +404,14 @@ def test_an_import_keeps_its_source_through_a_restart_and_a_retry(managers, tmp_
     manager = managers()
     manager.enqueue('wow', 'install', seed_from=source, copy_settings=True)
     manager.enqueue('wowf', 'install')
+    manager.enqueue('wowt', 'install', seed_from='relative/World of Warcraft')
     manager.pause_all()
     restored = managers()
     job = restored.job('wow')
     assert (job.seed_from, job.copy_settings) == (source, True)
     assert restored.job('wowf').seed_from == ''
+    # A relative source is kept as the full path it meant when it was queued.
+    assert restored.job('wowt').seed_from == os.path.abspath('relative/World of Warcraft')
     job.status, job.error = FAILED, 'Lost the connection'
     retried = restored.enqueue('wow', 'install')       # Try again
     assert (retried.seed_from, retried.copy_settings) == (source, True)

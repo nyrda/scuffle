@@ -1295,13 +1295,11 @@ class FolderPage(Page):
         path = Path(self.path.text()).expanduser()
         if not path.is_absolute():
             self.say('Enter a full path, such as /games/Waystone.')
+        elif self.existing_only:
+            # A source can sit on a drive that stalls, so a worker checks it, not the window.
+            self.chosen.emit(str(path))
         elif path.exists() and not path.is_dir():
             self.say('This is a file, not a folder.')
-        elif self.existing_only:
-            if path.is_dir():
-                self.chosen.emit(str(path))
-            else:
-                self.say('This folder does not exist.')
         elif path.is_dir() and any(path.iterdir()) and not (path / '.waystone').is_dir():
             self.say('This folder is not empty. Choose an empty folder, '
                                  'create one with New folder, or pick the folder Waystone already uses.')

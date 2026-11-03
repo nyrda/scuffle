@@ -997,8 +997,8 @@ class MainWindow(QMainWindow):
         self.show_client_page()
 
     def choose_import_folder(self):
-        selected = self.import_page.selected()
-        self.import_folder_page.start(str(selected.path) if selected else str(Path.home()))
+        # Home, not the found installation's folder, whose drive the window must not wait for.
+        self.import_folder_page.start(str(Path.home()))
         self.stack.setCurrentWidget(self.import_folder_page)
 
     def on_import_folder_chosen(self, folder: str):
@@ -1011,6 +1011,9 @@ class MainWindow(QMainWindow):
 
         def work():
             path = Path(folder)
+            if not path.is_dir():
+                self.bus.import_picked.emit(number, [], 'This folder does not exist or cannot be read.')
+                return
             if imports.overlaps(path, exclude):
                 self.bus.import_picked.emit(number, [], 'This folder is part of the Waystone installation folder. '
                                                         'Choose an installation outside it.')

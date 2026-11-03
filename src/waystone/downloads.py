@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
+import os
 from pathlib import Path
 import sqlite3
 import threading
@@ -157,8 +158,11 @@ class DownloadManager:
             raise ValueError(f'Unknown job kind {kind!r}')
         if seed_from is not None and kind != 'install':
             raise ValueError('Only an install can import')
-        if seed_from is not None and imports.overlaps(Path(seed_from), self.library.root):
-            raise LibraryError('Import from a folder outside the Waystone installation folder')
+        if seed_from is not None:
+            # By name only, since this runs on the window's thread. The job compares the folders themselves.
+            seed_from = os.path.abspath(seed_from)
+            if imports.nested(Path(seed_from), self.library.root):
+                raise LibraryError('Import from a folder outside the Waystone installation folder')
         with self._lock:
             existing = self.job(client)
             if seed_from is not None and existing and existing.status not in {DONE, FAILED}:
@@ -400,15 +404,18 @@ class DownloadManager:
                 job.done_bytes = event['encoded_bytes'] - event['missing_bytes']
             self._notify(job)
 
-        if job.kind == 'install':
-            self.library.create()
-        elif not state:
-            raise LibraryError(f'{catalog.get(job.client).label} is not installed')
         seed = Path(job.seed_from) if job.seed_from and job.kind == 'install' else None
         if seed is not None and not imports.available(seed):
             # Such as a drive that is not connected now. What is already stored stays for the next try.
             raise LibraryError(f'The installation to import from is not available: {seed}. Connect its '
                                'drive and try again, or remove this download and install without it.')
+        # Before the installation folder is created, which could otherwise land inside the source.
+        if seed is not None and imports.overlaps(seed, self.library.root):
+            raise LibraryError('Import from a folder outside the Waystone installation folder')
+        if job.kind == 'install':
+            self.library.create()
+        elif not state:
+            raise LibraryError(f'{catalog.get(job.client).label} is not installed')
         with self.library.locked():
             updater = Updater(self.library, job.client, self.client_factory(job.client, region),
                               region=region, locale=locale, seed_from=seed, progress=progress,

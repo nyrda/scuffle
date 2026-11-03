@@ -63,10 +63,31 @@ class Place:
     prefix: bool = False    # a Wine prefix, whose drive_c is searched
 
 
-def overlaps(source: Path, root: Path) -> bool:
-    """The same separation the seed itself requires."""
-    source, root = Path(source).resolve(), Path(root).resolve()
+def nested(source: Path, root: Path) -> bool:
+    """Whether one path contains the other by name alone, without touching either folder."""
+    source, root = (Path(os.path.normcase(os.path.abspath(p))) for p in (source, root))
     return source == root or root.is_relative_to(source) or source.is_relative_to(root)
+
+
+def overlaps(source: Path, root: Path) -> bool:
+    """Whether one folder contains the other, also through links and other names for the same folder.
+
+    A case-insensitive mount, such as NTFS on Linux, names one folder WoW and wow, so the
+    folders' identities are compared as well as their paths.
+    """
+    source, root = Path(source).resolve(), Path(root).resolve()
+    if source == root or root.is_relative_to(source) or source.is_relative_to(root):
+        return True
+    def identity(path):
+        try:
+            info = os.stat(path)
+        except OSError:
+            return None
+        return info.st_dev, info.st_ino
+    def lineage(path):
+        return {key for p in (path, *path.parents) if (key := identity(p))}
+    mine, theirs = identity(source), identity(root)
+    return bool(mine and mine in lineage(root)) or bool(theirs and theirs in lineage(source))
 
 
 def _read_small(path: Path, limit: int = 1 << 20) -> bytes:
@@ -193,15 +214,10 @@ def linux_places(home: Path | None = None) -> list[Place]:
     home = home or Path.home()
     places = [Place(home / '.wine', 'Wine prefix', 0, prefix=True),
               Place(home / 'Games', 'Games folder', 3)]
-    for steam in _steam_roots(home):
-        compatdata = steam / 'steamapps/compatdata'
-        try:
-            with os.scandir(compatdata) as entries:
-                ids = sorted(e.name for _, e in zip(range(FOLDER_ENTRIES), entries) if e.is_dir())
-        except OSError:
-            continue
-        places += [Place(compatdata / name / 'pfx', f'Steam prefix {name}', 0, prefix=True) for name in ids]
-    places.append(Place(home / '.local/share/bottles/bottles', 'Bottles', 1))
+    # Each game's prefix is compatdata/<app id>/pfx. The search finds them.
+    places += [Place(steam / 'steamapps/compatdata', 'Steam', 1) for steam in _steam_roots(home)]
+    places += [Place(home / '.local/share/bottles/bottles', 'Bottles', 1),
+               Place(home / '.var/app/com.usebottles.bottles/data/bottles/bottles', 'Bottles', 1)]
     user = home.name
     # Such as /mnt/c/Program Files (x86)/World of Warcraft or /run/media/<user>/<drive>/Games/World of Warcraft.
     places += [Place(Path('/mnt'), 'Mounted drive', 3), Place(Path('/media'), 'Mounted drive', 3),
@@ -210,21 +226,22 @@ def linux_places(home: Path | None = None) -> list[Place]:
 
 
 def windows_places() -> list[Place]:
-    program_data = Path(os.environ.get('ProgramData', r'C:\ProgramData'))
-    places = [Place(path, 'Recorded by Battle.net', 0)
-              for path in recorded(program_data / 'Battle.net/Agent/product.db')]
-    for name in ('ProgramFiles(x86)', 'ProgramFiles'):
-        if os.environ.get(name):
-            places.append(Place(Path(os.environ[name]), 'Program Files', 1))
+    import ctypes
     try:
         drives = os.listdrives()
     except (AttributeError, OSError):
         drives = []
-    import ctypes
-    for drive in drives:
-        # A network drive can stall, and a removable one can be empty. Only local disks are searched.
-        if ctypes.windll.kernel32.GetDriveTypeW(drive) == 3:
-            places.append(Place(Path(drive), f'Drive {drive[:2]}', 2))
+    # A network drive can stall, and a removable one can be empty. Only local disks are searched,
+    # even where Battle.net recorded an installation.
+    fixed = [drive for drive in drives if ctypes.windll.kernel32.GetDriveTypeW(drive) == 3]
+    local = {drive[:2].upper() for drive in fixed}
+    program_data = Path(os.environ.get('ProgramData', r'C:\ProgramData'))
+    places = [Place(path, 'Recorded by Battle.net', 0)
+              for path in recorded(program_data / 'Battle.net/Agent/product.db') if str(path)[:2].upper() in local]
+    for name in ('ProgramFiles(x86)', 'ProgramFiles'):
+        if os.environ.get(name):
+            places.append(Place(Path(os.environ[name]), 'Program Files', 1))
+    places += [Place(Path(drive), f'Drive {drive[:2]}', 2) for drive in fixed]
     return places
 
 
@@ -283,7 +300,7 @@ class Search:
     def __init__(self, places: list[Place] | None = None, *, seconds: float = SEARCH_SECONDS,
                  folders: int = SEARCH_FOLDERS, cancelled: Callable[[], bool] = lambda: False,
                  exclude: Path | None = None):
-        self.places = default_places() if places is None else places
+        self.places = places            # None for the usual places, listed once the search runs
         self.deadline = time.monotonic() + seconds
         self.budget = folders
         self.cancelled = cancelled
@@ -301,6 +318,9 @@ class Search:
             return True
         return False
 
+    def _on_network(self, path: Path) -> bool:
+        return any(path.is_relative_to(mount) for mount in self._network)
+
     def _first_visit(self, path: Path, *, follow: bool) -> bool:
         try:
             info = os.stat(path, follow_symlinks=follow)
@@ -313,7 +333,7 @@ class Search:
         return True
 
     def _candidate(self, path: Path, where: str) -> Iterator[Found]:
-        if not looks_installed(path):
+        if self._on_network(path) or not looks_installed(path):
             return
         try:
             resolved = path.resolve()
@@ -328,9 +348,12 @@ class Search:
             pass
 
     def __iter__(self) -> Iterator[Found]:
-        for place in self.places:
+        # Listing the places reads Steam's and Battle.net's records, which counts against the time too.
+        for place in default_places() if self.places is None else self.places:
             if self._over():
                 return
+            if self._on_network(place.path):
+                continue
             # A place itself may be a link, such as ~/.steam/steam. Below it, links are never followed.
             if not self._first_visit(place.path, follow=True):
                 continue
@@ -347,7 +370,7 @@ class Search:
         yield from self._walk(prefix / 'drive_c', where, 2)
 
     def _walk(self, folder: Path, where: str, depth: int) -> Iterator[Found]:
-        if self._over() or folder in self._network:
+        if self._over() or self._on_network(folder):
             return
         self.budget -= 1
         if looks_installed(folder):
@@ -370,6 +393,8 @@ class Search:
                 continue
             if (path / 'drive_c').is_dir() and not (path / 'drive_c').is_symlink():
                 yield from self._prefix(path, f'Wine prefix {entry.name}')
+            elif where == 'Steam' and (path / 'pfx/drive_c').is_dir() and not (path / 'pfx').is_symlink():
+                yield from self._prefix(path / 'pfx', f'Steam prefix {entry.name}')
             else:
                 yield from self._walk(path, where, depth - 1)
 
