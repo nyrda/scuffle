@@ -253,6 +253,16 @@ def main(output: Path) -> None:
     window.signed_in = lambda: False             # the sign-in page only appears without a session
     window.on_sign_in_requested('https://eu.account.battle.net/login/?externalChallenge=login&app=wow')
     shot('11-sign-in')
+    window.on_sign_in_finished(None)
+    # Adding a second account while the browser is still signed in to the first one.
+    window._signing_in = True
+    vault = window.vault()
+    fake_login(vault, 314159265).save_battle_tag('Wanderer#7395')
+    window.on_sign_in_requested('https://eu.account.battle.net/login/?externalChallenge=login&app=wow')
+    window.sign_in_page.take('http://localhost:0/?ST=EU-0123abcd-314159265&flowTrackingId=', explicit=True)
+    shot('11b-add-account-same-account')
+    window.on_sign_in_finished(None)
+    window._signing_in = False
     # Closed before Python exits, so the window's event filter goes before the widgets it reads.
     window.close()
     print(f'Wrote {len(list(output.glob("*.png")))} screenshots to {output}')

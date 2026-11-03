@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QButtonGroup, QC
 
 from .. import catalog
 from ..diagnostics import LOG_NAME
-from ..launch import log_dir, looks_like_redirect, open_browser, parse_ticket
+from ..launch import log_dir, looks_like_redirect, open_browser, parse_ticket, ticket_account
 from ..settings import LOCALE_NAMES, MEGABYTE, REGIONS, Settings
 from .launch_options import LaunchSettings
 from .style import (BACKGROUND, FAMILY_NAMES, SPACING, accent_shade, client_color, glyph_name, glyph_path, mix,
@@ -1178,6 +1178,7 @@ class SignInPage(Page):
         self.url = ''
         self.active = False
         self._before = ''
+        self.taken: dict[str, str] = {}     # account id -> label of the accounts already signed in
         outer = scrolling(self)
         self.balance(outer)
         content = self.centre(column(outer))
@@ -1204,6 +1205,13 @@ class SignInPage(Page):
             row.addWidget(label(text, wrap=True), 1)
             steps_layout.addLayout(row)
         content.addWidget(steps)
+        # Battle.net signs a browser in to the account it used last, without asking.
+        self.hint = label('Adding another account? Your browser may still be signed in to Battle.net, which then '
+                          'skips the sign-in form. Copy the link and open it in a private window to sign in with '
+                          'a different account.', 'caution', wrap=True)
+        self.hint.hide()
+        content.addSpacing(12)
+        content.addWidget(self.hint)
         content.addSpacing(18)
         content.addWidget(label('Address from the browser', 'key'))
         content.addSpacing(6)
@@ -1231,11 +1239,16 @@ class SignInPage(Page):
         content.addWidget(self.status)
         content.addSpacing(24)
         buttons = QHBoxLayout()
+        buttons.setSpacing(SPACING)
         reopen = fixed(QPushButton('Open the sign-in page again'))
         reopen.clicked.connect(lambda: open_browser(self.url))
+        copy = fixed(QPushButton('Copy link'))
+        copy.setToolTip('For a private window or another browser')
+        copy.clicked.connect(self.copy_link)
         cancel = fixed(QPushButton('Cancel'), 96)
         cancel.clicked.connect(lambda: self.finish(None))
         buttons.addWidget(reopen)
+        buttons.addWidget(copy)
         buttons.addStretch()
         buttons.addWidget(cancel)
         content.addLayout(buttons)
@@ -1243,12 +1256,20 @@ class SignInPage(Page):
         QApplication.clipboard().dataChanged.connect(self.check_clipboard)
         QApplication.instance().applicationStateChanged.connect(lambda _: self.check_clipboard())
 
-    def start(self, url: str):
+    def start(self, url: str, taken: dict[str, str] | None = None):
+        """taken: the accounts already signed in, by id, when this sign-in adds another one."""
         self.url, self.active = url, True
+        self.taken = dict(taken or {})
+        self.hint.setVisible(bool(self.taken))
         self.field.clear()
         self.status.setText('Waiting for the address.')
         self._before = QApplication.clipboard().text()
         open_browser(url)
+
+    def copy_link(self):
+        self._before = self.url         # the link on the clipboard is no address to take
+        QApplication.clipboard().setText(self.url)
+        self.status.setText('Link copied. Paste it into a private window, sign in there and come back.')
 
     def check_clipboard(self):
         # Wayland shares the clipboard only with the focused window, so this
@@ -1267,6 +1288,14 @@ class SignInPage(Page):
         except ValueError as error:
             if explicit:
                 self.status.setText(str(error))
+            return
+        owner = ticket_account(ticket)
+        if owner in self.taken:
+            # Unused, so the browser's session is not spent on an account Waystone already has.
+            self.field.clear()
+            self.status.setText(f'That address signs in {self.taken[owner]}, which is already signed in. '
+                                'Open the link in a private window and sign in with the other account.')
+            self._before = QApplication.clipboard().text()
             return
         self.finish(ticket)
         if looks_like_redirect(QApplication.clipboard().text()):

@@ -1377,7 +1377,10 @@ class MainWindow(QMainWindow):
 
     def on_sign_in_requested(self, url: str):
         self.present()          # also when a shortcut or the tray started the launch
-        self.sign_in_page.start(url)
+        # Adding an account must not sign one in again. A sign-in for Play renews the same account.
+        taken = {str(login.id): login.label for login in self.vault().logins()
+                 if login.id is not None} if self._signing_in else {}
+        self.sign_in_page.start(url, taken)
         self.settings_button.setChecked(False)
         self.stack.setCurrentWidget(self.sign_in_page)
         self.client_list.set_active(False)

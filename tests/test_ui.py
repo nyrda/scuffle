@@ -1488,6 +1488,36 @@ def test_uninstall_completion_refreshes_storage_and_not_installed_notice(qt, win
     assert 'Waystone-backup-wow-test' in window.client_page.banner.text.text()
 
 
+def test_adding_an_account_refuses_the_address_of_one_already_signed_in(qt, window, tmp_path, monkeypatch,
+                                                                       save_login):
+    from waystone.auth.vault import Vault
+    monkeypatch.setattr(pages, 'open_browser', lambda url: None)
+    window.settings.root = str(tmp_path / 'games')
+    window.open_library()
+    installed(window, monkeypatch, ['wow'])
+    save_login(Vault(tmp_path / 'data_dir' / 'session', bridge=None), 314159265).save_battle_tag('Wanderer#7395')
+    tickets = []
+
+    class Launcher:
+        def sign_in(self, version, sign_in):
+            tickets.append(sign_in('https://eu.account.battle.net/login/?externalChallenge=login&app=wow'))
+    monkeypatch.setattr(window, 'launcher', lambda: Launcher())
+    window.sign_in_from_sidebar()           # Add account…
+    page = window.sign_in_page
+    deadline = time.monotonic() + 5
+    while not page.active and time.monotonic() < deadline:
+        qt.processEvents()
+    assert page.active and not page.hint.isHidden()
+    # A browser still signed in to Battle.net answers at once for the account it knows.
+    page.take('http://localhost:0/?ST=EU-0123abcd-314159265&flowTrackingId=', explicit=True)
+    assert page.active and 'Wanderer#7395, which is already signed in' in page.status.text()
+    page.take('http://localhost:0/?ST=EU-4567cdef-202432841&flowTrackingId=', explicit=True)
+    deadline = time.monotonic() + 5
+    while not tickets and time.monotonic() < deadline:
+        qt.processEvents()
+    assert tickets == [b'EU-4567cdef-202432841']
+
+
 def test_the_wow_account_choice_shows_only_with_several_accounts_and_is_saved(qt, window, tmp_path, save_login):
     from waystone.auth.vault import Vault
     from waystone.settings import Settings

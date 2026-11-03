@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import time
@@ -39,6 +40,15 @@ def parse_ticket(text: str) -> bytes:
     if not 0 < len(ticket) <= 2048 or any(byte <= 32 or byte >= 127 for byte in ticket):
         raise ValueError('Paste the whole address shown after signing in, including ?ST=')
     return ticket
+
+
+def ticket_account(ticket: bytes) -> str | None:
+    """The account id a sign-in ticket ends in, such as 314159265 in EU-<hex>-314159265.
+
+    Only a hint for the sign-in page. A ticket of another shape is used as before.
+    """
+    match = re.fullmatch(rb'[A-Z]{2,4}-[0-9A-Fa-f]+-([1-9][0-9]*)', ticket)
+    return match.group(1).decode() if match else None
 
 
 def looks_like_redirect(text: str) -> bool:
