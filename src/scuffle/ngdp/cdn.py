@@ -670,6 +670,17 @@ class CDNClient:
     def get_product_config(self, key: str) -> Path:
         return self._config(key, True)
 
+    def get_plain(self, key: str, limit: int = 16 * 1024 * 1024) -> bytes:
+        """A data file stored as it is, not BLTE encoded, whose MD5 is its key.
+
+        Battle.net's catalogs product publishes its JSON files this way.
+        """
+        key = _key(key)
+        def verify(data):
+            if hashlib.md5(data).hexdigest() != key:
+                raise IntegrityError("File MD5 does not match its key")
+        return self._bytes(self._urls(key), limit, validator=verify)
+
     def configure_archives(self, config: Mapping[str, list[str]] | Path) -> None:
         if isinstance(config, Path):
             config = parse_config(config)

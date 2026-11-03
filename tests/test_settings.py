@@ -14,7 +14,7 @@ def config(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize('switch, expected', [
-    (True, sorted(c.code for c in catalog.CLIENTS if c.test)),
+    (True, sorted(c.code for c in catalog.clients() if c.test)),
     (False, []),
 ])
 def test_the_old_test_client_switch_becomes_a_per_client_choice(config, switch, expected):
@@ -54,7 +54,7 @@ def test_the_list_shows_public_clients_chosen_test_clients_and_installed_ones():
     shown = [c.code for c in catalog.visible(extra=['wow_classic_era_ptr'], installed=['wowt'])]
     assert 'wow_classic_era_ptr' in shown and 'wowt' in shown
     assert 'wow_beta' not in shown
-    assert all(code in shown for code in [c.code for c in catalog.CLIENTS if not c.test])
+    assert all(code in shown for code in [c.code for c in catalog.clients() if not c.test])
 
 
 def test_hidden_clients_leave_the_list_unless_they_have_a_download():
@@ -86,7 +86,7 @@ def test_launch_options_of_a_discovered_client_survive_a_restart(config):
 
 
 def test_an_installed_other_client_stays_listed_while_other_clients_are_off():
-    other = catalog.describe('wowlivetest', '10.2.5.52646')
+    other = catalog.get('wowlivetest')
     codes = lambda **kw: [c.code for c in catalog.visible([other], **kw)]
     assert codes() == [] and codes(extra=['wowlivetest']) == []
     assert codes(installed=['wowlivetest']) == ['wowlivetest']

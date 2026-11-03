@@ -91,7 +91,7 @@ def command_line_report(root: Path | None) -> str:
         settings = Settings()
     try:
         from . import discovery
-        catalog.apply((discovery.load(cache_dir(), settings.region) or {}).get('products'))
+        discovery.restore(cache_dir(), settings.region)
     except Exception:
         pass
     library = None

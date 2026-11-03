@@ -17,7 +17,7 @@ from PySide6.QtGui import QDesktopServices, QIcon
 from PySide6.QtWidgets import (QApplication, QFrame, QGraphicsOpacityEffect, QHBoxLayout, QMainWindow, QPushButton, QStackedWidget,
                                QMenu, QStyleFactory, QVBoxLayout, QWidget)
 
-from .. import catalog, diagnostics, discovery, imports, instance, move, shortcuts, steam, system
+from .. import battlenet, catalog, diagnostics, discovery, imports, instance, move, shortcuts, steam, system
 from ..downloads import DONE, FAILED, PAUSED, QUEUED, RUNNING, DownloadManager, Job, MoveTask
 from ..launch import Launcher, LaunchError
 from ..library import Library, LibraryError, update_available
@@ -120,8 +120,8 @@ class MainWindow(QMainWindow):
         # Shift turns Close game into Force quit while it is held.
         QApplication.instance().installEventFilter(self)
         self.storage: dict = {}
-        # The last list from the version service, so the window starts without waiting for it.
-        catalog.apply((discovery.load(cache_dir(), self.settings.region) or {}).get('products'))
+        # The last lists from the version service and Battle.net, so the window starts without waiting.
+        discovery.restore(cache_dir(), self.settings.region)
         self.catalog_state = 'ready' if catalog.checked() else 'checking'
         self._discovering: set[str] = set()     # regions being checked
         self._catalog_region = self.settings.region
@@ -1780,7 +1780,8 @@ class MainWindow(QMainWindow):
             self.discover()         # the region changed while this one was checked
             return
         if snapshot:
-            catalog.apply(snapshot['products'])
+            table = battlenet.current(cache_dir())
+            catalog.apply(snapshot['products'], table['installs'], table.get('dropped'))
         # A failed check with an earlier answer shows that answer, and says it is old.
         self.catalog_state = ('ready' if snapshot else 'stale') if catalog.checked() else 'offline'
         self.show_catalog()
@@ -1809,7 +1810,7 @@ class MainWindow(QMainWindow):
         if self.settings.region != self._catalog_region:
             # Versions differ by region. The cached list for it shows until it is checked.
             self._catalog_region = self.settings.region
-            catalog.apply((discovery.load(cache_dir(), self.settings.region) or {}).get('products'))
+            discovery.restore(cache_dir(), self.settings.region)
             self.catalog_state = 'ready' if catalog.checked() else 'checking'
             self.discover()
         self.show_catalog()

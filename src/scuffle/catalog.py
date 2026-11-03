@@ -1,10 +1,16 @@
 """The World of Warcraft clients Scuffle lists.
 
-Built-in entries cover the live and test clients. Their labels, install UIDs and
-modes come from Battle.net's catalog. Blizzard's version service adds versions
-and other public products at run time, see discovery.py. Folder names and extra
-launch arguments come from each client's public product configuration at
-install time.
+The list comes from Blizzard's data at run time. Battle.net's public catalog, see
+battlenet.py, names each product's install UID, its name, whether Battle.net offers it
+as a live game and its game modes. The version service, see discovery.py, gives each
+product's build for the region and finds the products that download without a key.
+Folder names and extra launch arguments come from each client's public product
+configuration at install time.
+
+The tables here only add what that data does not hold, for the games Scuffle knows:
+the family the selector groups by, a short description, the preferred order, whether
+a build that is not live is a test or an other client, and Classic Era's modes where
+the catalog has none.
 """
 from __future__ import annotations
 
@@ -12,6 +18,7 @@ from dataclasses import dataclass, field
 import re
 
 LIVE, TEST, OTHER = 'live', 'test', 'other'
+CATEGORIES = (LIVE, TEST, OTHER)
 FAMILIES = ('retail', 'classic', 'forever')     # the selector's order
 PRODUCT = re.compile(r'wow[a-z0-9_]{0,40}')
 
@@ -20,7 +27,7 @@ PRODUCT = re.compile(r'wow[a-z0-9_]{0,40}')
 class Mode:
     id: str
     label: str
-    argument: str
+    arguments: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -50,7 +57,7 @@ class Client:
             selected = next((m for m in self.modes if m.id == mode), None)
             if selected is None:
                 raise ValueError(f'{self.label} has no mode {mode!r}')
-            arguments.append(selected.argument)
+            arguments += selected.arguments
         return arguments
 
 
@@ -59,73 +66,75 @@ class Release:
     """What the version service publishes for a client in the chosen region."""
     version: str
     public: bool = True           # its build configuration and install manifest need no keys
-    locales: tuple[str, ...] = ()  # empty when not checked, as for the built-in clients
+    locales: tuple[str, ...] = ()  # empty when not checked, as for the known clients
+
+
+@dataclass(frozen=True)
+class Known:
+    """What Scuffle adds to Blizzard's data for a game it knows."""
+    label: str
+    family: str
+    category: str = LIVE     # a test or other client, when Battle.net does not offer it as live
+    parent: str = ''
+    blurb: str = ''
+    modes: tuple[Mode, ...] = ()        # used when the catalog names none
 
 
 ERA_MODES = (
-    Mode('era', 'Era', '-initialgamemode=cera'),
-    Mode('hardcore', 'Hardcore', '-initialgamemode=chc'),
-    Mode('sod', 'Season of Discovery', '-initialgamemode=csod'),
+    Mode('era', 'Era', ('-initialgamemode=cera',)),
+    Mode('hardcore', 'Hardcore', ('-initialgamemode=chc',)),
+    Mode('sod', 'Season of Discovery', ('-initialgamemode=csod',)),
 )
+# Battle.net's game package ids, and the ids and short labels settings and shortcuts
+# have always used for them.
+MODE_NAMES = {'wow_classic_era_base': ('era', 'Era'), 'wow_classic_era_hardcore': ('hardcore', 'Hardcore'),
+              'wow_classic_era_sod': ('sod', 'Season of Discovery')}
+# Battle.net's product a type belongs to, for a client Scuffle does not know.
+PRODUCT_FAMILIES = {'WoWC': 'classic', 'WoWF': 'forever'}
 
-BLURBS = {
-    'wow': 'The current expansion of World of Warcraft.',
-    'wow_classic': 'Classic progression realms, a step behind the current expansion.',
-    'wow_anniversary': 'The Burning Crusade on fresh anniversary realms.',
-    'wow_classic_era': 'The original game, with Hardcore and Season of Discovery realms.',
-    'wowf': 'World of Warcraft: Forever.',
-    'wowt': 'Test realm for the next retail patch.',
-    'wowxptr': 'A second retail test realm, used for larger changes.',
-    'wow_beta': 'Beta of the next retail expansion.',
-    'wow_classic_ptr': 'Test realm for the next Classic patch.',
-    'wow_classic_era_ptr': 'Test realm for Classic Era and its seasons.',
-    'wow_classic_beta': 'Beta of World of Warcraft: Forever.',
-    'wowlivetest': 'Blizzard\'s Dark Realm test build. It was last published for Dragonflight.',
-    'wowe1': 'A retail event build. It was last published for Shadowlands.',
-    'wowz': 'A Classic submission build. It was last published for Classic Era 1.14.',
-    'wow_cn_beta': 'The Forever beta for China, in Simplified Chinese only.',
+# In the preferred order. Live and test clients here are trusted to be public, so
+# discovery does not check them. Other clients are listed once discovery finds them public.
+KNOWN = {
+    'wow': Known('World of Warcraft', 'retail', blurb='The current expansion of World of Warcraft.'),
+    'wow_classic': Known('Mists of Pandaria Classic', 'classic',
+                         blurb='Classic progression realms, a step behind the current expansion.'),
+    'wow_anniversary': Known('Burning Crusade Anniversary', 'classic',
+                             blurb='The Burning Crusade on fresh anniversary realms.'),
+    'wow_classic_era': Known('Classic Era', 'classic', modes=ERA_MODES,
+                             blurb='The original game, with Hardcore and Season of Discovery realms.'),
+    'wowf': Known('Forever', 'forever', blurb='World of Warcraft: Forever.'),
+    'wowt': Known('Retail PTR', 'retail', TEST, 'wow', 'Test realm for the next retail patch.'),
+    'wowxptr': Known('Retail PTR 2', 'retail', TEST, 'wow', 'A second retail test realm, used for larger changes.'),
+    'wow_beta': Known('Retail Beta', 'retail', TEST, 'wow', 'Beta of the next retail expansion.'),
+    'wow_classic_ptr': Known('MoP Classic PTR', 'classic', TEST, 'wow_classic',
+                             'Test realm for the next Classic patch.'),
+    'wow_classic_era_ptr': Known('Classic Era PTR', 'classic', TEST, 'wow_classic_era',
+                                 'Test realm for Classic Era and its seasons.', ERA_MODES),
+    'wow_classic_beta': Known('Forever Beta', 'forever', TEST, 'wowf', 'Beta of World of Warcraft: Forever.'),
+    'wowlivetest': Known('Dark Realm Test', 'retail', OTHER, 'wow',
+                         'Blizzard\'s Dark Realm test build. It was last published for Dragonflight.'),
+    'wowe1': Known('Retail Event', 'retail', OTHER, 'wow', 'A retail event build. It was last published for Shadowlands.'),
+    'wowz': Known('Classic Submission', 'classic', OTHER, 'wow_classic_era',
+                  'A Classic submission build. It was last published for Classic Era 1.14.'),
+    'wow_cn_beta': Known('Forever China Beta', 'forever', OTHER, 'wowf',
+                         'The Forever beta for China, in Simplified Chinese only.'),
 }
+ORDER = list(KNOWN)
 
-CLIENTS = (
-    Client('wow', 'World of Warcraft', 'wow', 'retail'),
-    Client('wow_classic', 'Mists of Pandaria Classic', 'wow_classic', 'classic'),
-    Client('wow_anniversary', 'Burning Crusade Anniversary', 'wow_classic_anniversary', 'classic'),
-    Client('wow_classic_era', 'Classic Era', 'wow_classic_era', 'classic', modes=ERA_MODES),
-    Client('wowf', 'Forever', 'wowf', 'forever'),
-    Client('wowt', 'Retail PTR', 'wow_ptr', 'retail', parent='wow', category=TEST),
-    Client('wowxptr', 'Retail PTR 2', 'wow_ptr_x', 'retail', parent='wow', category=TEST),
-    Client('wow_beta', 'Retail Beta', 'wow_beta', 'retail', parent='wow', category=TEST),
-    Client('wow_classic_ptr', 'MoP Classic PTR', 'wow_classic_ptr', 'classic', parent='wow_classic',
-           category=TEST),
-    Client('wow_classic_era_ptr', 'Classic Era PTR', 'wow_classic_era_ptr', 'classic', parent='wow_classic_era',
-           category=TEST, modes=ERA_MODES),
-    Client('wow_classic_beta', 'Forever Beta', 'wow_classic_beta', 'forever', parent='wowf', category=TEST),
-)
-
-# Other products Scuffle has a name for. They are listed only once discovery finds
-# them public. Their install UIDs come from the same Battle.net catalog, whose
-# installs table maps each UID to its product, such as wow_dark to wowlivetest.
-OTHERS = (
-    Client('wowlivetest', 'Dark Realm Test', 'wow_dark', 'retail', parent='wow', category=OTHER),
-    Client('wowe1', 'Retail Event', 'wow_event1', 'retail', parent='wow', category=OTHER),
-    Client('wowz', 'Classic Submission', 'wow_submission', 'classic', parent='wow_classic_era', category=OTHER),
-    Client('wow_cn_beta', 'Forever China Beta', 'wow_cn_beta', 'forever', parent='wowf', category=OTHER),
-)
-
-CLIENTS, OTHERS = (tuple(Client(**{**c.__dict__, 'blurb': BLURBS.get(c.code, '')}) for c in group)
-                   for group in (CLIENTS, OTHERS))
-BY_CODE = {client.code: client for client in CLIENTS}
-NAMED_OTHERS = {client.code: client for client in OTHERS}
-
-# What discovery found last, for the chosen region. Replaced as a whole, so a
-# worker thread reading it never sees half an update.
-_releases: dict[str, Release] = {}
-_discovered: dict[str, Client] = {}
+# What Blizzard's data says now: the catalog's installs, what earlier catalogs said about
+# products it no longer lists, the releases discovery found and the clients offered, in order. Replaced as a whole, so a worker thread reading
+# it never sees half an update.
+_state: tuple[dict[str, dict], dict[str, dict], dict[str, Release], dict[str, Client]] = ({}, {}, {}, {})
 
 
 def is_product(code) -> bool:
     """A World of Warcraft product code, which is also safe as a folder name."""
     return isinstance(code, str) and PRODUCT.fullmatch(code) is not None
+
+
+def trusted(code: str) -> bool:
+    """A live or test client Scuffle knows, which needs no check that it downloads without a key."""
+    return code in KNOWN and KNOWN[code].category != OTHER
 
 
 def patch(version: str) -> tuple[int, ...]:
@@ -157,62 +166,151 @@ LINE_NAMES = {'wowf': 'Forever', 'wow_classic_era': 'Classic Era', 'wow_annivers
               'wow_classic': 'Classic', 'wow': 'Retail'}
 
 
-def describe(code: str, version: str = '') -> Client:
-    """A client for a product Scuffle has no name for, named by its code and version.
+def plain_name(name: str) -> str:
+    """Battle.net's name without the game's own name in front, such as 'Forever' for 'WoW: Forever'."""
+    name = re.sub(r'^(World of Warcraft|WoW)\s*:\s*', '', name.strip())
+    return re.sub(r'\s+-\s+', ' ', name)
 
-    Its install UID is not known, so it is the code, as it is for most built-in clients.
-    """
-    known = NAMED_OTHERS.get(code)
+
+def _builtin() -> dict[str, dict]:
+    from .catalog_snapshot import SNAPSHOT
+    return SNAPSHOT['installs']
+
+
+def _modes(entry: dict, known: Known | None) -> tuple[Mode, ...]:
+    modes = []
+    for ident, label, arguments in entry.get('modes', []):
+        mine, short = MODE_NAMES.get(ident, (re.sub(r'[^a-z0-9-]', '-', ident), label))
+        modes.append(Mode(mine, short, tuple(arguments)))
+    return tuple(modes) or (known.modes if known else ())
+
+
+def _category(code: str, entry: dict) -> str:
+    """Battle.net decides whether a client is live. For one that is not, Scuffle's table
+    says whether it is a test or an other client, and the catalog's markers otherwise.
+    A live game the catalog no longer offers, or no longer lists, becomes an other client."""
+    known, kind = KNOWN.get(code), entry.get('kind')
+    if kind == LIVE:
+        return LIVE
+    if known and known.category != LIVE:
+        return known.category
+    return kind if kind in CATEGORIES else OTHER
+
+
+def _describe(code: str, installs: dict, dropped: dict, releases: dict[str, Release]) -> Client:
+    """A client before its parent is settled, from what is known about it."""
+    known = KNOWN.get(code)
+    entry = installs.get(code) or {}
+    # A product the catalog dropped still launches with the install UID it had, and keeps its name.
+    earlier = entry or dropped.get(code) or _builtin().get(code) or {}
+    found = releases.get(code)
+    version = found.version if found else ''
+    category = _category(code, entry)
     if known:
-        return known
-    family, parent = lineage(version) if version else ('retail', '')
-    numbers = '.'.join(map(str, patch(version)))
-    label = f'{LINE_NAMES[parent]} {numbers} ({code})' if numbers else code
-    return Client(code, label, code, family, f'Published by Blizzard as {code}.', parent, OTHER)
+        family, label, blurb = known.family, known.label, known.blurb
+    else:
+        family = PRODUCT_FAMILIES.get(earlier.get('product', '')) or (lineage(version)[0] if version else 'retail')
+        numbers = '.'.join(map(str, patch(version)))
+        label = plain_name(earlier.get('name', '')) or \
+            (f'{LINE_NAMES[lineage(version)[1]]} {numbers} ({code})' if numbers else code)
+        blurb = f'Published by Blizzard as {code}.'
+    parent = known.parent if known else (lineage(version)[1] if version else '')
+    return Client(code, label, earlier.get('uid') or code, family, blurb, '' if category == LIVE else parent,
+                  category, _modes(earlier, known))
 
 
-def apply(products: dict[str, dict] | None) -> None:
-    """Use what discovery found, or only the built-in clients when it found nothing."""
-    global _releases, _discovered
-    releases, discovered = {}, {}
+def _settle(clients: list[Client], installs: dict) -> list[Client]:
+    """Point each test and other client at a live client that is offered, and keep labels apart."""
+    live = [c for c in clients if c.category == LIVE]
+    settled = []
+    for client in clients:
+        parent = client.parent
+        if client.category != LIVE and parent not in {c.code for c in live if c.family == client.family}:
+            # Its usual live client is gone, such as a game that moved to a new product.
+            parent = next((c.code for c in live if c.family == client.family), '')
+        settled.append(Client(**{**client.__dict__, 'parent': parent}))
+    # Live clients keep the plain name, so a release under a new product reads as the game.
+    taken: set[str] = set()
+    named = {}
+    for client in sorted(settled, key=lambda c: CATEGORIES.index(c.category)):
+        label = client.label
+        if label in taken:
+            name = plain_name((installs.get(client.code) or {}).get('name', ''))
+            label = name if name and name not in taken else f'{client.label} ({client.code})'
+        taken.add(label)
+        named[client.code] = label
+    return [Client(**{**c.__dict__, 'label': named[c.code]}) for c in settled]
+
+
+def _order(client: Client) -> tuple:
+    known = ORDER.index(client.code) if client.code in KNOWN and client.category != OTHER else len(ORDER)
+    return CATEGORIES.index(client.category), known, FAMILIES.index(client.family), client.label
+
+
+def offered(code: str, installs: dict, releases: dict[str, Release]) -> bool:
+    """A known live or test client while the catalog or the version service names it, and
+    anything else once discovery found it public."""
+    found = releases.get(code)
+    if trusted(code):
+        return code in installs or found is not None
+    return found is not None and found.public
+
+
+def apply(products: dict[str, dict] | None, installs: dict | None = None, dropped: dict | None = None) -> None:
+    """Use what discovery found and the Battle.net catalog's installs, and what earlier
+    catalogs said about the products it dropped.
+
+    No products means no versions are known. No installs means the snapshot Scuffle ships with.
+    """
+    global _state
+    installs = installs if isinstance(installs, dict) else _builtin()
+    dropped = dropped if isinstance(dropped, dict) else {}
+    releases = {}
     for code, row in (products or {}).items():
         if not is_product(code) or not isinstance(row, dict) or not row.get('version'):
             continue
-        release = Release(str(row['version']), row.get('public', code in BY_CODE) is True,
-                          tuple(row.get('locales') or ()))
-        releases[code] = release
-        if code not in BY_CODE and release.public:
-            discovered[code] = describe(code, release.version)
-    _releases, _discovered = releases, discovered
+        releases[code] = Release(str(row['version']), row.get('public', trusted(code)) is True,
+                                 tuple(row.get('locales') or ()))
+    codes = [code for code in KNOWN if offered(code, installs, releases)]
+    codes += sorted(code for code in releases if code not in KNOWN and offered(code, installs, releases))
+    clients = _settle([_describe(code, installs, dropped, releases) for code in codes], installs)
+    _state = installs, dropped, releases, {client.code: client for client in sorted(clients, key=_order)}
 
 
 def checked() -> bool:
     """Whether versions from the version service are known."""
-    return bool(_releases)
+    return bool(_state[2])
 
 
 def release(code: str) -> Release | None:
-    return _releases.get(code)
+    return _state[2].get(code)
 
 
 def clients(locale: str = '') -> list[Client]:
-    """The built-in clients, then the other public products discovery found.
+    """The clients offered, live ones first.
 
-    With a locale, other products that cannot be installed in it are left out.
+    With a locale, clients that discovery found cannot be installed in it are left out.
     """
-    others = [c for c in _discovered.values()
-              if not locale or not _releases[c.code].locales or locale in _releases[c.code].locales]
-    return list(CLIENTS) + sorted(others, key=lambda c: (FAMILIES.index(c.family), c.label))
+    _, _, releases, offered_ = _state
+
+    def fits(client):
+        found = releases.get(client.code)
+        return not locale or not found or not found.locales or locale in found.locales
+    return [client for client in offered_.values() if fits(client)]
+
+
+def describe(code: str) -> Client:
+    """A client that is not offered now, such as one installed earlier, by what is known about it."""
+    installs, dropped, releases, offered_ = _state
+    if code in offered_:
+        return offered_[code]
+    client = _describe(code, installs, dropped, releases)
+    return _settle(list(offered_.values()) + [client], installs)[-1]
 
 
 def get(code: str) -> Client:
-    client = BY_CODE.get(code) or _discovered.get(code)
-    if client:
-        return client
     if is_product(code):
-        # Installed, or chosen earlier, but not found this time. It still needs a name.
-        found = _releases.get(code)
-        return describe(code, found.version if found else '')
+        return describe(code)
     raise ValueError(f'Unknown client {code!r}')
 
 
@@ -256,3 +354,6 @@ def visible(clients_: list[Client] | None = None, *, extra=(), hidden=(), instal
         elif client.category == LIVE or client.code in extra or client.code in installed:
             shown.append(client)
     return shown
+
+
+apply(None)

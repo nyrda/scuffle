@@ -87,7 +87,8 @@ The list shows the live clients. **Settings › Clients** adds test clients, the
 PTRs and betas, one by one. **Show other public clients** offers older builds
 Blizzard still publishes, such as the Dark Realm Test. Many of those are old
 and may not connect. Any client can be hidden with **Hide from list** in its
-**⋯** menu.
+**⋯** menu. When Blizzard adds a client, Battle.net's own catalog puts it in the
+list without a Scuffle update.
 
 Each row shows the version Blizzard publishes for your region and whether the
 client is installed, downloading or behind its live game. Scuffle checks for

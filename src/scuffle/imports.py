@@ -159,7 +159,7 @@ def inspect(folder: Path, where: str = '') -> Found:
             clients[code] = entry.name
     if not clients:
         raise NotImportable('This installation holds no client Scuffle knows.')
-    order = [client.code for client in catalog.CLIENTS + catalog.OTHERS]
+    order = [client.code for client in catalog.clients()] + catalog.ORDER
     ranked = sorted(clients, key=lambda code: (order.index(code) if code in order else len(order), code))
     return Found(folder, {code: clients[code] for code in ranked}, where)
 
