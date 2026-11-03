@@ -267,7 +267,8 @@ def prefix_path(prefix: Path, windows: str) -> Path | None:
         return prefix / 'drive_c' / rest
     link = prefix / 'dosdevices' / f'{drive}:'
     try:
-        return Path(os.readlink(link)) / rest if link.is_symlink() else None
+        # Wine writes relative links too, such as ../drive_c. A link that is absolute replaces the parent.
+        return (link.parent / os.readlink(link)).resolve() / rest if link.is_symlink() else None
     except OSError:
         return None
 

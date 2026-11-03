@@ -85,7 +85,8 @@ def test_search_finds_prefixes_steam_and_drives_and_leaves_the_waystone_folder_o
     (lutris / 'drive_c/ProgramData/Battle.net/Agent/product.db').write_bytes(
         product_db(['D:/Blizzard/World of Warcraft', 'C:/missing']))
     (lutris / 'dosdevices').mkdir()
-    (lutris / 'dosdevices/d:').symlink_to(tmp_path / 'elsewhere')
+    # Relative, as Wine writes its own links, so it must not depend on the working folder.
+    (lutris / 'dosdevices/d:').symlink_to('../../../../elsewhere')
     battle_net(home / '.local/share/Steam/steamapps/compatdata/2501/pfx/drive_c/Games/World of Warcraft',
                {'_classic_era_': 'wow_classic_era'})
     drive = tmp_path / 'mnt'
