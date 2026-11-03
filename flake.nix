@@ -31,7 +31,23 @@
           fileset = pkgs.lib.fileset.unions [ ./src ./tests ./pyproject.toml ];
         };
         build-system = [ python.pkgs.setuptools ];
+        nativeBuildInputs = [ pkgs.copyDesktopItems ];
         dependencies = [ python.pkgs.pyside6 ];
+        # The window sets its Wayland app id to "waystone", which matches this entry.
+        desktopItems = [
+          (pkgs.makeDesktopItem {
+            name = "waystone";
+            desktopName = "Waystone";
+            comment = "Install, update and launch the public World of Warcraft clients";
+            exec = "waystone";
+            icon = "waystone";
+            categories = [ "Game" ];
+            startupWMClass = "waystone";
+          })
+        ];
+        postInstall = ''
+          install -Dm644 src/waystone/ui/icon.svg $out/share/icons/hicolor/scalable/apps/waystone.svg
+        '';
         makeWrapperArgs = [
           "--set" "WAYSTONE_BRIDGE" "${bridge}/libexec/wow_auth_bridge.exe"
           # NixOS needs the Nix build of umu-launcher for its FHS container. nsenter closes a game in it.
