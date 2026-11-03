@@ -201,6 +201,27 @@ def test_a_move_that_stopped_after_its_commit_only_leaves_the_old_list_to_delete
     assert not vault.legacy_accounts.exists() and login.accounts()['game_accounts'][0]['name'] == 'WOW678'
 
 
+
+def test_an_older_session_that_cannot_take_its_accounts_folder_leaves_the_listed_one_usable(
+        vault, battlenet, monkeypatch):
+    older_session(vault, battlenet, MAIN, listed=False)
+    vault.logins()
+    main = add(vault, battlenet, MAIN)          # the same account, added again before the old one renewed
+    ticket = saved_ticket(main)
+    vault.activate('unknown')
+    replace = os.replace
+
+    def fail(source, target):
+        if str(source).endswith('unknown'):
+            raise OSError('disk full')
+        replace(source, target)
+    with monkeypatch.context() as patch:
+        patch.setattr(vault_module.os, 'replace', fail)
+        with pytest.raises(OSError, match='disk full'):
+            launcher(vault).renew(VERSION, never)
+    assert saved_ticket(main) == ticket and ticket in battlenet.tickets
+    assert str(MAIN) in [login.key for login in vault.logins()]
+
 def test_adding_accounts_keys_each_by_its_account_id_and_makes_it_active(vault, battlenet):
     first = add(vault, battlenet, MAIN)
     second = add(vault, battlenet, ALT)

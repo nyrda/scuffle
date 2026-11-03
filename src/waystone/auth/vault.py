@@ -241,6 +241,9 @@ class Vault:
         self._prepare()
         self.logins_folder.mkdir(mode=0o700, exist_ok=True)
         login.directory.mkdir(mode=0o700, exist_ok=True)
+        # Durable before a migration moves the only session into it.
+        system.sync_directory(self.directory)
+        system.sync_directory(self.logins_folder)
         if not login.details_file.is_file():
             # The lowest free number, kept for good, so a sign-out never renames another login.
             taken = {other.number for other in self.logins() if other.key != login.key}
@@ -260,7 +263,12 @@ class Vault:
                 # The same account signed in again meanwhile. The session being renewed is the one in use.
                 trash = self.logins_folder / f'.old-{key}-{uuid.uuid4().hex}'
                 os.replace(target, trash)
-            os.replace(login.directory, target)
+            try:
+                os.replace(login.directory, target)
+            except OSError:
+                if trash is not None:
+                    os.replace(trash, target)   # the renewal failed, so the other session stays usable
+                raise
             system.sync_directory(self.logins_folder)
             login.directory, login.key = target, key
             try:
@@ -278,12 +286,14 @@ class Vault:
             current = next((other for other in self.logins() if other.key == login.key), None)
             if current is None:
                 return
+            if current.directory.parent != self.logins_folder:
+                # An older Waystone's session that could not move yet. A folder of the same key goes too.
+                current.session.unlink(missing_ok=True)
+                current.account_list.unlink(missing_ok=True)
+                current = Login(self, self.logins_folder / current.key, current.key)
             # The session goes first, so a folder a failed removal leaves behind is no login.
             current.session.unlink(missing_ok=True)
-            if current.directory.parent == self.logins_folder:
-                shutil.rmtree(current.directory, ignore_errors=True)
-            else:
-                current.account_list.unlink(missing_ok=True)
+            shutil.rmtree(current.directory, ignore_errors=True)
 
     def forget(self, login: Login | None = None) -> None:
         """Sign out of one login, the active one unless another is named."""
