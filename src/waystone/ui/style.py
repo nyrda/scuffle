@@ -278,7 +278,8 @@ def accent_shade(color: str) -> str:
     shade = QColor(color)
     while 1.05 / (luminance(shade) + 0.05) < 4.5 and amount < 1:
         amount += 0.04
-        shade = mix(color, '#000000', amount)
+        # Measured as the stylesheet will see it, rounded to a hex color.
+        shade = QColor(mix(color, '#000000', amount).name())
     return shade.name()
 
 

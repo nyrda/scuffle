@@ -495,7 +495,7 @@ class ClientPage(Page):
         shade = accent_shade(color)
         self.primary.setStyleSheet(
             f'QPushButton#primary[secondary="false"]:enabled {{ background: {shade}; }}'
-            f'QPushButton#primary[secondary="false"]:enabled:hover {{ background: {mix(shade, "#ffffff", 0.12).name()}; }}'
+            f'QPushButton#primary[secondary="false"]:enabled:hover {{ background: {mix(shade, "#000000", 0.15).name()}; }}'
             f'QPushButton#primary[secondary="false"]:disabled {{ background: {mix(shade, BACKGROUND, 0.6).name()}; }}')
         self.busy.setStyleSheet(f'QProgressBar[tone=""]::chunk {{ background: {color}; }}')
 
