@@ -9,9 +9,9 @@ import sys
 from PySide6.QtCore import QDir, QEvent, QPointF, QRectF, QTimer, Qt, Signal
 from PySide6.QtGui import (QBrush, QColor, QKeySequence, QLinearGradient, QPainter, QPen, QRadialGradient, QShortcut,
                            QTransform)
-from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QFileSystemModel, QFrame, QGridLayout,
-                               QHBoxLayout, QLabel, QLineEdit, QMenu, QProgressBar, QPushButton,
-                               QScrollArea, QSizePolicy, QSpacerItem, QSpinBox, QToolButton, QTreeView, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox, QFileSystemModel,
+                               QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMenu, QProgressBar, QPushButton,
+                               QRadioButton, QScrollArea, QSizePolicy, QSpacerItem, QSpinBox, QToolButton, QTreeView, QVBoxLayout, QWidget)
 
 from .. import catalog
 from ..launch import looks_like_redirect, open_browser, parse_ticket
@@ -298,6 +298,7 @@ class ClientPage(Page):
     open_folder_clicked = Signal()
     hide_clicked = Signal()
     uninstall_clicked = Signal()
+    import_clicked = Signal()
     show_clients_clicked = Signal()
     launch_options_clicked = Signal()
     mode_changed = Signal(str)
@@ -377,6 +378,8 @@ class ClientPage(Page):
         menu = QMenu(self.more)
         self.verify_action = menu.addAction('Verify files', self.verify_clicked.emit)
         self.folder_action = menu.addAction('Open folder', self.open_folder_clicked.emit)
+        self.import_action = menu.addAction('Import…', self.import_clicked.emit)
+        self.import_action.setToolTip('Copy this client from an installation you already have, such as Battle.net\'s')
         self.launch_action = menu.addAction('Launch options…', self.launch_options_clicked.emit)
         self.uninstall_action = menu.addAction('Uninstall…', self.uninstall_clicked.emit)
         menu.setToolTipsVisible(True)
@@ -544,6 +547,7 @@ class ClientPage(Page):
                                'Stop this download. What is already stored stays for later.')
         for action in (self.verify_action, self.folder_action, self.uninstall_action, self.menu_separator):
             action.setVisible(installed)
+        self.import_action.setVisible(not installed)
         # Checking files while the game runs or starts would read files it has open.
         self.verify_action.setEnabled(installed and not busy and not busy_launch and progress is None)
         # A client with a download stays listed while the download exists.
@@ -1151,13 +1155,20 @@ class SignInPage(Page):
 
 
 class FolderPage(Page):
-    """Choose a folder inside the window. Tiling compositors place dialogs unpredictably."""
+    """Choose a folder inside the window. Tiling compositors place dialogs unpredictably.
+
+    By default it chooses the installation folder. With existing_only it picks any existing
+    folder and offers no New folder, as for an installation to import, which is never written to.
+    """
 
     chosen = Signal(str)
     cancelled = Signal()
 
-    def __init__(self):
+    def __init__(self, title: str = 'Choose the installation folder',
+                 note: str = 'Pick an empty folder for a new installation, or the folder Waystone already uses.',
+                 *, existing_only: bool = False):
         super().__init__()
+        self.existing_only = existing_only
         self.on_escape(self.cancelled.emit)
         page = QVBoxLayout(self)
         left, top, right, bottom = PAGE_MARGINS
@@ -1167,9 +1178,8 @@ class FolderPage(Page):
         self.fixed_top(page)
         outer.setSpacing(10)
         self._target = ''
-        outer.addWidget(label('Choose the installation folder', 'pagetitle'))
-        outer.addWidget(label('Pick an empty folder for a new installation, or the folder Waystone already uses.',
-                              'muted', wrap=True))
+        outer.addWidget(label(title, 'pagetitle'))
+        outer.addWidget(label(note, 'muted', wrap=True))
         self.path = fixed(QLineEdit())
         self.path.setPlaceholderText('Type a path and press Enter, or pick a folder below')
         self.path.returnPressed.connect(self.go_to_typed)
@@ -1208,6 +1218,7 @@ class FolderPage(Page):
         create = QPushButton('New folder')
         create.setFixedHeight(PRIMARY_HEIGHT)
         create.clicked.connect(self.new_folder)
+        create.setVisible(not existing_only)
         cancel = QPushButton('Cancel')
         cancel.setFixedSize(96, PRIMARY_HEIGHT)          # level with Use this folder
         cancel.clicked.connect(self.cancelled.emit)
@@ -1263,6 +1274,8 @@ class FolderPage(Page):
         self.show_path(Path(self.path.text()).expanduser())
 
     def new_folder(self):
+        if self.existing_only:
+            return
         parent = Path(self.path.text()).expanduser()
         if not parent.is_dir():
             self.say('Choose an existing folder to create the new one in.')
@@ -1284,11 +1297,200 @@ class FolderPage(Page):
             self.say('Enter a full path, such as /games/Waystone.')
         elif path.exists() and not path.is_dir():
             self.say('This is a file, not a folder.')
+        elif self.existing_only:
+            if path.is_dir():
+                self.chosen.emit(str(path))
+            else:
+                self.say('This folder does not exist.')
         elif path.is_dir() and any(path.iterdir()) and not (path / '.waystone').is_dir():
             self.say('This folder is not empty. Choose an empty folder, '
                                  'create one with New folder, or pick the folder Waystone already uses.')
         else:
             self.chosen.emit(str(path))
+
+
+class ImportPage(Page):
+    """Import an installation the user already has, such as Battle.net's, by seeding installs from it.
+
+    The window finds the candidates on a worker thread and adds them as they arrive.
+    """
+    confirmed = Signal()
+    cancelled = Signal()
+    choose_folder = Signal()
+
+    def __init__(self):
+        super().__init__()
+        self.on_escape(self.cancelled.emit)
+        self.code: str | None = None
+        self.found: list = []
+        self.blocked: dict[str, str] = {}        # client -> why it cannot be imported now
+        outer = scrolling(self)
+        self.balance(outer)
+        content = self.centre(column(outer))
+        content.setSpacing(10)
+        self.title = label('', 'pagetitle', wrap=True)
+        content.addWidget(self.title)
+        content.addWidget(label('Waystone copies the game content from an installation you already have, such as '
+                                'Battle.net\'s, and downloads only what it lacks. It only reads that installation '
+                                'and never changes, moves or deletes anything in it, so Battle.net can keep using it.',
+                                'muted', wrap=True))
+        content.addSpacing(6)
+        content.addWidget(label('FOUND INSTALLATIONS', 'group'))
+        self.status = label('', 'small', wrap=True)
+        content.addWidget(self.status)
+        self.cards = QVBoxLayout()
+        self.cards.setSpacing(8)
+        content.addLayout(self.cards)
+        self.group = QButtonGroup(self)
+        self.group.buttonToggled.connect(lambda *_: self.show_clients())
+        choose = QHBoxLayout()
+        choose.setSpacing(12)
+        self.choose = fixed(QPushButton('Choose folder…'))
+        self.choose.setToolTip('Pick the installation\'s folder, such as World of Warcraft')
+        self.choose.clicked.connect(self.choose_folder.emit)
+        choose.addWidget(self.choose)
+        choose.addWidget(label('Not listed? Choose the folder that holds .build.info and Data.', 'small', wrap=True), 1)
+        content.addLayout(choose)
+        content.addSpacing(6)
+        content.addWidget(label('CLIENTS TO IMPORT', 'group'))
+        self.client_rows = QVBoxLayout()
+        self.client_rows.setSpacing(6)
+        content.addLayout(self.client_rows)
+        self.none = label('Choose an installation first.', 'small')
+        content.addWidget(self.none)
+        self.boxes: dict[str, QCheckBox] = {}
+        content.addSpacing(6)
+        self.copy = QCheckBox('Copy settings and addons (recommended)')
+        content.addWidget(self.copy)
+        self.copy_note = label('Once each install has succeeded, copies the WTF and Interface folders, with your '
+                               'settings, keybinds, macros and addons, into the new client folder. Files already '
+                               'there are kept.', 'small', wrap=True)
+        self.copy_note.setContentsMargins(28, 0, 0, 0)        # under the checkbox's text
+        content.addWidget(self.copy_note)
+        self.problem = label('', 'problem', wrap=True)
+        content.addWidget(self.problem)
+        actions = QHBoxLayout()
+        actions.setSpacing(SPACING)
+        self.cancel = QPushButton('Cancel')
+        self.cancel.setFixedSize(96, PRIMARY_HEIGHT)      # level with Import
+        self.confirm = QPushButton('Import')
+        self.confirm.setObjectName('primary')
+        self.cancel.clicked.connect(self.cancelled.emit)
+        self.confirm.clicked.connect(self.confirmed.emit)
+        actions.addWidget(self.cancel)
+        actions.addWidget(self.confirm)
+        actions.addStretch()
+        content.addSpacing(4)
+        content.addLayout(actions)
+        outer.addStretch(1)
+
+    def start(self, code: str, searching: str) -> None:
+        self.code = code
+        self.title.setText(f'Import {catalog.get(code).label}')
+        for button in self.group.buttons():
+            self.group.removeButton(button)
+        while self.cards.count():
+            widget = self.cards.takeAt(0).widget()
+            widget.hide()
+            widget.deleteLater()
+        self.found = []
+        self.copy.setChecked(True)
+        self.set_status(searching)
+        self.set_reason('')
+        self.show_clients()
+        self.cancel.setFocus()
+
+    def set_status(self, text: str) -> None:
+        self.status.setText(text)
+        self.status.setVisible(bool(text))
+
+    def add(self, found, *, select: bool = False) -> None:
+        """Add an installation, or select it again when it is already listed."""
+        known = next((i for i, f in enumerate(self.found) if f.path == found.path), None)
+        if known is None:
+            self.found.append(found)
+            self.cards.addWidget(self._card(found))
+            known = len(self.found) - 1
+        button = self.group.button(known)
+        # The first one that holds the client the page is for is chosen for the user.
+        if select or (self.group.checkedButton() is None and self.code in found.clients):
+            button.setChecked(True)
+        self.show_clients()
+
+    def _card(self, found) -> QFrame:
+        frame = QFrame()
+        frame.setObjectName('card')
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(2)
+        # Where it was found tells two folders named World of Warcraft apart.
+        button = QRadioButton(found.where or found.path.name or str(found.path))
+        button.setObjectName('cardtitle')
+        button.setAccessibleDescription(str(found.path))
+        self.group.addButton(button, len(self.found) - 1)
+        layout.addWidget(button)
+        lines = QVBoxLayout()
+        lines.setContentsMargins(26, 0, 0, 0)          # lined up with the radio button's text
+        lines.setSpacing(2)
+        for text in (str(found.path), ', '.join(catalog.get(code).label for code in found.clients)):
+            line = ElidedLabel(text, 'small', Qt.ElideMiddle)
+            line.setToolTip(text)
+            lines.addWidget(line)
+        layout.addLayout(lines)
+        return frame
+
+    def selected(self):
+        index = self.group.checkedId()
+        return self.found[index] if 0 <= index < len(self.found) else None
+
+    def set_blocked(self, blocked: dict[str, str]) -> None:
+        if blocked != self.blocked:
+            self.blocked = dict(blocked)
+            self.show_clients()
+
+    def show_clients(self) -> None:
+        """One checkbox for each client of the chosen installation. Kept when they stay the same."""
+        found = self.selected()
+        codes = list(found.clients) if found else []
+        if codes != list(self.boxes):
+            checked = {code for code, box in self.boxes.items() if box.isChecked()}
+            for box in self.boxes.values():
+                self.client_rows.removeWidget(box)
+                box.hide()
+                box.deleteLater()
+            self.boxes = {}
+            for code in codes:
+                box = QCheckBox(catalog.get(code).label)
+                box.setChecked(code in checked or code == self.code)
+                box.toggled.connect(self.update_confirm)
+                self.client_rows.addWidget(box)
+                self.boxes[code] = box
+            window = self.window()
+            if hasattr(window, 'update_tab_order'):
+                window.update_tab_order()
+        for code, box in self.boxes.items():
+            reason = self.blocked.get(code, '')
+            box.setText(f'{catalog.get(code).label} · {reason}' if reason else catalog.get(code).label)
+            box.setEnabled(not reason)
+            if reason:
+                box.setChecked(False)
+        self.none.setVisible(not codes)
+        self.update_confirm()
+
+    def chosen_clients(self) -> list[str]:
+        return [code for code, box in self.boxes.items() if box.isChecked() and box.isEnabled()]
+
+    def update_confirm(self, *_) -> None:
+        count = len(self.chosen_clients())
+        self.confirm.setText('Import' if count < 2 else f'Import {count} clients')
+        self.confirm.setEnabled(count > 0)
+
+    def set_reason(self, reason: str) -> None:
+        self.problem.setText(reason)
+        self.problem.setVisible(bool(reason))
+
+    def focus_chain(self) -> list[QWidget]:
+        return [*self.group.buttons(), self.choose, *self.boxes.values(), self.copy, self.cancel, self.confirm]
 
 
 class QueuePage(Page):
@@ -1386,6 +1588,7 @@ class QueuePage(Page):
         for job in jobs:
             card = self.cards[job.client]
             verb = {'install': 'Install', 'update': 'Update', 'verify': 'Verify', 'repair': 'Repair', 'uninstall': 'Uninstall'}[job.kind]
+            verb = 'Import' if job.seed_from else verb
             card['title'].setText(f'{verb} {labels[job.client]}')
             if job.status == RUNNING:
                 state = 'Running'

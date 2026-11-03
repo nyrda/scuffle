@@ -1569,3 +1569,67 @@ def test_a_running_game_closes_and_shift_turns_the_button_into_force_quit(qt, wi
     monkeypatch.setattr(ui, 'CLOSE_GRACE', 0)
     window.close_overdue('wow', window.closing['wow'])
     assert 'wow' not in window.closing and 'Force quit' in page.banner.text.text()
+
+
+def test_import_finds_an_installation_and_queues_seeded_installs_for_the_chosen_clients(qt, window, tmp_path,
+                                                                                      monkeypatch):
+    import time
+    from waystone import imports
+    from test_imports import battle_net
+    source = battle_net(tmp_path / 'drive/World of Warcraft', {'_retail_': 'wow', '_classic_era_': 'wow_classic_era',
+                                                              '_ptr_': 'wowt'})
+    monkeypatch.setattr(imports, 'default_places', lambda: [imports.Place(tmp_path / 'drive', 'Mounted drive', 2)])
+    window.settings.root = str(tmp_path / 'games')
+    window.open_library()
+    installed(window, monkeypatch, ['wow'])
+    window.populate()
+    window.client_list.select('wow')
+    window.refresh()
+    assert not window.client_page.import_action.isVisible()
+    window.client_list.select('wow_classic_era')
+    window.refresh()
+    requests = []
+    monkeypatch.setattr(window.downloads, 'enqueue', lambda *args, **kwargs: requests.append((args, kwargs)))
+    window.client_page.import_action.trigger()
+    page = window.import_page
+    assert window.stack.currentWidget() is page
+    deadline = time.monotonic() + 5
+    while not page.found and time.monotonic() < deadline:
+        qt.processEvents()
+    assert [f.path for f in page.found] == [source]
+    boxes = page.boxes
+    assert boxes['wow_classic_era'].isChecked() and not boxes['wowt'].isChecked()
+    assert not boxes['wow'].isEnabled() and 'installed' in boxes['wow'].text()
+    assert page.copy.isChecked() and 'WTF and Interface' in page.copy_note.text()
+    # Every control is reachable by keyboard, in reading order.
+    assert page.focus_chain()[-2:] == [page.cancel, page.confirm]
+    assert all(box in page.focus_chain() for box in boxes.values())
+    boxes['wowt'].setChecked(True)
+    page.copy.setChecked(False)
+    page.confirm.click()
+    assert requests == [(('wow_classic_era', 'install'), {'seed_from': str(source), 'copy_settings': False}),
+                        (('wowt', 'install'), {'seed_from': str(source), 'copy_settings': False})]
+    assert window.stack.currentWidget() is window.client_page
+
+
+def test_import_from_a_chosen_folder_explains_a_folder_without_an_installation(qt, window, tmp_path, monkeypatch):
+    import time
+    from waystone import imports
+    monkeypatch.setattr(imports, 'default_places', lambda: [])
+    window.settings.root = str(tmp_path / 'games')
+    window.open_library()
+    window.client_list.select('wow')
+    window.refresh()
+    window.open_import()
+    (tmp_path / 'empty').mkdir()
+    window.choose_import_folder()
+    assert window.stack.currentWidget() is window.import_folder_page
+    window.import_folder_page.path.setText(str(tmp_path / 'empty'))
+    window.import_folder_page.choose()
+    page = window.import_page
+    deadline = time.monotonic() + 5
+    while not page.problem.text() and time.monotonic() < deadline:
+        qt.processEvents()
+    assert window.stack.currentWidget() is page
+    assert 'No World of Warcraft installation' in page.problem.text()
+    assert not page.confirm.isEnabled()

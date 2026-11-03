@@ -1,6 +1,7 @@
 """Queue controls and restart recovery use private libraries and deterministic workers."""
 import hashlib
 import json
+import os
 import threading
 
 import pytest
@@ -348,3 +349,91 @@ def test_a_long_stage_before_the_transfer_reports_its_count_until_bytes_move(man
     worker.join(5)
     assert job.status == DONE, job.error
     assert seen == [(1200, 1411), None]
+
+
+def battle_net_copy(store_root, folder, code='wowf', client='_forever_'):
+    """A Battle.net-style installation whose content is the given store's, with a client folder of settings."""
+    import shutil
+    shutil.copytree(store_root / 'Data', folder / 'Data')
+    (folder / '.build.info').write_text(f'Branch!STRING:0|Product!STRING:0\neu|{code}\n')
+    game = folder / client
+    (game / 'WTF/Account/ME').mkdir(parents=True)
+    (game / '.flavor.info').write_text(f'Product Flavor!STRING:0\n{code}\n')
+    (game / 'Wow.exe').write_bytes(b'inert')
+    (game / 'WTF/Config.wtf').write_bytes(b'SET gxWindow "1"\n')
+    (game / 'WTF/Account/ME/bindings-cache.wtf').write_bytes(b'bind')
+    (game / 'Interface/AddOns/Bag').mkdir(parents=True)
+    (game / 'Interface/AddOns/Bag/Bag.toc').write_bytes(b'## Title: Bag')
+    return folder
+
+
+def tree(folder):
+    return {str(p.relative_to(folder)): (p.read_bytes() if p.is_file() else None, p.stat().st_mtime_ns)
+            for p in sorted(folder.rglob('*'))}
+
+
+def test_an_import_seeds_the_install_and_copies_settings_without_changing_the_source(managers, tmp_path):
+    from test_library import FixtureCDN, SyntheticBuild
+    build = SyntheticBuild()
+    with CascStore(tmp_path / 'store') as store:
+        for key, payload in build.objects.items():
+            store.put(key, payload)
+        store.publish()
+    source = battle_net_copy(tmp_path / 'store', tmp_path / 'bnet/World of Warcraft')
+    before = tree(source)
+    cdn = FixtureCDN(build, tmp_path / 'cache')
+    manager = managers()
+    manager.client_factory = lambda code, region: cdn
+    manager.enqueue('wowf', 'install', seed_from=str(source), copy_settings=True)
+    job = manager._next()
+    result = manager._execute(job)
+    assert result['complete'] and result['downloaded_objects'] == 0 and not cdn.fetched_keys
+    game = manager.library.root / '_forever_'
+    # The user's Config.wtf replaces the default one the install wrote.
+    assert (game / 'WTF/Config.wtf').read_bytes() == b'SET gxWindow "1"\n'
+    assert (game / 'WTF/Account/ME/bindings-cache.wtf').read_bytes() == b'bind'
+    # The install made INTERFACE for its own file. Addons join it instead of a second spelling beside it.
+    assert (game / 'INTERFACE/AddOns/Bag/Bag.toc').read_bytes() == b'## Title: Bag'
+    assert [n for n in os.listdir(game) if n.lower() == 'interface'] == ['INTERFACE']
+    assert result['settings']['copied'] == 3
+    assert tree(source) == before
+
+
+def test_an_import_keeps_its_source_through_a_restart_and_a_retry(managers, tmp_path):
+    source = str(tmp_path / 'bnet/World of Warcraft')
+    manager = managers()
+    manager.enqueue('wow', 'install', seed_from=source, copy_settings=True)
+    manager.enqueue('wowf', 'install')
+    manager.pause_all()
+    restored = managers()
+    job = restored.job('wow')
+    assert (job.seed_from, job.copy_settings) == (source, True)
+    assert restored.job('wowf').seed_from == ''
+    job.status, job.error = FAILED, 'Lost the connection'
+    retried = restored.enqueue('wow', 'install')       # Try again
+    assert (retried.seed_from, retried.copy_settings) == (source, True)
+
+
+def test_an_import_whose_source_is_gone_fails_clearly_before_reading_anything(managers, tmp_path):
+    manager = managers()
+    manager.client_factory = lambda *args: pytest.fail('A missing source must not start the install')
+    manager.enqueue('wow', 'install', seed_from=str(tmp_path / 'unplugged/World of Warcraft'))
+    job = manager._next()
+    with pytest.raises(Exception, match='not available.*unplugged'):
+        manager._execute(job)
+    assert not manager.library.client_dir('wow').exists()
+
+
+@pytest.mark.parametrize('case', ['inside_root', 'download_exists'])
+def test_an_import_is_refused_inside_the_installation_folder_or_over_a_download(managers, tmp_path, case):
+    from waystone.library import LibraryError
+    manager = managers()
+    source = str(tmp_path / 'other')
+    if case == 'inside_root':
+        source = str(manager.library.root / 'World of Warcraft')
+    else:
+        manager.enqueue('wow', 'install')
+    with pytest.raises(LibraryError):
+        manager.enqueue('wow', 'install', seed_from=source)
+    job = manager.job('wow')
+    assert job is None or job.seed_from == ''

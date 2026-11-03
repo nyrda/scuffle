@@ -105,6 +105,13 @@ def md5_file(path: Path) -> bytes:
         return hashlib.file_digest(handle, 'md5').digest()
 
 
+def default_preferences(region: str, locale: str) -> bytes:
+    """The Config.wtf a new client folder starts with. Imported settings may replace it."""
+    return (f'SET portal "{region.upper()}"\n'
+            f'SET textLocale "{locale}"\n'
+            f'SET audioLocale "{locale}"\n').encode()
+
+
 def flavor_info(code: str) -> bytes:
     return f'Product Flavor!STRING:0\n{code}\n'.encode()
 
@@ -856,11 +863,7 @@ class Updater:
         atomic_bytes(game / '.flavor.info', flavor_info(self.code))
         preferences = contained(game, 'WTF/Config.wtf')
         if not preferences.exists():
-            atomic_bytes(preferences, (
-                f'SET portal "{self.region.upper()}"\n'
-                f'SET textLocale "{self.locale}"\n'
-                f'SET audioLocale "{self.locale}"\n'
-            ).encode())
+            atomic_bytes(preferences, default_preferences(self.region, self.locale))
         total, size = self.plan.totals()[:2]
         state = self.snapshot | {'complete': True, 'objects': total, 'encoded_bytes': size,
             'managed_files': [x[0] for x in files], 'updated_at_unix': int(time.time())}
