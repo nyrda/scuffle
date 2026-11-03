@@ -22,7 +22,7 @@ for _name in ['XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'APPDATA', 'LOCALAPPDATA']:
 from PySide6.QtWidgets import QApplication, QScrollArea
 
 from waystone import discovery
-from waystone.downloads import FAILED, PAUSED, QUEUED, RUNNING, Job
+from waystone.downloads import FAILED, PAUSED, QUEUED, RUNNING, Job, MoveTask
 from waystone.settings import Settings
 from waystone.ui import app as ui
 
@@ -206,6 +206,7 @@ def main(output: Path) -> None:
         application.processEvents()
         time.sleep(0.02)
     shot('10b-folder')
+    move_states(window, shot, application)
     window.show_client_page()
     window.settings.show_other_clients = True
     window.settings.extra_clients = ['wow_classic_era_ptr', 'wowlivetest']
@@ -228,6 +229,50 @@ def main(output: Path) -> None:
     window.on_sign_in_requested('https://eu.account.battle.net/login/?externalChallenge=login&app=wow')
     shot('11-sign-in')
     print(f'Wrote {len(list(output.glob("*.png")))} screenshots to {output}')
+
+
+def move_states(window, shot, application) -> None:
+    """Moving the installation folder: the button, the picker, the confirmation and the progress."""
+    window.library.create()                     # the throwaway folder becomes an installation to move
+    window.open_settings()
+    shot('14-settings-move')
+    window.phases['wow'] = 'Running'
+    window.open_settings()
+    shot('14b-settings-move-refused', lambda: window.settings_page.move_button.setFocus())
+    window.phases.clear()
+    window.open_move_picker()
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        application.processEvents()
+        time.sleep(0.02)
+    shot('14c-move-picker')
+    target = str(Path(_home) / 'second-drive' / 'Waystone')
+    page = window.move_page
+    source = str(window.library.root)
+    page.load(source, target)
+    window.stack.setCurrentWidget(page)
+    shot('14d-move-checking')
+    page.show_preview({'destination': target, 'same_drive': False, 'size': 312_400_000_000,
+                       'free': 1_840_000_000_000, 'problem': ''})
+    shot('14e-move-other-drive')
+    page.show_preview({'destination': target, 'same_drive': True, 'size': 312_400_000_000,
+                       'free': 0, 'problem': ''})
+    shot('14f-move-same-drive')
+    page.show_preview({'destination': target, 'same_drive': False, 'size': 312_400_000_000,
+                       'free': 120_000_000_000, 'problem': 'The new drive has 120.0 GB free, but the '
+                       'installation needs 313.4 GB there.'})
+    shot('14g-move-no-space')
+    task = MoveTask(source, target, status=RUNNING, stage='copying', done_bytes=141_000_000_000,
+                    total_bytes=312_400_000_000, speed=182_000_000)
+    window.downloads.moving = task
+    window.open_settings()
+    shot('14h-moving-copying')
+    window.show_client_page()
+    shot('14i-moving-client')
+    task.stage, task.switched = 'removing_old', True
+    shot('14j-moving-removing-old')
+    window.downloads.moving = None
+    window.show_client_page()
 
 
 def launch_states(window, shot) -> None:

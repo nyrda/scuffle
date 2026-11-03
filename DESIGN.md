@@ -52,6 +52,78 @@ idempotent across each rename and deletion. Once started, removal cannot pause
 or cancel. Unstarted uninstall jobs are ignored when restoring `downloads.json`,
 so a new launch never deletes a client from an old, uncommitted confirmation.
 
+### Moving the installation folder
+
+**Move…** beside the folder in Settings moves the whole root to an empty or new
+folder. It runs in `move.py` on the DownloadManager worker as a `MoveTask`,
+which is not a job. While it is queued or running, `enqueue` refuses new jobs,
+the client page disables its actions, `Launcher.play` refuses to start, and the
+download bar shows the move.
+
+The move refuses running clients, existing jobs, paused and failed ones too,
+and a pending uninstall. The destination must be empty or missing, with an
+existing parent. It must not lie inside the root, nor the root inside it. The
+comparisons use `normcase` and `samefile` on existing ancestors, so another
+spelling on a case-insensitive drive or a bind mount of the root counts as
+inside. The root is walked under the library lock as uninstall walks it. Links,
+junctions, special files and anything mounted inside refuse the move, and the
+mount table decides for Linux bind mounts.
+
+The journal is `move.json` in Waystone's data folder, outside both roots,
+because a rename carries the root's own `.waystone` along. It records the
+token, both paths, the mode, the phase and whether the move created the
+destination. Each folder taking part carries `.waystone/move.json` with the
+token. `Library.locked()` refuses a folder with this marker and checks it under
+the lock that the move holds while it writes the marker. After that the lock is
+released, since Windows renames or deletes no folder while a file inside is
+open. A lock file next to the journal keeps a second Waystone from moving or
+recovering at the same time.
+
+- **One file system.** The source and the destination must both be ordinary
+  folders, not mount points. One `os.rename` moves the root. The marker moves
+  with it, so it shows which side the root is on after a crash. The setting is
+  saved, the marker cleared and the journal dropped. A failed save renames the
+  folder back.
+- **Across file systems.** The rename fails with `EXDEV`, or
+  `ERROR_NOT_SAME_DEVICE` on Windows, and the journal switches to copying. The
+  free space must cover the root plus 1 GB. The destination gets its marker
+  first, then every folder and file. Each file is synced, and `identity.json`
+  goes last, so a partial copy is never taken for an installation. Locks and
+  SQLite's `-shm` files are left out. The check compares the walk of both trees
+  and every size. It compares the store's records in `.waystone` and the
+  published indexes whole, and both ends of every other file over 4 MB. The
+  copied store must then open and read back the newest object of each segment.
+  Then the journal's phase becomes `switched`, the setting is saved, the copy's
+  marker is cleared and the source is deleted, its marker last. Cancel works
+  until the switch. It raises inside the copy, and the rollback deletes what
+  carries the token.
+
+Recovery reads the journal. A move that switched is finished: the setting is
+saved, unless the user pointed it at a third folder since, and the source is
+deleted. Any other move is undone: the partial copy is deleted, its own folder
+too when the move created it, and the source's marker is cleared. Recovery
+deletes only a folder that carries the journal's token, so a folder the user
+put there after a crash stays. It also removes the debris of a marker write
+that a crash cut short. A source with a running game, or with something that
+fails to delete, stays with its marker and journal for the next start. The
+window settles the setting and the markers before it opens the library, which
+takes no time. The worker then deletes the other folder as a settling
+`MoveTask`, so a large deletion never holds up the window. The command line
+recovers in full before it opens the library. Within a running Waystone, a
+failed or cancelled move runs the same recovery at once. A test kills a real
+process at every rename, write, copy and deletion of both modes and checks that
+one complete root remains and that recovery ends at it.
+
+Nothing inside the root names its own location. Client states, plans,
+`.build.info` and the store's catalogue use paths relative to the root.
+`downloads.json` names the root, but a move needs an empty queue. The new
+manager writes the new root with its next save. The shared Wine prefix stays in
+the data folder and maps `Z:` to `/`, so the game reaches any root. The game
+writes `InstallPath` under `HKLM\Software\Wow6432Node\Blizzard Entertainment\World of Warcraft`
+and Windows Error Reporting entries itself, with the folder it starts from. It
+rewrites them on its next start, and Waystone reads neither, so the move leaves
+the prefix and the Windows registry alone.
+
 ## Clients
 
 Clients come in three categories.
@@ -368,6 +440,9 @@ choose an installation folder.
 
 Settings live in the platform's configuration directory. Credentials live in
 the platform's data directory with owner-only permissions and DPAPI protection.
+The settings file is written under a lock, since the window and a move on the
+download worker can save at once. The settings page changes the folder only
+through Choose…, never from its field, so an older field cannot undo a move.
 Settings include the installation folder, region, locale, bandwidth limit, the
 clients listed, each client's launch options and, on Linux, the Proton build
 with its launch options. `extra_clients` holds the test and other clients chosen

@@ -15,14 +15,14 @@ from PySide6.QtGui import QDesktopServices, QIcon
 from PySide6.QtWidgets import (QApplication, QFrame, QGraphicsOpacityEffect, QHBoxLayout, QMainWindow, QPushButton, QStackedWidget,
                                QMenu, QStyleFactory, QVBoxLayout, QWidget)
 
-from .. import catalog, discovery, system
-from ..downloads import DONE, FAILED, PAUSED, QUEUED, RUNNING, DownloadManager, Job
+from .. import catalog, discovery, move, system
+from ..downloads import DONE, FAILED, PAUSED, QUEUED, RUNNING, DownloadManager, Job, MoveTask
 from ..launch import Launcher, LaunchError
 from ..library import Library, LibraryError, update_available
 from ..ngdp.cdn import CDNClient
 from ..settings import LOCALE_NAMES, MEGABYTE, REGIONS, Settings, cache_dir, data_dir
 from .client_options import ClientOptionsPage, summary as options_summary
-from .pages import ClientPage, FolderPage, QueuePage, SettingsPage, SignInPage, UninstallPage
+from .pages import ClientPage, FolderPage, MovePage, QueuePage, SettingsPage, SignInPage, UninstallPage
 from .style import SPACING, dark_palette, make_images, size_text, stylesheet
 from .widgets import ClientList, DownloadBar, fixed, label, progress_variants
 
@@ -42,12 +42,16 @@ class Bus(QObject):
     catalog_checked = Signal(str, object)   # region, what discovery found or None
     game_closed = Signal(str, str, bool)    # client, what closing did or an error, forced
     running_scanned = Signal(object, object)   # library, clients whose game runs
+    move_changed = Signal(object)           # the MoveTask of the installation folder
+    move_previewed = Signal(str, dict)      # the folder asked about, what moving there takes
 
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.settings = Settings.load()
+        # Before the library opens, so an interrupted move opens the folder it left complete.
+        self.move_notice = self.recover_move()
         self.bus = Bus()
         self.updates: dict[str, bool] = {}
         self.phases: dict[str, str] = {}      # client -> Checking for updates, Signing in, Starting, Running
@@ -69,6 +73,8 @@ class MainWindow(QMainWindow):
         self.bus.catalog_checked.connect(self.on_catalog)
         self.bus.game_closed.connect(self.on_game_closed)
         self.bus.running_scanned.connect(self.on_running_scanned)
+        self.bus.move_changed.connect(self.on_move)
+        self.bus.move_previewed.connect(self.on_move_preview)
         # Shift turns Close game into Force quit while it is held.
         QApplication.instance().installEventFilter(self)
         self.storage: dict = {}
@@ -114,6 +120,10 @@ class MainWindow(QMainWindow):
         self.settings_page.recheck_catalog.connect(lambda: self.discover(force=True))
         self.settings_page.closed.connect(self.show_client_page)
         self.settings_page.choose_folder.connect(self.open_folder_picker)
+        self.settings_page.move_folder.connect(self.open_move_picker)
+        self.move_page = MovePage()
+        self.move_page.cancelled.connect(lambda: self.stack.setCurrentWidget(self.settings_page))
+        self.move_page.confirmed.connect(self.confirm_move)
         self.sign_in_page = SignInPage()
         self.sign_in_page.finished.connect(self.on_sign_in_finished)
         self.folder_page = FolderPage()
@@ -129,7 +139,7 @@ class MainWindow(QMainWindow):
         self.queue_page.pause_all.connect(lambda: self.downloads.pause_all())
         self.queue_page.resume_all.connect(lambda: self.downloads.resume_all())
         for page in [self.client_page, self.settings_page, self.sign_in_page, self.folder_page, self.queue_page,
-                     self.options_page, self.uninstall_page]:
+                     self.options_page, self.uninstall_page, self.move_page]:
             self.stack.addWidget(page)
         right.addWidget(self.stack, 1)
         self.download_bar = DownloadBar()
@@ -139,6 +149,7 @@ class MainWindow(QMainWindow):
         self.download_bar.open_client.connect(self.open_client)
         self.download_bar.limit_changed.connect(self.set_limit)
         self.download_bar.show_queue.connect(self.open_queue)
+        self.download_bar.cancel_move.connect(lambda: self.downloads and self.downloads.cancel_move())
         self.download_bar.set_limit(self.settings.bandwidth_limit // MEGABYTE)
         right.addWidget(self.download_bar)
         layout.addLayout(right, 1)
@@ -158,6 +169,8 @@ class MainWindow(QMainWindow):
         # Messages for every page, one at a time. The next shows once the current one is dismissed,
         # if it still applies then.
         self.startup_notices: list[tuple] = []
+        if self.move_notice:
+            self.startup_notices.append((lambda: True, *self.move_notice))
         if self.settings.problems:
             # First, since the file is rewritten without them on the next save.
             self.startup_notices.append((lambda: True, f'Some saved launch options were invalid and were '
@@ -185,6 +198,24 @@ class MainWindow(QMainWindow):
         self.library = Library(self.settings.root)
         self.downloads = DownloadManager(self.settings, self.library)
         self.downloads.listeners.append(self.bus.job_changed.emit)
+        self.downloads.move_listeners.append(self.bus.move_changed.emit)
+
+    def recover_move(self) -> tuple | None:
+        """Settle a move a crash interrupted. The worker deletes what is left of the other folder."""
+        try:
+            result = move.recover(self.settings, delete=False)
+        except (LibraryError, OSError, ValueError) as error:
+            return (f'An interrupted move of the installation folder could not be settled. {error}', 'error')
+        if not result or result['recovered'] == 'nothing':
+            return None
+        if result['recovered'] == 'finished':
+            return (f'The interrupted move of the installation folder was finished. It is now '
+                    f'{result["destination"]}.', 'info')
+        return (f'The interrupted move of the installation folder was undone. It stays at {result["source"]}.', 'info')
+
+    def moving(self) -> MoveTask | None:
+        task = self.downloads.moving if self.downloads else None
+        return task if task and task.active else None
 
     # Layout
 
@@ -457,6 +488,8 @@ class MainWindow(QMainWindow):
                                        else 'Available once the game has started' if launching_any
                                        else 'Available after the sign-in' if signing_in or self._signing_in else '')
         self.refresh_downloads()
+        if self.stack.currentWidget() is self.settings_page:
+            self.update_move_button()       # a game can start or stop at any time
         code = self.selected()
         if code is None:
             self.client_page.show_empty()
@@ -492,6 +525,7 @@ class MainWindow(QMainWindow):
         launching = code in self.phases
         failed = bool(job and job.status == FAILED)
         removing = bool(job and job.kind == 'uninstall' and job.status == RUNNING)
+        moving = self.moving() is not None
         running = self.game_running(code)
         force = running and bool(QApplication.queryKeyboardModifiers() & Qt.ShiftModifier)
         if removing:
@@ -556,7 +590,7 @@ class MainWindow(QMainWindow):
         self.client_page.show_client(
             client, status=status, tone_name=tone_name, primary=primary,
             primary_enabled=bool(self.library) and not removing and primary != 'Queued'
-                            and ((force or code not in self.closing) if running else not launching),
+                            and ((force or code not in self.closing) if running else not launching and not moving),
             primary_tip=self.primary_tip(code),
             installed=bool(state),
             busy=(launching and self.phases[code] != 'Running') or preparing, progress=progress,
@@ -564,6 +598,8 @@ class MainWindow(QMainWindow):
             progress_text=progress_text, cancellable=downloading and not removing, paused=bool(job and job.status == PAUSED),
             modes=[(m.id, m.label) for m in client.modes], mode=self.settings.modes.get(code),
             facts=self.facts(code), hint=hint, hideable=code not in self.kept_split()[1])
+        if moving:
+            self.client_page.verify_action.setEnabled(False)
         reason = self.uninstall_reason(code)
         self.client_page.uninstall_action.setEnabled(bool(state) and not reason)
         self.client_page.uninstall_action.setToolTip(reason)
@@ -591,6 +627,8 @@ class MainWindow(QMainWindow):
     def primary_tip(self, code: str) -> str:
         if not self.library:
             return 'Choose an installation folder in Settings first.'
+        if self.moving() and not self.game_running(code):
+            return 'Waystone is moving the installation folder. Games and downloads start once it is done.'
         if self.game_running(code):
             return ('Closes the game as its window\'s close button does. Hold Shift to force quit, '
                     'which ends it at once, as when it hangs.')
@@ -613,6 +651,12 @@ class MainWindow(QMainWindow):
     def refresh_downloads(self):
         if not self.downloads:
             self.download_bar.hide()
+            return
+        if (task := self.moving()) is not None:
+            # No job exists during a move, so the bar shows the move instead.
+            self.download_bar.show_move(task)
+            self.download_bar.setVisible(self.stack.currentWidget() is not self.queue_page)
+            self.align_download_bar()
             return
         current = self.downloads.current()
         waiting = self.downloads.pending()
@@ -716,6 +760,7 @@ class MainWindow(QMainWindow):
         if section:
             self.settings_page.show_section(section)
         self.settings_page.lock_folder(self.folder_lock())
+        self.update_move_button()
         self.stack.setCurrentWidget(self.settings_page)
         self.settings_page.close_button.setFocus()  # so Esc closes it at once
         self.settings_button.setChecked(True)
@@ -743,8 +788,101 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentWidget(self.folder_page)
 
     def on_folder_chosen(self, folder: str):
+        if self.folder_page.purpose == 'move':
+            self.open_move_page(folder)
+            return
         self.settings_page.set_root(folder)
         self.stack.setCurrentWidget(self.settings_page)
+
+    # Moving the installation folder
+
+    def move_reason(self) -> str:
+        """Why the installation folder cannot move now, or nothing."""
+        if self.moving():
+            return 'The installation folder is being moved.'
+        if self.phases or self.running_now():
+            return 'Close the game before moving the installation folder.'
+        if self.downloads and any(j.status != DONE for j in self.downloads.jobs):
+            return 'Finish or remove every download before moving the installation folder.'
+        return ''
+
+    def update_move_button(self) -> None:
+        self.settings_page.lock_move(self.move_reason(), bool(self.library and self.library.exists()))
+
+    def open_move_picker(self):
+        if self.move_reason() or not self.library:
+            return
+        self.folder_page.start(str(self.library.root.parent), purpose='move')
+        self.stack.setCurrentWidget(self.folder_page)
+
+    def open_move_page(self, folder: str):
+        self.move_page.load(str(self.library.root), folder)
+        self.stack.setCurrentWidget(self.move_page)
+        self.update_tab_order()
+        library = self.library
+
+        def work():
+            # Walking a large installation and reading free space can take a moment.
+            self.bus.move_previewed.emit(folder, move.preview(library, folder))
+
+        threading.Thread(target=work, name='waystone-move-check', daemon=True).start()
+
+    def on_move_preview(self, folder: str, preview: dict):
+        if folder == self.move_page.destination:
+            self.move_page.show_preview(preview)
+            reason = self.move_reason()
+            if reason and not preview.get('problem'):
+                self.move_page.set_reason(reason)
+
+    def confirm_move(self):
+        page = self.move_page
+        reason = self.move_reason()
+        if reason:
+            page.set_reason(reason)
+            return
+        try:
+            self.downloads.start_move(page.destination)
+        except LibraryError as error:
+            page.set_reason(str(error))
+            return
+        self.stack.setCurrentWidget(self.settings_page)
+        self.update_tab_order()
+        self.refresh()
+
+    def on_move(self, task: MoveTask):
+        if task.switched and self.library and not move.same_place(self.library.root, task.destination) \
+                and not task.settle:
+            # The setting names the new folder now. The page and the list read from it while
+            # the old one is deleted, and the queue follows once the move is done.
+            self.library = Library(task.destination)
+            self.settings_page.show_root(self.settings.root)
+        if not task.active:
+            self.finish_move(task)
+        self.settings_page.lock_folder(self.folder_lock())
+        self.update_move_button()
+        self.refresh()
+
+    def finish_move(self, task: MoveTask):
+        result, leftover = task.result, task.result.get('leftover')
+        later = f' The old folder {leftover} could not be removed completely. Waystone tries again on the next start.'
+        if task.settle:
+            if task.status == FAILED:
+                self.notify(f'An interrupted move of the installation folder could not be finished. {task.error}',
+                            'error', client='')
+            elif leftover:
+                self.notify(later.strip(), 'info', client='')
+            return
+        if task.status == FAILED:
+            self.notify(f'The installation folder was not moved. {task.error}', 'error', client='')
+        elif result.get('cancelled'):
+            self.notify(f'The move was cancelled. The installation folder stays at {task.source}.', 'info', client='')
+        elif result.get('moved'):
+            self.settings_page.show_root(self.settings.root)
+            self.open_library()
+            self.measure_storage()
+            self.check_updates()
+            self.notify(f'The installation folder is now {task.destination}.' + (later if leftover else ''),
+                        'info', client='')
 
     def open_queue(self):
         if self.stack.currentWidget() is self.sign_in_page:
@@ -777,6 +915,8 @@ class MainWindow(QMainWindow):
         if self.game_running(code):
             self.close_game(code, force=bool(QApplication.queryKeyboardModifiers() & Qt.ShiftModifier))
             return
+        if self.moving():
+            return              # the button is disabled meanwhile, but a click can be on its way
         if job and job.status == FAILED:
             self.clear_notice(code)
             self.downloads.enqueue(code, 'repair' if job.kind == 'verify' else job.kind)
@@ -840,6 +980,8 @@ class MainWindow(QMainWindow):
         return super().eventFilter(watched, event)
 
     def verify(self):
+        if self.moving():
+            return
         self.downloads.enqueue(self.selected(), 'verify')
         self.refresh()
 
@@ -872,6 +1014,8 @@ class MainWindow(QMainWindow):
     def uninstall_reason(self, code: str) -> str:
         if not self.library or not self.library.state(code):
             return 'This client is not installed.'
+        if self.moving():
+            return 'Wait until the installation folder has moved.'
         if code in self.phases:
             return 'Close the client before uninstalling.'
         job = self.downloads.job(code) if self.downloads else None
@@ -1064,12 +1208,15 @@ class MainWindow(QMainWindow):
 
     def folder_lock(self) -> str:
         """Why the installation folder cannot change now, or nothing."""
+        if self.moving():
+            return 'The installation folder is being moved.'
         if self.downloads and (self.downloads.busy() or self.downloads.pending()):
             return 'Finish or cancel the downloads to choose another folder.'
         return ''
 
     def on_job(self, job: Job):
         self.settings_page.lock_folder(self.folder_lock())
+        self.update_move_button()
         self.settings_page.set_clients(self.offered())
         self.settings_page.lock_clients(*self.kept_split())
         if job.status == DONE:
@@ -1190,8 +1337,10 @@ class MainWindow(QMainWindow):
         if self.downloads:
             self.downloads.shutdown()
         if self.downloads and self.downloads.busy():
-            # Keep stored content and the queue for the next start.
-            self.notify('Pausing downloads before closing…', 'info', client='')
+            # Keep stored content and the queue for the next start. A move stops before its switch,
+            # or the next start finishes it.
+            self.notify('Stopping the move before closing…' if self.moving() else 'Pausing downloads before closing…',
+                        'info', client='')
             self.stack.setCurrentWidget(self.client_page)
             QApplication.processEvents()
             deadline = time.monotonic() + 30

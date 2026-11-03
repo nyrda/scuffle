@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass, field
 import json
 import os
 from pathlib import Path
+import threading
 
 from . import system
 from .launch_options import ClientOptions, LinuxOptions
@@ -146,6 +147,12 @@ class Settings:
             self.hidden_clients = sorted(self.hidden_clients + [code])
 
     def save(self) -> None:
-        self.validate()
         from .library import atomic_json
-        atomic_json(self.path(), asdict(self))
+        # The window and a move on the download worker can both save. Each writes the
+        # values of the moment it holds the lock, so the move's new folder is never undone.
+        with _saving:
+            self.validate()
+            atomic_json(self.path(), asdict(self))
+
+
+_saving = threading.Lock()

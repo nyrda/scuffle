@@ -11,7 +11,7 @@ import sqlite3
 import threading
 from typing import Callable
 
-from . import catalog
+from . import catalog, move
 from .library import Cancelled, Library, LibraryError, Updater, atomic_json
 from .ngdp.cdn import CDNClient, Throttle
 from .settings import Settings, cache_dir, data_dir
@@ -41,6 +41,35 @@ class Job:
         return self.done_bytes / self.total_bytes if self.total_bytes else 0.0
 
 
+@dataclass
+class MoveTask:
+    """Moving the installation folder. It runs on the worker with no job in the queue."""
+    source: str
+    destination: str
+    settle: bool = False          # finishing an interrupted move from its journal, not a new one
+    status: str = QUEUED
+    stage: str = ''
+    done_bytes: int = 0
+    total_bytes: int = 0
+    speed: float = 0.0
+    error: str = ''
+    result: dict = field(default_factory=dict)
+    cancel_requested: bool = False
+    switched: bool = False        # the setting names the new folder now
+
+    @property
+    def fraction(self) -> float:
+        return self.done_bytes / self.total_bytes if self.total_bytes else 0.0
+
+    @property
+    def active(self) -> bool:
+        return self.status in {QUEUED, RUNNING}
+
+    @property
+    def cancellable(self) -> bool:
+        return self.active and not self.settle and not self.switched and self.stage not in {'switching', 'removing_old'}
+
+
 class DownloadManager:
     def __init__(self, settings: Settings, library: Library, *, client_factory=None):
         self.settings, self.library = settings, library
@@ -48,6 +77,8 @@ class DownloadManager:
         self.client_factory = client_factory or self._client
         self.jobs: list[Job] = []
         self.listeners: list[Callable[[Job], None]] = []
+        self.move_listeners: list[Callable[[MoveTask], None]] = []
+        self.moving: MoveTask | None = None
         self._lock = threading.Condition()
         self._pause = threading.Event()
         self._current: Job | None = None
@@ -64,6 +95,14 @@ class DownloadManager:
         if (code := library.uninstalling()):
             self.jobs = [j for j in self.jobs if j.client != code]
             self.jobs.insert(0, Job(code, 'uninstall'))
+        # An interrupted move whose setting the window already settled still has a folder to
+        # delete. It runs first, and nothing else starts until it is done.
+        try:
+            record = move.read_journal()
+        except LibraryError:
+            record = None       # the window reports a damaged journal
+        if record:
+            self.moving = MoveTask(record['source'], record['destination'], settle=True)
         self._worker = threading.Thread(target=self._run, name='waystone-downloads', daemon=True)
         self._worker.start()
 
@@ -141,6 +180,8 @@ class DownloadManager:
         if kind not in {'install', 'update', 'verify', 'repair', 'uninstall'}:
             raise ValueError(f'Unknown job kind {kind!r}')
         with self._lock:
+            if self.moving and self.moving.active:
+                raise LibraryError('Wait until the installation folder has moved.')
             existing = self.job(client)
             if kind == 'uninstall' and existing and existing.status != DONE and existing.kind != 'uninstall':
                 raise LibraryError('Remove the download job before uninstalling')
@@ -287,7 +328,36 @@ class DownloadManager:
 
     def busy(self) -> bool:
         with self._lock:
-            return self._current is not None
+            return self._current is not None or bool(self.moving and self.moving.active)
+
+    # Moving the installation folder
+
+    def start_move(self, destination: str) -> MoveTask:
+        """Queue a move of the installation folder. Refused while any job exists."""
+        with self._lock:
+            if self._stopping:
+                raise LibraryError('Waystone is closing.')
+            if self.moving and self.moving.active:
+                raise LibraryError('The installation folder is already being moved.')
+            if self._current is not None or any(j.status != DONE for j in self.jobs):
+                raise LibraryError('Finish or remove every download before moving the installation folder.')
+            task = self.moving = MoveTask(str(self.library.root), str(destination))
+            self._lock.notify_all()
+        self._notify_move(task)
+        return task
+
+    def cancel_move(self) -> None:
+        """Stop a copy before the switch. Afterwards the move always finishes."""
+        with self._lock:
+            task = self.moving
+            if not task or not task.cancellable:
+                return
+            task.cancel_requested = True
+        self._notify_move(task)
+
+    def _notify_move(self, task: MoveTask) -> None:
+        for listener in list(self.move_listeners):
+            listener(task)
 
     def current(self) -> Job | None:
         with self._lock:
@@ -296,6 +366,9 @@ class DownloadManager:
     def shutdown(self) -> None:
         with self._lock:
             self._stopping = True
+            if self.moving and self.moving.status == QUEUED:
+                # Never started, so nothing changed. A settling move resumes on the next start.
+                self.moving.status, self.moving.result = DONE, {'cancelled': True}
             self.pause_all()
             self._lock.notify_all()
 
@@ -308,6 +381,9 @@ class DownloadManager:
     def _next(self) -> Job | None:
         with self._lock:
             while not self._stopping:
+                if self.moving and self.moving.status == QUEUED:
+                    self.moving.status = RUNNING
+                    return self.moving
                 job = next((j for j in self.jobs if j.status == QUEUED), None)
                 if job and (not self._game_running or job.client in self._overrides):
                     job.status, job.error = RUNNING, ''
@@ -320,6 +396,9 @@ class DownloadManager:
 
     def _run(self) -> None:
         while (job := self._next()) is not None:
+            if isinstance(job, MoveTask):
+                self._run_move(job)
+                continue
             self._notify(job)
             status, error = DONE, ''
             try:
@@ -338,6 +417,38 @@ class DownloadManager:
                 self._resume_requested.discard(job.client)
                 self._save()
             self._notify(job)
+
+    def _run_move(self, task: MoveTask) -> None:
+        self._notify_move(task)
+        rate = RateSmoother()
+
+        def progress(event: dict) -> None:
+            nonlocal rate
+            if event['stage'] != task.stage:
+                rate, task.speed = RateSmoother(), 0.0
+            task.stage = event['stage']
+            task.switched = task.switched or task.stage == 'removing_old'
+            if 'total_bytes' in event:
+                task.done_bytes, task.total_bytes = event['bytes'], event['total_bytes']
+                task.speed = rate.update(task.done_bytes)
+            self._notify_move(task)
+
+        status, error, result = DONE, '', {}
+        try:
+            if task.settle:
+                result = move.recover(self.settings, progress=progress) or {}
+            else:
+                result = move.move(self.library, task.destination, self.settings, progress=progress,
+                                   cancelled=lambda: task.cancel_requested or self._stopping,
+                                   has_jobs=lambda: any(j.status != DONE for j in self.jobs))
+        except Cancelled:
+            result = {'cancelled': True}
+        except (LibraryError, OSError, ValueError, RuntimeError, sqlite3.Error) as failure:
+            status, error = FAILED, str(failure)
+        with self._lock:
+            task.status, task.error, task.speed, task.result = status, error, 0.0, result
+            task.switched = task.switched or bool(result.get('moved'))
+        self._notify_move(task)
 
     def _execute(self, job: Job) -> dict:
         if job.kind == 'uninstall':

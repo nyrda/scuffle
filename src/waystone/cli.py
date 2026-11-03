@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 import sys
 
-from . import catalog, system
+from . import catalog, move, system
 from .library import Library, LibraryError, Updater
 from .ngdp.cdn import CDNClient
 from .settings import Settings, cache_dir
@@ -72,6 +72,11 @@ def main(argv=None):
         from .ui.app import main as interface
         return interface()
     settings = Settings.load()
+    if args.root is None:
+        try:
+            move.recover(settings)      # an interrupted move decides which folder is the installation
+        except (LibraryError, OSError):
+            pass                        # such as another Waystone moving it. The library refuses changes meanwhile
     root = args.root or (Path(settings.root) if settings.root else None)
     if root is None:
         raise LibraryError('Choose an installation folder with --root')
