@@ -14,9 +14,9 @@ import os
 import unittest
 from unittest import mock
 
-from waystone.ngdp.cdn import (CDNClient, CDNError, HTTPStatusError, IntegrityError,
+from scuffle.ngdp.cdn import (CDNClient, CDNError, HTTPStatusError, IntegrityError,
                             parse_config, parse_index, parse_psv)
-from waystone.ngdp.models import DownloadEntry, Location
+from scuffle.ngdp.models import DownloadEntry, Location
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

@@ -7,7 +7,7 @@ import tempfile
 import unittest
 import zlib
 
-from waystone.ngdp.formats import (
+from scuffle.ngdp.formats import (
     EncodingTable, FormatError, UnsupportedEncodingError, blte_header,
     decode_blte, get_blte_encoded_key, parse_psv, read_config,
     read_download, read_install, verify_blte,

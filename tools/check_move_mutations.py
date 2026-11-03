@@ -6,11 +6,11 @@ Sources are restored after every mutation. Reports stay in .pytest_cache.
 from check_uninstall_mutations import ROOT, replace, run
 
 OUTPUT = ROOT / '.pytest_cache' / 'move-mutations'
-MOVE = 'src/waystone/move.py'
-LIB = 'src/waystone/library.py'
-QUEUE = 'src/waystone/downloads.py'
-LAUNCH = 'src/waystone/launch.py'
-APP = 'src/waystone/ui/app.py'
+MOVE = 'src/scuffle/move.py'
+LIB = 'src/scuffle/library.py'
+QUEUE = 'src/scuffle/downloads.py'
+LAUNCH = 'src/scuffle/launch.py'
+APP = 'src/scuffle/ui/app.py'
 
 
 def test(name, parameter='', file='move'):

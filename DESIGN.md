@@ -1,6 +1,6 @@
-# Waystone design
+# Scuffle design
 
-Waystone installs, updates and launches the public World of Warcraft clients
+Scuffle installs, updates and launches the public World of Warcraft clients
 without the Battle.net desktop client. It runs on Linux and is structured so
 that a Windows build needs only a different runtime layer.
 
@@ -13,7 +13,7 @@ that a Windows build needs only a different runtime layer.
   account or several with quick switching.
 - A download manager with a queue, pause and resume, a bandwidth limit, and
   cleanup of content no installed client needs.
-- Updates are checked before launch and can run while Waystone is open.
+- Updates are checked before launch and can run while Scuffle is open.
 
 Not in scope: account ownership filtering, starting a client before its
 download finished, and delta patches. The game
@@ -25,7 +25,7 @@ The installed client's menu opens an in-app confirmation page. It quotes the
 storage card's content size as an upper bound because other clients can share
 those bytes. Keeping WTF, Interface and Screenshots is checked by default to
 protect settings, addons and pictures. They move to
-`Waystone-backup-<code>-<uuid>` inside the managed root.
+`Scuffle-backup-<code>-<uuid>` inside the managed root.
 
 `Library.uninstall` runs under the library lock on the DownloadManager worker.
 It refuses running clients, unfinished updates, and existing jobs, including
@@ -35,9 +35,9 @@ containment and refuses symlinks, junctions and anything mounted inside, such as
 a bind mount, in game files, state, backups, and the CASC store. Linux bind mounts
 of the same file system share its device number, so the mount table decides.
 
-Before moving any files, it atomically writes `.waystone/uninstall.json`.
+Before moving any files, it atomically writes `.scuffle/uninstall.json`.
 Readers immediately treat that client as not installed. The game folder moves
-to `.waystone-trash-<uuid>`, selected settings move to the backup, and the
+to `.scuffle-trash-<uuid>`, selected settings move to the backup, and the
 client's state folder moves into the trash too. Removal then rewrites
 `.build.info` and removes the journal. Only renames come before that point, so
 the client is either installed or removed. Deleting the trash and the cleanup
@@ -70,14 +70,14 @@ inside. The root is walked under the library lock as uninstall walks it. Links,
 junctions, special files and anything mounted inside refuse the move, and the
 mount table decides for Linux bind mounts.
 
-The journal is `move.json` in Waystone's data folder, outside both roots,
-because a rename carries the root's own `.waystone` along. It records the
+The journal is `move.json` in Scuffle's data folder, outside both roots,
+because a rename carries the root's own `.scuffle` along. It records the
 token, both paths, the mode, the phase and whether the move created the
-destination. Each folder taking part carries `.waystone/move.json` with the
+destination. Each folder taking part carries `.scuffle/move.json` with the
 token. `Library.locked()` refuses a folder with this marker and checks it under
 the lock that the move holds while it writes the marker. After that the lock is
 released, since Windows renames or deletes no folder while a file inside is
-open. A lock file next to the journal keeps a second Waystone from moving or
+open. A lock file next to the journal keeps a second Scuffle from moving or
 recovering at the same time.
 
 - **One file system.** The source and the destination must both be ordinary
@@ -91,7 +91,7 @@ recovering at the same time.
   first, then every folder and file. Each file is synced, and `identity.json`
   goes last, so a partial copy is never taken for an installation. Locks and
   SQLite's `-shm` files are left out. The check compares the walk of both trees
-  and every size. It compares the store's records in `.waystone` and the
+  and every size. It compares the store's records in `.scuffle` and the
   published indexes whole, and both ends of every other file over 4 MB. The
   copied store must then open and read back the newest object of each segment.
   Then the journal's phase becomes `switched` and the setting is saved. The
@@ -115,7 +115,7 @@ fails to delete, stays with its marker and journal for the next start. The
 window settles the setting and the markers before it opens the library, which
 takes no time. The worker then deletes the other folder as a settling
 `MoveTask`, so a large deletion never holds up the window. The command line
-recovers in full before it opens the library. Within a running Waystone, a
+recovers in full before it opens the library. Within a running Scuffle, a
 failed or cancelled move runs the same recovery at once, from the journal on
 disk rather than from its own copy, which a failed write can leave ahead. A test kills a real
 process at every rename, write, copy and deletion of both modes and checks that
@@ -128,7 +128,7 @@ manager writes the new root with its next save. The shared Wine prefix stays in
 the data folder and maps `Z:` to `/`, so the game reaches any root. The game
 writes `InstallPath` under `HKLM\Software\Wow6432Node\Blizzard Entertainment\World of Warcraft`
 and Windows Error Reporting entries itself, with the folder it starts from. It
-rewrites them on its next start, and Waystone reads neither, so the move leaves
+rewrites them on its next start, and Scuffle reads neither, so the move leaves
 the prefix and the Windows registry alone.
 
 ## Clients
@@ -151,7 +151,7 @@ The live and test clients are built in. Their labels, install UIDs and modes com
 from Battle.net's public catalog (the `catalogs` product on the CDN). Its
 `world_of_warcraft` fragment has an `installs` table that names each install
 UID's product, such as `wow_ptr` for `wowt`, `wow_classic_anniversary` for
-`wow_anniversary` and `wow_dark` for `wowlivetest`. The other clients Waystone
+`wow_anniversary` and `wow_dark` for `wowlivetest`. The other clients Scuffle
 has a name for take their UIDs from the same table. Each client's folder name comes from its public
 product configuration (`shared_container_default_subfolder`). Its `.flavor.info`
 holds the NGDP product code. Every client launches its own executable, such as
@@ -160,7 +160,7 @@ Classic Era modes add `-initialgamemode=cera`, `chc` or `csod`.
 
 ### Look
 
-Waystone ships no Blizzard artwork, logos or icons. Each client's tile is drawn
+Scuffle ships no Blizzard artwork, logos or icons. Each client's tile is drawn
 in code: a gradient in the client's color with a plain glyph. Retail has a
 star, Mists of Pandaria Classic a crescent, Burning Crusade Anniversary a flame,
 Classic Era an hourglass and Forever a loop. Test and other public clients take
@@ -178,7 +178,7 @@ Warcraft product for the chosen region. The selector shows each client's
 published version and marks a test or other build whose patch is behind its
 live client as older than live, or as an old build.
 
-A product without a built-in entry is offered only when it is public. Waystone
+A product without a built-in entry is offered only when it is public. Scuffle
 reads it as an install would: the product configuration, the build
 configuration and the install manifest must download and decode without a
 decryption key, and the manifest must hold a game executable. The vendor,
@@ -204,7 +204,7 @@ not checked again.
 
 ## Installation folder
 
-Waystone owns its folder exclusively. Battle.net must not manage it.
+Scuffle owns its folder exclusively. Battle.net must not manage it.
 
 ```text
 <root>/
@@ -213,7 +213,7 @@ Waystone owns its folder exclusively. Battle.net must not manage it.
   Data/data/            shared CASC segments and indexes
   Data/indices/         CDN archive indexes
   _retail_/ _forever_/  per-client executables, settings, logs and add-ons
-  .waystone/            inventory, per-client plans and state, staging
+  .scuffle/            inventory, per-client plans and state, staging
 ```
 
 Content is addressed by encoding key. A key needed by several clients is
@@ -269,7 +269,7 @@ such as Forever's, often takes this path.
 
 A download looks up which CDN archive holds each object. Blizzard often does
 not publish a build's archive-group index, and Forever's builds list about 1400
-archives. Waystone then fetches every archive's own index, about 7 million
+archives. Scuffle then fetches every archive's own index, about 7 million
 locations in all.
 
 - Indexes download in parallel and are verified before they are cached.
@@ -322,7 +322,7 @@ field numbers. Inside a prefix, `C:` maps to `drive_c` and other drives to the
 prefix's `dosdevices` links.
 
 A folder is an installation when it has `.build.info` and a `Data` folder with
-CASC indexes and is not a Waystone folder. Its clients are its subfolders whose
+CASC indexes and is not a Scuffle folder. Its clients are its subfolders whose
 `.flavor.info` names a product, or whose name Battle.net uses, such as
 `_classic_era_`. A subfolder counts only when `.build.info` lists its product
 or it holds a game executable, since Battle.net leaves a removed client's
@@ -365,9 +365,9 @@ and run to completion.
 ## Sign-in
 
 1. A logon without a ticket returns Battle.net's sign-in URL.
-2. Waystone opens it in the default browser.
+2. Scuffle opens it in the default browser.
 3. After signing in, the browser fails to open `http://localhost:0/?ST=...`.
-   The user copies that address. Waystone reads it from the clipboard when its
+   The user copies that address. Scuffle reads it from the clipboard when its
    window regains focus, or the user pastes it.
 4. `VerifyAuthToken` completes the logon, and `GenerateAuthToken` reserves the
    first renewable ticket.
@@ -375,8 +375,8 @@ and run to completion.
 Each launch consumes the saved ticket, reserves its successor and issues a
 separate game ticket. A rejected session starts the sign-in again. The game
 reads its ticket only from `HKCU\Software\Blizzard Entertainment\Battle.net\Launch Options\WoW`,
-so Waystone writes `WEB_TOKEN` and `ACCOUNT_TS` there right before launch.
-Waystone never reads or uses Battle.net's own saved login.
+so Scuffle writes `WEB_TOKEN` and `ACCOUNT_TS` there right before launch.
+Scuffle never reads or uses Battle.net's own saved login.
 
 ### WoW account
 
@@ -400,17 +400,17 @@ use unless `GAME_ACCOUNT` names it, as the Battle.net app writes it with
   game's own question. A chosen account that is gone, or another login, falls
   back to that question and never to another account.
 - The bridge gets `--game-account <name> <region>` before the game's path and
-  writes both values next to the ticket, as Waystone does itself on Windows.
+  writes both values next to the ticket, as Scuffle does itself on Windows.
   Without a choice `GAME_ACCOUNT` is removed, so one from an earlier start
   cannot linger.
 
 The device fingerprint is derived from a 64-byte seed under
-`HKCU\...\Battle.net\Identity`. Waystone creates it if the prefix has none and
+`HKCU\...\Battle.net\Identity`. Scuffle creates it if the prefix has none and
 keeps it afterwards. See [docs/device-id.md](docs/device-id.md).
 
 ### Several Battle.net accounts
 
-Waystone keeps one renewable session per Battle.net account. One of them is
+Scuffle keeps one renewable session per Battle.net account. One of them is
 active, and every Play uses the active one. The sessions live in the data
 directory:
 
@@ -429,7 +429,7 @@ session/
 - **Key.** A login is keyed by the Battle.net account id from the logon's
   `LogonRecord`, the same id `game_accounts` in the settings uses. It is never
   keyed by the email, and the email is never stored. Only a session from an
-  older Waystone whose account id was never read uses the key `unknown`. Its
+  older Scuffle whose account id was never read uses the key `unknown`. Its
   first renewal reads the id and renames the folder. A folder without
   `session.dpapi` is not a login. Folders are `0700` and files `0600` on
   Linux, and every ticket is DPAPI-protected as before.
@@ -481,9 +481,9 @@ row below shows the active login's WoW accounts.
 
 #### Migration
 
-A session from an older Waystone is `session.dpapi` and `accounts.json`
-directly in `session/`. Waystone moves it while it holds the session lock, the
-same lock an older Waystone renews under, so the two never interleave. Its key is
+A session from an older Scuffle is `session.dpapi` and `accounts.json`
+directly in `session/`. Scuffle moves it while it holds the session lock, the
+same lock an older Scuffle renews under, so the two never interleave. Its key is
 the owner in `accounts.json`, or `unknown` without one.
 
 1. The new login's folder is created, and `accounts.json` and `login.json` are
@@ -496,17 +496,17 @@ repeats the steps. A crash after it leaves a complete login and an old
 `accounts.json`, which the next start deletes. No ticket is used or renewed by
 the migration, so the user stays signed in. Every read of the logins migrates
 when it can take the lock. While another process holds it, or while the move
-fails, the old session is listed and renewed in place under the same key. A session that an older Waystone writes
+fails, the old session is listed and renewed in place under the same key. A session that an older Scuffle writes
 later, after a new sign-in, is newer and replaces the login with its key.
-Going back to an older Waystone afterwards needs a new sign-in.
+Going back to an older Scuffle afterwards needs a new sign-in.
 
 ## Runtime
 
 | | Linux | Windows |
 | --- | --- | --- |
 | Game | Proton through `umu-run`, found at the standard paths | native |
-| Bridge | the Windows bridge inside the Wine prefix | none, Waystone does its work in `runtime/windows.py` |
-| Prefix | one Waystone prefix, shared by all clients | none |
+| Bridge | the Windows bridge inside the Wine prefix | none, Scuffle does its work in `runtime/windows.py` |
+| Prefix | one Scuffle prefix, shared by all clients | none |
 | Registry | the prefix's `HKCU` | the user's `HKCU` |
 
 The bridge does DPAPI protection, the device fingerprint, the registry write
@@ -514,14 +514,14 @@ and the game start. The game runs in its own runtime and never joins another
 client's container.
 
 Smart App Control and other Windows code integrity policies block unsigned
-programs, and the bridge is one. On Windows Waystone therefore does the same
+programs, and the bridge is one. On Windows Scuffle therefore does the same
 work itself through `ctypes` and `winreg`, following `bridge/*.c` field for
 field. CPUID runs from a few bytes of machine code, since Python has no way to
 issue the instruction. Under Wine the C bridge and the Python port produced the
 same fingerprint bytes, and each decrypted what the other protected.
 
-A packaged Waystone that ships the bridge runs it from a copy in `bin` inside
-its data folder, since a packaged build's own folder can go away when Waystone
+A packaged Scuffle that ships the bridge runs it from a copy in `bin` inside
+its data folder, since a packaged build's own folder can go away when Scuffle
 exits while the bridge still waits for the game. The copy's name carries its
 content hash, so an update never replaces a bridge that a running game still
 uses.
@@ -529,7 +529,7 @@ uses.
 ### Closing a game
 
 While a game runs, its main button reads **Close game**. Holding Shift turns it
-into **Force quit**. A game that Waystone did not start, for example one left
+into **Force quit**. A game that Scuffle did not start, for example one left
 from an earlier window, counts too. A worker lists the processes at most every
 2 seconds, so the window never waits for it.
 
@@ -538,7 +538,7 @@ from an earlier window, counts too. A worker lists the processes at most every
   volume and file index, because Wine shows one file under different drive
   letters and several clients name their executable `Wow.exe`. It exits with
   0 when it asked, 3 when the game runs without a window, and 4 when none runs.
-  On Windows Waystone makes the same comparison itself.
+  On Windows Scuffle makes the same comparison itself.
 - On Linux the game's `wineserver` lives in its pressure-vessel container. The
   bridge joins it through `nsenter` into the game's user and mount namespaces,
   with the game's own Wine and its Wine and display variables. umu's own
@@ -547,14 +547,14 @@ from an earlier window, counts too. A worker lists the processes at most every
 - Force quit sends `SIGKILL` to the game process. It is found by its first
   argument and its folder, so the bridge and `umu-run`, which name the game in
   their arguments, are left alone. They exit when the game is gone. On Windows
-  Waystone ends the process through the handle it checked the file with, so
+  Scuffle ends the process through the handle it checked the file with, so
   its ID cannot pass to another process in between.
 - A game without a window, as when it hangs while quitting, or one that has
   not quit after 20 seconds, gets a banner that points at Force quit.
 
 ## Linux packaging
 
-Linux has two packages. The Nix package wraps the app with `WAYSTONE_BRIDGE`,
+Linux has two packages. The Nix package wraps the app with `SCUFFLE_BRIDGE`,
 `umu-launcher` and `util-linux` from nixpkgs. The AppImage is for distributions
 without Nix and is built by the same flake, `nix build .#appimage`.
 
@@ -578,7 +578,7 @@ from the build machine, which on NixOS are Nix's own and need its newer glibc.
 An AppImage of a Nix closure carries Nix's glibc and graphics stack, so Qt
 would not find the host's OpenGL drivers, and it is several times larger.
 
-Only the Qt parts Waystone uses are kept: QtCore, QtGui, QtWidgets, the X11,
+Only the Qt parts Scuffle uses are kept: QtCore, QtGui, QtWidgets, the X11,
 Wayland and offscreen platforms, desktop themes, input methods, and SVG icons
 and images. The build fails if a kept library needs a Qt or xcb helper library
 that is not bundled. The xcb helpers sit next to Qt's libraries, where the
@@ -593,26 +593,26 @@ release as the host's libxkbcommon. A mismatched pair crashes the X11 plugin.
 bridge is missing. It starts the bundled Python with `-I -B`, so the user's Python variables
 and packages stay out and no bytecode is written. The bytecode is compiled at
 build time with unchecked hashes. `AppRun` sets `APPDIR` to its own folder and
-`WAYSTONE_BRIDGE` to the bridge inside it, and puts its `usr/bin` first on
-`PATH`. It leaves `APPIMAGE` as the runtime set it, so Waystone can name its own
+`SCUFFLE_BRIDGE` to the bridge inside it, and puts its `usr/bin` first on
+`PATH`. It leaves `APPIMAGE` as the runtime set it, so Scuffle can name its own
 file. The configuration, data and cache folders are the XDG ones, as with the
 Nix package, so a user can switch between the two.
 
-The AppImage's mount lasts as long as Waystone's process, since the runtime
-unmounts it when the last holder of its keepalive pipe exits and Waystone's
+The AppImage's mount lasts as long as Scuffle's process, since the runtime
+unmounts it when the last holder of its keepalive pipe exits and Scuffle's
 children do not inherit that pipe. The bridge and umu-run wait for the game,
-which can outlive Waystone, so neither runs from the mount:
+which can outlive Scuffle, so neither runs from the mount:
 
-- A `WAYSTONE_BRIDGE` inside `APPDIR` runs from the copy in `bin` inside the
+- A `SCUFFLE_BRIDGE` inside `APPDIR` runs from the copy in `bin` inside the
   data folder, as the Windows package's bridge does. The Nix store stays, so
   the Nix package's bridge runs in place.
 - umu-run is bundled, preferred over a system one as in the Nix package, and
   found by `find_umu` on `PATH`. `usr/bin/umu-run` starts the AppImage file
-  again with `WAYSTONE_APPRUN=umu-run`, which gives umu-run a mount of its own
+  again with `SCUFFLE_APPRUN=umu-run`, which gives umu-run a mount of its own
   for as long as it runs, and `AppRun` then runs the zipapp with the bundled
   Python. An extracted copy, such as appimage-run's, is not a mount point and
   runs in place. Without the zipapp it exits with a message that names it,
-  which Waystone shows. umu-run downloads the Steam Linux Runtime on first use,
+  which Scuffle shows. umu-run downloads the Steam Linux Runtime on first use,
   as it does elsewhere.
 
 `nsenter` comes from the host's util-linux, which every target distribution
@@ -621,8 +621,8 @@ where umu-run runs inside one more FHS container. Without `nsenter` the close
 fails with a message that points at Force quit.
 
 `--appimage-extract-and-run`, for systems without FUSE, deletes the extracted
-copy when Waystone exits, so a game started from it should end before
-Waystone does. On NixOS the Nix package is the one to use. appimage-run's
+copy when Scuffle exits, so a game started from it should end before
+Scuffle does. On NixOS the Nix package is the one to use. appimage-run's
 environment lacks libzstd and needs it added to run the AppImage.
 
 ## Launch options
@@ -632,7 +632,7 @@ Linux and Windows. The toggles cover arguments that the current clients list in
 their own usage text (`Wow.exe -help`): `-d3d12` or `-d3d11`, `-windowed` or
 `-fullscreen`, `-console`, `-nosound`, `-compat` and `-nodriverext`. Extra
 arguments are split like a shell command line, with backslashes kept for
-Windows paths. Waystone sets `-launcherlogin`, `-uid` and `-initialgamemode`
+Windows paths. Scuffle sets `-launcherlogin`, `-uid` and `-initialgamemode`
 itself, so the extra arguments may not contain them. Extra arguments that
 repeat or contradict a toggle are passed as typed, since a word may be another
 argument's value, and the page points them out. The game gets
@@ -649,11 +649,11 @@ On Linux, global options shape the game process:
 | MangoHud | `MANGOHUD=1` | pressure-vessel imports the host's MangoHud Vulkan layer. The `mangohud` wrapper's `LD_PRELOAD` would only reach umu-run |
 | Wayland | `PROTON_ENABLE_WAYLAND=1` | offered when the chosen Proton build reads it |
 | HDR | `PROTON_ENABLE_HDR=1` | offered when the chosen Proton build reads it |
-| Proton log | `PROTON_LOG=1`, `PROTON_LOG_DIR=<data>/logs` | Proton writes `steam-battlenet.log`. Waystone's quiet `WINEDEBUG` is left out so Proton picks its channels |
+| Proton log | `PROTON_LOG=1`, `PROTON_LOG_DIR=<data>/logs` | Proton writes `steam-battlenet.log`. Scuffle's quiet `WINEDEBUG` is left out so Proton picks its channels |
 
 The game command is the user's wrapper command, `gamemoderun`, `umu-run`, the
 bridge and `Wow.exe`, in that order. Its environment is the inherited one, then
-Waystone's defaults, the toggles, the global variables and the client's own
+Scuffle's defaults, the toggles, the global variables and the client's own
 variables. `WINEPREFIX`, `PROTONPATH`, `GAMEID` and `WOW_BROKER_PIPE` are applied
 last and cannot be overridden. Prefix creation and bridge calls get neither the
 wrappers nor the user's variables. The options are checked before the session
@@ -674,7 +674,7 @@ choose an installation folder.
 
 ## Shortcuts
 
-### One Waystone per user
+### One Scuffle per user
 
 The process that shows the window holds `window.lock` in the data folder for
 its whole life and answers on a local socket. That is a Unix socket in
@@ -694,7 +694,7 @@ hold the same lock while they run and refuse to start while a window holds it.
 
 ### What a shortcut runs
 
-A shortcut runs `waystone play <client> --shortcut`. Classic Era's desktop
+A shortcut runs `scuffle play <client> --shortcut`. Classic Era's desktop
 actions add `--mode`, and Steam's entry adds `--wait`. Without a window to hand
 over to, the process becomes the window's process but keeps the window hidden,
 and presses Play itself. The window's own Play then checks for an update,
@@ -714,27 +714,27 @@ The command has to survive upgrades.
 
 - Under an AppImage it is `$APPIMAGE`, the image's own file. The program
   itself runs from a temporary mount.
-- The packaged Windows build uses its own `Waystone.exe`.
+- The packaged Windows build uses its own `Scuffle.exe`.
 - A Nix store path changes with every upgrade and goes with garbage
   collection. The Nix wrapper also puts its store folder first on `PATH`. So
-  Waystone walks `PATH` for a `waystone` outside the store (`NIX_STORE_DIR`, by
+  Scuffle walks `PATH` for a `scuffle` outside the store (`NIX_STORE_DIR`, by
   default `/nix/store`) that resolves to the program running, such as
-  `~/.nix-profile/bin/waystone` or `/run/current-system/sw/bin/waystone`.
+  `~/.nix-profile/bin/scuffle` or `/run/current-system/sw/bin/scuffle`.
   Without one, as with `nix run`, it uses the program's own path.
-- A development run uses `python -m waystone`.
+- A development run uses `python -m scuffle`.
 
 ### Entries and markers
 
-On Linux the entry is `waystone-<client>.desktop` in
+On Linux the entry is `scuffle-<client>.desktop` in
 `$XDG_DATA_HOME/applications`, with its icon in the hicolor theme under the same
 data folder at 48, 64, 128 and 256 pixels. The icon is the client's tile drawn
 in code. Its `TryExec` hides the entry once the program is gone. On Windows a
-link in the Start menu's `Waystone` folder points at `Waystone.exe` with an
+link in the Start menu's `Scuffle` folder points at `Scuffle.exe` with an
 icon file in the data folder. Windows' own shell object writes it through
 PowerShell, to a temporary name that is then renamed into place.
 
-Waystone removes only files that carry its marker for that client: the
-`X-Waystone-Client` key in a desktop entry, a `tEXt` chunk named `Waystone`
+Scuffle removes only files that carry its marker for that client: the
+`X-Scuffle-Client` key in a desktop entry, a `tEXt` chunk named `Scuffle`
 in every PNG it writes, including Steam artwork, and the `--shortcut` argument
 in a Windows link or a Steam entry. A file with the same name but no marker is
 neither replaced nor removed. Uninstalling a client removes its launcher entry.
@@ -744,7 +744,7 @@ the uninstalled client.
 ### Steam
 
 Steam keeps non-Steam games in `userdata/<account>/config/shortcuts.vdf`, a
-binary VDF file. Waystone finds Steam at `~/.steam/steam`, `~/.steam/root` or
+binary VDF file. Scuffle finds Steam at `~/.steam/steam`, `~/.steam/root` or
 `Steam` in the data folder, or through the registry on Windows, and changes the
 file of every account that signed in there. Flatpak's Steam cannot start host
 programs and is not looked for.
@@ -753,20 +753,20 @@ programs and is not looked for.
   gives back the same bytes. A field of a type whose length it does not know
   stops the change before anything is written.
 - Steam holds the list in memory and writes it back while it runs, which would
-  drop the change. Waystone looks for this installation's `steam` process by
+  drop the change. Scuffle looks for this installation's `steam` process by
   its path inside the Steam folder and asks the user to quit Steam first. A
   Steam it misses can only undo the change, since Steam writes its own complete
   list.
 - Every account's file is read and checked before the first one is written.
   The new file must keep every other entry byte for byte. The old file is
-  copied to `shortcuts.vdf.waystone-backup` and the new one is written to a
+  copied to `shortcuts.vdf.scuffle-backup` and the new one is written to a
   temporary file and renamed into place, with the old file's permissions.
-- Waystone's entry is appended with the next free index and the fields Steam
+- Scuffle's entry is appended with the next free index and the fields Steam
   writes for a non-Steam game. Its app ID is Steam's own derivation, the CRC32
   of the quoted program and the name with the high bit set, which also names
   the portrait, wide and icon artwork in `config/grid`. Artwork the user chose
   in Steam has no marker and is kept.
-- Removal takes out only Waystone's entries for that client and leaves the
+- Removal takes out only Scuffle's entries for that client and leaves the
   other entries' indexes as they are.
 
 ## Settings and state
@@ -822,7 +822,7 @@ with an explicit qualification when paused jobs need to resume.
 ## Diagnostics
 
 `diagnostics.report` builds a plain-text report from the settings, the library,
-a copy of the queue and the window's last update check. `waystone diagnostics`
+a copy of the queue and the window's last update check. `scuffle diagnostics`
 builds it from the saved settings and `downloads.json` instead. The window
 builds it on a worker thread, since it asks `umu-run --version` with a five
 second limit and reads the library, and copies it to the clipboard. The
@@ -860,7 +860,7 @@ icon and its menu, which the window fills from its own state on every refresh.
 - On Linux a notification goes to `org.freedesktop.Notifications` on the
   session bus, so it shows without a tray and the desktop's do-not-disturb
   applies. PySide6's QtDBus cannot marshal the `uint32` that `Notify` takes, so
-  Waystone sends it with `jeepney`, a pure-Python D-Bus library.
+  Scuffle sends it with `jeepney`, a pure-Python D-Bus library.
 - The connection stays open for the whole run. KDE and dunst send a click only
   to the connection that showed the notification. The `default` action of a
   known notification id opens the window on its client.
@@ -886,7 +886,7 @@ What counts:
 
 The icon is created on every desktop, and it counts as reachable only while
 `QSystemTrayIcon.isSystemTrayAvailable()` is true, which a tray bar that starts
-later can change. Its menu has Show Waystone, the current download with Pause all and Resume all, up
+later can change. Its menu has Show Scuffle, the current download with Pause all and Resume all, up
 to five installed and listed clients by last play, and Quit. A client's entry
 reads as the main button would, Play, Sign in and play or Update, and runs the
 same `MainWindow.start`. It is greyed out while the client has a job, is

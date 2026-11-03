@@ -7,12 +7,12 @@ import sys
 
 import pytest
 
-from waystone import launch, launch_options, settings as settings_module
-from waystone.auth.vault import Vault
-from waystone.launch_options import ClientOptions, LinuxOptions, OptionError, parse_environment, split_arguments
-from waystone.runtime.game import LinuxRuntime
-from waystone.runtime.proton import Proton
-from waystone.settings import Settings
+from scuffle import launch, launch_options, settings as settings_module
+from scuffle.auth.vault import Vault
+from scuffle.launch_options import ClientOptions, LinuxOptions, OptionError, parse_environment, split_arguments
+from scuffle.runtime.game import LinuxRuntime
+from scuffle.runtime.proton import Proton
+from scuffle.settings import Settings
 
 
 @pytest.fixture
@@ -70,7 +70,7 @@ def test_invalid_launch_options_are_dropped_and_reported_instead_of_failing_the_
     ('1ST=x', {}, 'not a valid name'),
     ('=x', {}, 'the name is not a valid name'),
     ('JUSTANAME', {}, 'Line 1: write it as NAME=value'),
-    ('OK=1\nWINEPREFIX=/tmp/x', {'OK': '1'}, 'Line 2: Waystone sets WINEPREFIX itself'),
+    ('OK=1\nWINEPREFIX=/tmp/x', {'OK': '1'}, 'Line 2: Scuffle sets WINEPREFIX itself'),
     ('A=1\nA=2', {'A': '1'}, 'Line 2: A is already set on line 1'),
 ])
 def test_environment_lines_are_checked_one_by_one(text, variables, error):
@@ -87,8 +87,8 @@ def test_saved_values_keep_their_quotes_and_spaces_through_the_editor():
 
 @pytest.mark.parametrize('text', ['-uid wow_beta', '-LauncherLogin', '-initialgamemode=chc', '--uid=x',
                                   '-console -initialgamemode cera'])
-def test_arguments_waystone_sets_itself_are_rejected(text):
-    with pytest.raises(OptionError, match='Waystone sets'):
+def test_arguments_scuffle_sets_itself_are_rejected(text):
+    with pytest.raises(OptionError, match='Scuffle sets'):
         split_arguments(text)
 
 
@@ -221,7 +221,7 @@ def test_the_game_runs_inside_the_wrappers_with_the_options_and_the_prefix_witho
     executable(programs / 'gamemoderun', FAKE_WRAPPER.replace('#!PYTHON', python))
     proton = tmp_path / 'GE-Proton'
     executable(proton / 'files/bin/wine', '#!/bin/sh\n')
-    monkeypatch.setattr('waystone.runtime.game.wine_wrapper', lambda: [])
+    monkeypatch.setattr('scuffle.runtime.game.wine_wrapper', lambda: [])
     monkeypatch.setattr(launch, 'renew', lambda *args: None)           # no Battle.net in a test
 
     settings = Settings()
@@ -254,7 +254,7 @@ def test_the_game_runs_inside_the_wrappers_with_the_options_and_the_prefix_witho
     env = game['env']
     assert env['MANGOHUD'] == '1' and env['DXVK_HUD'] == 'fps' and env['SHARED'] == 'client'
     assert env['PROTON_LOG'] == '1' and env['PROTON_LOG_DIR'] == str(launch.log_dir())
-    assert env['WINEDEBUG'] == '+loaddll'           # the user's choice beats Waystone's quiet default
+    assert env['WINEDEBUG'] == '+loaddll'           # the user's choice beats Scuffle's quiet default
     assert env['WINEPREFIX'] == str(tmp_path / 'prefix') and env['WOW_BROKER_PIPE'] == '1'
     assert 'UMU_CONTAINER_NSENTER' not in env
 
@@ -320,7 +320,7 @@ def test_a_saved_variable_name_with_spaces_is_dropped_instead_of_stopping_the_st
 
 @pytest.mark.skipif(sys.platform == 'win32', reason='Linux wrappers')
 def test_a_relative_wrapper_is_made_absolute_since_the_game_starts_in_its_own_folder(tmp_path, monkeypatch):
-    from waystone.launch_options import wrapper_command
+    from scuffle.launch_options import wrapper_command
     tool = tmp_path / 'wrap'
     tool.write_text('#!/bin/sh\n')
     tool.chmod(0o755)
@@ -331,8 +331,8 @@ def test_a_relative_wrapper_is_made_absolute_since_the_game_starts_in_its_own_fo
 
 def test_the_newest_proton_is_the_newest_build_not_the_last_used_folder(tmp_path, monkeypatch):
     import os
-    from waystone import launch
-    from waystone.runtime.proton import Proton
+    from scuffle import launch
+    from scuffle.runtime.proton import Proton
     builds = []
     for name, built, used in [('GE-Proton11-11', 1792432585, 1), ('UMU-Proton-10.0-4', 1750000000, 2)]:
         folder = tmp_path / name
@@ -346,7 +346,7 @@ def test_the_newest_proton_is_the_newest_build_not_the_last_used_folder(tmp_path
 
 @pytest.mark.skipif(sys.platform == 'win32', reason='Linux variables')
 def test_paths_in_variables_expand_as_in_a_shell(monkeypatch, tmp_path):
-    from waystone.launch_options import linux_environment
+    from scuffle.launch_options import linux_environment
     monkeypatch.setenv('HOME', str(tmp_path))
     options = LinuxOptions(environment={'MANGOHUD_CONFIGFILE': '~/mango.conf', 'DXVK_CONFIG_FILE': '$HOME/dxvk.conf'})
     variables = linux_environment(options, log_dir=tmp_path)
@@ -355,9 +355,9 @@ def test_paths_in_variables_expand_as_in_a_shell(monkeypatch, tmp_path):
 
 
 def test_an_unset_variable_expands_to_nothing_as_in_a_shell(monkeypatch, tmp_path):
-    from waystone.launch_options import linux_environment
-    monkeypatch.delenv('WAYSTONE_UNSET', raising=False)
-    options = LinuxOptions(environment={'LD_LIBRARY_PATH': '/x:$WAYSTONE_UNSET', 'A': '${WAYSTONE_UNSET}b'})
+    from scuffle.launch_options import linux_environment
+    monkeypatch.delenv('SCUFFLE_UNSET', raising=False)
+    options = LinuxOptions(environment={'LD_LIBRARY_PATH': '/x:$SCUFFLE_UNSET', 'A': '${SCUFFLE_UNSET}b'})
     variables = linux_environment(options, log_dir=tmp_path)
     assert variables['LD_LIBRARY_PATH'] == '/x:' and variables['A'] == 'b'
 

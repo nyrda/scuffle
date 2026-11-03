@@ -16,7 +16,7 @@ static BYTE entropy_bytes[16] = {
     0xf2, 0xfa, 0x0f, 0x54, 0x19, 0xc0, 0x9c, 0x43
 };
 
-/* Append one argument to a Windows command line. Waystone passes only plain
+/* Append one argument to a Windows command line. Scuffle passes only plain
  * launch switches, so an argument containing a quote is rejected. */
 static int append_argument(WCHAR *command, size_t capacity, const char *argument) {
     WCHAR wide[1024];
@@ -28,7 +28,7 @@ static int append_argument(WCHAR *command, size_t capacity, const char *argument
     return written >= 0;
 }
 
-/* A registry text value Waystone passes, such as a WoW account name: printable ASCII. */
+/* A registry text value Scuffle passes, such as a WoW account name: printable ASCII. */
 static int plain_value(const char *value, size_t limit) {
     size_t length = strlen(value);
     if (!length || length > limit) return 0;

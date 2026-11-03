@@ -57,8 +57,8 @@ class Meter:
 
 
 def measure(client, entries, root, meter, *, modern):
-    from waystone.ngdp.store import CascStore
-    from waystone.rates import RateSmoother
+    from scuffle.ngdp.store import CascStore
+    from scuffle.rates import RateSmoother
     store = CascStore(root)
     smoother = RateSmoother()
     samples, history = [], []
@@ -124,16 +124,16 @@ def main():
     args = parser.parse_args()
     if not 128 <= args.mib <= 768:
         parser.error('--mib must be between 128 and 768')
-    with tempfile.TemporaryDirectory(prefix='waystone-cdn-', dir='/tmp') as folder:
+    with tempfile.TemporaryDirectory(prefix='scuffle-cdn-', dir='/tmp') as folder:
         root = Path(folder)
         for name in ['CACHE', 'CONFIG', 'DATA']:
             os.environ[f'XDG_{name}_HOME'] = str(root / name.lower())
-        from waystone.ngdp.cdn import CDNClient, parse_config
-        from waystone.ngdp.models import DownloadEntry
+        from scuffle.ngdp.cdn import CDNClient, parse_config
+        from scuffle.ngdp.models import DownloadEntry
         source = root / 'baseline.py'
         source.write_bytes(subprocess.check_output(
-            ['git', 'show', f'{args.baseline}:src/waystone/ngdp/cdn.py']))
-        spec = importlib.util.spec_from_file_location('waystone.ngdp.benchmark_baseline', source)
+            ['git', 'show', f'{args.baseline}:src/scuffle/ngdp/cdn.py']))
+        spec = importlib.util.spec_from_file_location('scuffle.ngdp.benchmark_baseline', source)
         baseline = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(baseline)
         meter = Meter()

@@ -12,7 +12,7 @@ if sys.platform == 'win32':
 QtWidgets = pytest.importorskip('PySide6.QtWidgets')
 QApplication = QtWidgets.QApplication
 
-from waystone.ui import pages  # noqa: E402
+from scuffle.ui import pages  # noqa: E402
 
 
 @pytest.fixture(scope='module')
@@ -64,8 +64,16 @@ def test_clipboard_text_from_before_the_sign_in_is_ignored(qt, monkeypatch):
     assert results == []
 
 
+def test_a_worker_that_finishes_after_the_window_is_gone_does_not_raise(qt):
+    import shiboken6
+    from scuffle.ui import app as ui
+    bus = ui.Bus()
+    shiboken6.delete(bus)           # as when the window closed while the running-games scan ran
+    ui.post(bus.running_scanned, None, None)
+
+
 def test_mode_buttons_are_replaced_not_added_when_switching_clients(qt):
-    from waystone.ui.widgets import Segmented
+    from scuffle.ui.widgets import Segmented
     modes = Segmented()
     modes.set_options([('era', 'Classic Era'), ('hardcore', 'Hardcore')], 'era')
     modes.set_options([], None)
@@ -79,8 +87,8 @@ def test_mode_buttons_are_replaced_not_added_when_switching_clients(qt):
 @pytest.fixture
 def window(qt, tmp_path, monkeypatch):
     """A window with empty settings, so the user's real configuration is never read or written."""
-    from waystone import discovery, settings as settings_module
-    from waystone.ui import app as ui
+    from scuffle import discovery, settings as settings_module
+    from scuffle.ui import app as ui
 
     def offline(url, *args, **kwargs):
         raise OSError('Tests never reach the version service')
@@ -107,7 +115,7 @@ def test_clicking_the_selected_client_leaves_the_settings(qt, window):
 
 
 def test_queue_controls_survive_progress_updates(qt):
-    from waystone.downloads import RUNNING, Job
+    from scuffle.downloads import RUNNING, Job
     queue = pages.QueuePage()
     job = Job('wow', 'install', status=RUNNING, stage='downloading', done_bytes=1, total_bytes=100)
     queue.show_jobs([job], {'wow': 'World of Warcraft'})
@@ -120,8 +128,8 @@ def test_queue_controls_survive_progress_updates(qt):
 
 
 def test_narrow_download_bar_keeps_its_progress_and_shortens_the_details_whole(qt):
-    from waystone.downloads import RUNNING, Job
-    from waystone.ui.widgets import DownloadBar
+    from scuffle.downloads import RUNNING, Job
+    from scuffle.ui.widgets import DownloadBar
     bar = DownloadBar()
     job = Job('wow_classic', 'install', status=RUNNING, stage='downloading', done_bytes=46_200_000_000,
               total_bytes=75_800_000_000, speed=22_600_000)
@@ -137,7 +145,7 @@ def test_narrow_download_bar_keeps_its_progress_and_shortens_the_details_whole(q
 
 
 def test_the_folder_cannot_change_under_queued_downloads(qt, window, tmp_path):
-    from waystone.downloads import DONE, QUEUED, Job
+    from scuffle.downloads import DONE, QUEUED, Job
     window.settings.root = str(tmp_path / 'games')
     window.open_library()
     job = Job('wow', 'install', status=QUEUED)
@@ -153,12 +161,12 @@ def test_the_folder_cannot_change_under_queued_downloads(qt, window, tmp_path):
 @pytest.fixture
 def styled(qt, monkeypatch, tmp_path):
     """The real style and a Proton build with a long name, set before the window is built."""
-    from waystone.ui import app as ui
+    from scuffle.ui import app as ui
     monkeypatch.setattr(ui, 'cache_dir', lambda: tmp_path / 'style')
     ui.prepare(qt)
-    from waystone import launch
-    from waystone.runtime.proton import Proton
-    from waystone.ui import launch_options
+    from scuffle import launch
+    from scuffle.runtime.proton import Proton
+    from scuffle.ui import launch_options
     build = Proton('GE-Proton10-25 with a very long name from a custom folder', tmp_path / 'proton')
     build.path.mkdir()
     # Both the list and the build a launch would pick, so nothing depends on this machine's builds.
@@ -170,7 +178,7 @@ def test_settings_never_scroll_sideways_at_the_minimum_size(qt, styled, window):
     import json
     from pathlib import Path
     from PySide6.QtWidgets import QScrollArea
-    from waystone import catalog
+    from scuffle import catalog
     snapshot = json.loads((Path(__file__).parent / 'fixtures/catalog-us.json').read_text())
     window.on_catalog(window.settings.region, snapshot)
     window.settings.show_other_clients = True
@@ -208,7 +216,7 @@ def test_the_folder_picker_reveals_the_current_folder_once_it_has_loaded(qt, tmp
 
 
 def test_a_queued_client_offers_nothing_to_pause(qt, window, tmp_path):
-    from waystone.downloads import QUEUED, RUNNING, Job
+    from scuffle.downloads import QUEUED, RUNNING, Job
     window.settings.root = str(tmp_path / 'games')
     window.open_library()
     running = Job('wow', 'install', status=RUNNING, done_bytes=1, total_bytes=10)
@@ -240,7 +248,7 @@ def test_the_sidebar_cannot_start_a_second_sign_in_during_one(qt, window, monkey
 
 
 def test_dismissing_a_failure_clears_it_from_the_list(qt, window, tmp_path):
-    from waystone.downloads import FAILED, Job
+    from scuffle.downloads import FAILED, Job
     window.settings.root = str(tmp_path / 'games')
     window.open_library()
     failed = Job('wowf', 'install', status=FAILED, error='The servers did not answer.')
@@ -255,7 +263,7 @@ def test_dismissing_a_failure_clears_it_from_the_list(qt, window, tmp_path):
 
 
 def test_first_run_settings_save_before_a_folder_is_chosen(qt, window):
-    from waystone.settings import Settings
+    from scuffle.settings import Settings
     window.open_settings()
     page = window.settings_page
     page.region.setCurrentIndex(page.region.findData('us'))
@@ -275,7 +283,7 @@ def test_escape_closes_settings_right_after_opening_them_from_the_sidebar(qt, wi
 
 
 def test_a_failed_download_stays_on_the_downloads_page_with_a_retry(qt):
-    from waystone.downloads import FAILED, Job
+    from scuffle.downloads import FAILED, Job
     queue = pages.QueuePage()
     queue.show_jobs([Job('wow', 'install', status=FAILED, error='The servers did not answer.')],
                     {'wow': 'World of Warcraft'})
@@ -285,8 +293,8 @@ def test_a_failed_download_stays_on_the_downloads_page_with_a_retry(qt):
 
 
 def test_progress_after_the_transfer_names_the_stage_instead_of_a_time(qt):
-    from waystone.downloads import RUNNING, Job
-    from waystone.ui.widgets import progress_variants
+    from scuffle.downloads import RUNNING, Job
+    from scuffle.ui.widgets import progress_variants
     job = Job('wow', 'install', status=RUNNING, done_bytes=100, total_bytes=100, speed=40, stage='materializing')
     assert progress_variants(job) == ['Writing game files…']
     job.stage, job.total_bytes = 'seeding_cdn_index', 0
@@ -318,7 +326,7 @@ def test_the_download_bar_cannot_switch_clients_during_a_sign_in(qt, window, mon
 
 
 def test_a_downloading_test_client_stays_listed_after_unchecking_it(qt, window, tmp_path):
-    from waystone.downloads import RUNNING, Job
+    from scuffle.downloads import RUNNING, Job
     window.settings.root = str(tmp_path / 'games')
     window.open_library()
     window.settings.extra_clients = []
@@ -333,7 +341,7 @@ def test_a_downloading_test_client_stays_listed_after_unchecking_it(qt, window, 
 
 def test_a_long_failure_never_pushes_the_queue_buttons_out(qt):
     from PySide6.QtWidgets import QScrollArea
-    from waystone.downloads import FAILED, Job
+    from scuffle.downloads import FAILED, Job
     queue = pages.QueuePage()
     queue.resize(680, 500)
     queue.show()
@@ -358,7 +366,7 @@ def test_a_path_being_typed_survives_the_folder_tree_loading(qt, tmp_path):
 
 
 def test_dismissing_found_damage_keeps_the_repair(qt, window, tmp_path, monkeypatch):
-    from waystone.downloads import FAILED, Job
+    from scuffle.downloads import FAILED, Job
     window.settings.root = str(tmp_path / 'games')
     window.open_library()
     monkeypatch.setattr(window.library, 'state', lambda code: {'version': '1.0.0.1', 'region': 'eu',
@@ -373,7 +381,7 @@ def test_dismissing_found_damage_keeps_the_repair(qt, window, tmp_path, monkeypa
 
 
 def test_a_cancelled_test_client_download_unlocks_its_checkbox(qt, window, tmp_path):
-    from waystone.downloads import QUEUED, Job
+    from scuffle.downloads import QUEUED, Job
     window.settings.root = str(tmp_path / 'games')
     window.open_library()
     window.settings.extra_clients = []
@@ -388,7 +396,7 @@ def test_a_cancelled_test_client_download_unlocks_its_checkbox(qt, window, tmp_p
 
 
 def test_an_update_notice_says_when_it_waits_and_goes_when_done(qt, window, tmp_path, monkeypatch):
-    from waystone.downloads import DONE, RUNNING, Job
+    from scuffle.downloads import DONE, RUNNING, Job
     window.settings.root = str(tmp_path / 'games')
     window.open_library()
     running = Job('wowf', 'install', status=RUNNING)
@@ -409,7 +417,7 @@ def test_an_update_notice_says_when_it_waits_and_goes_when_done(qt, window, tmp_
 
 
 def test_queue_focus_stays_on_a_card_when_another_job_finishes(qt):
-    from waystone.downloads import QUEUED, RUNNING, Job
+    from scuffle.downloads import QUEUED, RUNNING, Job
     queue = pages.QueuePage()
     queue.show()
     queue.activateWindow()
@@ -425,7 +433,7 @@ def test_queue_focus_stays_on_a_card_when_another_job_finishes(qt):
 
 
 def test_a_locked_test_client_keeps_its_own_choice_through_other_changes(qt, window, tmp_path):
-    from waystone.downloads import FAILED, PAUSED, Job
+    from scuffle.downloads import FAILED, PAUSED, Job
     window.settings.root = str(tmp_path / 'games')
     window.open_library()
     window.settings.extra_clients = ['wow_classic_era_ptr']
@@ -457,7 +465,7 @@ def test_home_in_the_client_list_goes_to_the_first_client(qt, window):
 
 
 def test_a_queued_client_names_the_job_right_before_it(qt, window, tmp_path):
-    from waystone.downloads import QUEUED, RUNNING, Job
+    from scuffle.downloads import QUEUED, RUNNING, Job
     window.settings.root = str(tmp_path / 'games')
     window.open_library()
     running = Job('wow_classic', 'install', status=RUNNING)
@@ -472,7 +480,7 @@ def test_a_queued_client_names_the_job_right_before_it(qt, window, tmp_path):
 
 
 def test_a_queued_client_does_not_name_a_paused_job_as_ahead(qt, window, tmp_path):
-    from waystone.downloads import PAUSED, QUEUED, RUNNING, Job
+    from scuffle.downloads import PAUSED, QUEUED, RUNNING, Job
     window.settings.root = str(tmp_path / 'games')
     window.open_library()
     running = Job('wow', 'update', status=RUNNING)
@@ -517,7 +525,7 @@ def test_correcting_the_folder_path_clears_the_old_complaint(qt, tmp_path):
 
 def test_ctrl_c_in_the_terminal_closes_the_window(qt, window):
     import signal
-    from waystone.ui import app
+    from scuffle.ui import app
     previous = {number: signal.getsignal(number) for number in (signal.SIGINT, signal.SIGTERM)}
     try:
         app.close_on_signals(window)
@@ -540,7 +548,7 @@ def installed(window, monkeypatch, codes):
 
 
 def test_an_installed_client_can_be_hidden_from_its_menu_and_brought_back(qt, window, tmp_path, monkeypatch):
-    from waystone.settings import Settings
+    from scuffle.settings import Settings
     window.settings.root = str(tmp_path / 'games')
     window.open_library()
     installed(window, monkeypatch, ['wow'])
@@ -559,7 +567,7 @@ def test_an_installed_client_can_be_hidden_from_its_menu_and_brought_back(qt, wi
 
 
 def test_a_client_with_a_download_cannot_be_hidden(qt, window, tmp_path):
-    from waystone.downloads import FAILED, Job
+    from scuffle.downloads import FAILED, Job
     window.settings.root = str(tmp_path / 'games')
     window.open_library()
     failed = Job('wowf', 'install', status=FAILED, error='The servers did not answer.')
@@ -580,7 +588,7 @@ def test_a_client_with_a_download_cannot_be_hidden(qt, window, tmp_path):
 
 
 def test_with_every_client_hidden_the_list_points_to_the_settings(qt, window):
-    from waystone import catalog
+    from scuffle import catalog
     window.settings.hidden_clients = [c.code for c in catalog.clients()]
     window.populate()
     window.refresh()
@@ -595,7 +603,7 @@ def test_with_every_client_hidden_the_list_points_to_the_settings(qt, window):
 def test_other_public_clients_stay_collapsed_until_they_are_shown(qt, window):
     import json
     from pathlib import Path
-    from waystone import catalog
+    from scuffle import catalog
     snapshot = json.loads((Path(__file__).parent / 'fixtures/catalog-us.json').read_text())
     window.on_catalog(window.settings.region, snapshot)
     window.open_settings('clients')
@@ -625,7 +633,7 @@ def test_without_the_version_service_the_other_clients_say_so(qt, window):
 
 
 def test_unticking_a_live_or_installed_client_hides_it_and_a_download_locks_it_on(qt, window, tmp_path, monkeypatch):
-    from waystone.downloads import QUEUED, Job
+    from scuffle.downloads import QUEUED, Job
     window.settings.root = str(tmp_path / 'games')
     window.open_library()
     installed(window, monkeypatch, ['wowt'])
@@ -653,8 +661,8 @@ def test_the_window_opens_before_the_version_service_answers_and_uses_the_answer
     import threading
     import time
     from pathlib import Path
-    from waystone import catalog, discovery, settings as settings_module
-    from waystone.ui import app as ui
+    from scuffle import catalog, discovery, settings as settings_module
+    from scuffle.ui import app as ui
     for name in ['config_dir', 'data_dir', 'cache_dir']:
         monkeypatch.setattr(settings_module, name, lambda name=name: tmp_path / name)
         monkeypatch.setattr(ui, name, lambda name=name: tmp_path / name, raising=False)
@@ -690,7 +698,7 @@ def test_the_window_opens_before_the_version_service_answers_and_uses_the_answer
 def test_choosing_another_region_switches_to_that_regions_clients(qt, window, tmp_path):
     import json
     from pathlib import Path
-    from waystone import catalog, discovery
+    from scuffle import catalog, discovery
     snapshot = json.loads((Path(__file__).parent / 'fixtures/catalog-us.json').read_text())
     discovery.save(tmp_path / 'cache_dir', snapshot)
     window.open_settings()
@@ -702,7 +710,7 @@ def test_choosing_another_region_switches_to_that_regions_clients(qt, window, tm
 
 
 def test_a_finished_job_no_longer_keeps_its_client_listed_or_locked(qt, window, tmp_path, monkeypatch):
-    from waystone.downloads import DONE, Job
+    from scuffle.downloads import DONE, Job
     window.settings.root = str(tmp_path / 'games')
     window.open_library()
     installed(window, monkeypatch, ['wow'])
@@ -722,7 +730,7 @@ def test_a_finished_job_no_longer_keeps_its_client_listed_or_locked(qt, window, 
 
 
 def test_a_hidden_client_the_catalog_no_longer_offers_can_be_shown_again(qt, window, tmp_path, monkeypatch):
-    from waystone import catalog
+    from scuffle import catalog
     window.settings.root = str(tmp_path / 'games')
     window.settings.show_other_clients = True
     window.open_library()
@@ -743,7 +751,7 @@ def test_a_hidden_client_the_catalog_no_longer_offers_can_be_shown_again(qt, win
 def test_open_settings_rows_follow_a_new_build_with_the_same_clients(qt, window):
     import json
     from pathlib import Path
-    from waystone import catalog
+    from scuffle import catalog
     snapshot = json.loads((Path(__file__).parent / 'fixtures/catalog-us.json').read_text())
     window.on_catalog(window.settings.region, snapshot)
     window.open_settings('clients')
@@ -757,7 +765,7 @@ def test_open_settings_rows_follow_a_new_build_with_the_same_clients(qt, window)
 
 
 def test_a_short_fact_fills_the_free_cell_instead_of_a_row_of_its_own(qt):
-    from waystone.ui.widgets import FactsCard
+    from scuffle.ui.widgets import FactsCard
     card = FactsCard()
     card.set_facts([('Version', '1.15.9.70576'), ('Region', 'Europe'), ('Language', 'English (US)'),
                     ('Download size', 'Not known yet')])
@@ -783,8 +791,8 @@ def installed_wow(window, tmp_path, monkeypatch):
 def test_a_clients_launch_options_save_restore_and_show_on_its_page(qt, window, tmp_path, monkeypatch):
     from PySide6.QtCore import Qt
     from PySide6.QtTest import QTest
-    from waystone.launch_options import ClientOptions
-    from waystone.settings import Settings
+    from scuffle.launch_options import ClientOptions
+    from scuffle.settings import Settings
     installed_wow(window, tmp_path, monkeypatch)
     window.client_page.launch_action.trigger()
     page = window.options_page
@@ -818,7 +826,7 @@ def test_a_clients_launch_options_save_restore_and_show_on_its_page(qt, window, 
 
 @pytest.mark.skipif(sys.platform == 'win32', reason='Linux launch settings')
 def test_linux_launch_settings_save_valid_input_and_keep_it_through_mistakes(qt, window, programs_on_path):
-    from waystone.settings import Settings
+    from scuffle.settings import Settings
     window.open_settings()
     launch = window.settings_page.launch
     launch.boxes['log'].setChecked(True)          # works with any build and machine
@@ -855,8 +863,8 @@ def programs_on_path(tmp_path, monkeypatch):
 
 @pytest.mark.skipif(sys.platform == 'win32', reason='Linux launch settings')
 def test_an_option_that_cannot_work_here_shows_off_and_keeps_its_choice(qt, styled, window, programs_on_path):
-    from waystone.launch_options import LinuxOptions
-    from waystone.settings import Settings
+    from scuffle.launch_options import LinuxOptions
+    from scuffle.settings import Settings
     window.settings.linux_launch = LinuxOptions(gamemode=True, wayland=True)
     window.open_settings()
     launch = window.settings_page.launch
@@ -875,9 +883,9 @@ def test_an_option_that_cannot_work_here_shows_off_and_keeps_its_choice(qt, styl
 
 
 def test_the_client_page_without_linux_saves_arguments_and_keeps_hidden_variables(qt):
-    from waystone import catalog
-    from waystone.launch_options import ClientOptions
-    from waystone.ui.client_options import ClientOptionsPage
+    from scuffle import catalog
+    from scuffle.launch_options import ClientOptions
+    from scuffle.ui.client_options import ClientOptionsPage
     page = ClientOptionsPage(linux=False)
     saved = []
     page.changed.connect(lambda code, options: saved.append((code, options)))
@@ -891,9 +899,9 @@ def test_the_client_page_without_linux_saves_arguments_and_keeps_hidden_variable
 
 
 def test_extra_arguments_that_contradict_a_toggle_save_with_a_calm_note(qt):
-    from waystone import catalog
-    from waystone.launch_options import ClientOptions
-    from waystone.ui.client_options import ClientOptionsPage
+    from scuffle import catalog
+    from scuffle.launch_options import ClientOptions
+    from scuffle.ui.client_options import ClientOptionsPage
     page = ClientOptionsPage(linux=False)
     saved = []
     page.changed.connect(lambda code, options: saved.append(options))
@@ -925,7 +933,7 @@ def test_dropped_launch_options_are_reported_before_the_folder_notice(qt, bad_la
 
 
 def test_launch_options_stay_reachable_while_a_client_downloads(qt, window, tmp_path):
-    from waystone.downloads import RUNNING, Job
+    from scuffle.downloads import RUNNING, Job
     window.settings.root = str(tmp_path / 'games')
     window.open_library()
     job = Job('wowf', 'install', status=RUNNING, stage='downloading', done_bytes=1, total_bytes=10)
@@ -943,7 +951,7 @@ def test_launch_options_stay_reachable_while_a_client_downloads(qt, window, tmp_
 def test_a_failed_catalog_check_says_the_list_is_old_and_can_check_again(qt, window, monkeypatch):
     import json
     from pathlib import Path
-    from waystone import catalog, discovery
+    from scuffle import catalog, discovery
     snapshot = json.loads((Path(__file__).parent / 'fixtures/catalog-us.json').read_text())
     window.on_catalog(window.settings.region, snapshot)
     window.open_settings('clients')
@@ -956,7 +964,7 @@ def test_a_failed_catalog_check_says_the_list_is_old_and_can_check_again(qt, win
     monkeypatch.setattr(window, '_discovering', set())
     monkeypatch.setattr('threading.Thread.start', lambda thread: asked.append(thread.name))
     page.catalog_retry.click()
-    assert asked == ['waystone-catalog'] and window.catalog_state == 'checking'
+    assert asked == ['scuffle-catalog'] and window.catalog_state == 'checking'
     assert not page.catalog_row.isVisibleTo(page)
     catalog.apply(None)
 
@@ -977,9 +985,9 @@ def test_a_launch_field_being_corrected_survives_reopening_and_the_header_says_s
 
 @pytest.mark.skipif(sys.platform == 'win32', reason='Linux variables')
 def test_reset_clears_a_variables_draft_that_was_never_saved(qt):
-    from waystone import catalog
-    from waystone.launch_options import ClientOptions
-    from waystone.ui.client_options import ClientOptionsPage
+    from scuffle import catalog
+    from scuffle.launch_options import ClientOptions
+    from scuffle.ui.client_options import ClientOptionsPage
     page = ClientOptionsPage(linux=True)
     page.load(catalog.get('wow'), ClientOptions())
     assert not page.reset_button.isEnabled()
@@ -992,9 +1000,9 @@ def test_reset_clears_a_variables_draft_that_was_never_saved(qt):
 def test_a_segmented_row_is_one_tab_stop_so_space_never_changes_the_saved_choice(qt):
     from PySide6.QtCore import Qt
     from PySide6.QtTest import QTest
-    from waystone import catalog
-    from waystone.launch_options import ClientOptions
-    from waystone.ui.client_options import ClientOptionsPage
+    from scuffle import catalog
+    from scuffle.launch_options import ClientOptions
+    from scuffle.ui.client_options import ClientOptionsPage
     page = ClientOptionsPage(linux=False)
     saved = []
     page.changed.connect(lambda code, options: saved.append(options))
@@ -1013,7 +1021,7 @@ def test_a_segmented_row_is_one_tab_stop_so_space_never_changes_the_saved_choice
 
 
 def test_dismissing_a_failed_download_removes_a_client_only_it_kept_listed(qt, window, tmp_path):
-    from waystone.downloads import FAILED, Job
+    from scuffle.downloads import FAILED, Job
     window.settings.root = str(tmp_path / 'games')
     window.open_library()
     failed = Job('wowt', 'install', status=FAILED, error='The servers did not answer.')
@@ -1026,7 +1034,7 @@ def test_dismissing_a_failed_download_removes_a_client_only_it_kept_listed(qt, w
 
 
 def test_a_failed_check_is_named_for_what_failed(qt, window, tmp_path):
-    from waystone.downloads import FAILED, Job
+    from scuffle.downloads import FAILED, Job
     window.settings.root = str(tmp_path / 'games')
     window.open_library()
     window.downloads.jobs.append(Job('wow', 'verify', status=FAILED, error='3 damaged files'))
@@ -1049,7 +1057,7 @@ def test_typing_in_settings_does_not_check_for_updates_each_time(qt, window, mon
 def test_a_ptr_carrying_another_game_says_which_version_it_runs(qt, window):
     import json
     from pathlib import Path
-    from waystone import catalog
+    from scuffle import catalog
     snapshot = json.loads((Path(__file__).parent / 'fixtures/catalog-us.json').read_text())
     snapshot['products']['wow_classic_era_ptr']['version'] = '2.5.6.70006'
     window.on_catalog(window.settings.region, snapshot)
@@ -1060,7 +1068,7 @@ def test_a_ptr_carrying_another_game_says_which_version_it_runs(qt, window):
 
 
 def test_the_empty_page_offers_its_own_way_back_to_the_clients(qt, window):
-    from waystone import catalog
+    from scuffle import catalog
     window.settings.hidden_clients = [c.code for c in catalog.clients()]
     window.populate()
     window.refresh()
@@ -1071,11 +1079,11 @@ def test_the_empty_page_offers_its_own_way_back_to_the_clients(qt, window):
 
 
 def test_a_missing_wrapper_is_a_caution_and_an_unfinished_argument_shows_what_was_saved(qt, programs_on_path):
-    from waystone import catalog
-    from waystone.launch_options import ClientOptions
-    from waystone.settings import Settings
-    from waystone.ui.client_options import ClientOptionsPage
-    from waystone.ui.launch_options import LaunchSettings
+    from scuffle import catalog
+    from scuffle.launch_options import ClientOptions
+    from scuffle.settings import Settings
+    from scuffle.ui.client_options import ClientOptionsPage
+    from scuffle.ui.launch_options import LaunchSettings
     launch = LaunchSettings()
     launch.load(Settings())
     launch.wrapper.setText('not-installed --')
@@ -1087,8 +1095,8 @@ def test_a_missing_wrapper_is_a_caution_and_an_unfinished_argument_shows_what_wa
 
 
 def test_transfer_details_keep_their_shape_during_warmup_and_stalls(qt):
-    from waystone.downloads import RUNNING, Job
-    from waystone.ui.widgets import progress_variants
+    from scuffle.downloads import RUNNING, Job
+    from scuffle.ui.widgets import progress_variants
     job = Job('wow', 'install', status=RUNNING, stage='downloading',
               done_bytes=12_400_000_000, total_bytes=31_800_000_000)
     for speed in [0, 48_200_000, 48_400_000, 9_500_000, 0]:
@@ -1111,7 +1119,7 @@ def test_transfer_details_keep_their_shape_during_warmup_and_stalls(qt):
 def test_queue_reorder_and_bulk_actions_work_from_the_keyboard(qt, window, tmp_path, monkeypatch):
     from PySide6.QtCore import Qt
     from PySide6.QtTest import QTest
-    from waystone.downloads import DownloadManager, PAUSED, QUEUED
+    from scuffle.downloads import DownloadManager, PAUSED, QUEUED
     monkeypatch.setattr(DownloadManager, '_run', lambda self: None)
     window.settings.root = str(tmp_path / 'games')
     window.open_library()
@@ -1140,8 +1148,8 @@ def test_queue_reorder_and_bulk_actions_work_from_the_keyboard(qt, window, tmp_p
 
 @pytest.mark.parametrize('stored', [False, True])
 def test_reopened_library_shows_resume_with_honest_progress(qt, window, tmp_path, monkeypatch, stored):
-    from waystone.downloads import DownloadManager, PAUSED
-    from waystone.library import Library
+    from scuffle.downloads import DownloadManager, PAUSED
+    from scuffle.library import Library
     monkeypatch.setattr(DownloadManager, '_run', lambda self: None)
     monkeypatch.setattr(Library, 'download_progress', lambda self, code: (40, 100) if stored else (0, 0))
     window.settings.root = str(tmp_path / 'games')
@@ -1163,7 +1171,7 @@ def test_reopened_library_shows_resume_with_honest_progress(qt, window, tmp_path
 
 
 def test_game_pause_waits_for_last_game_and_respects_manual_pauses(qt, window, tmp_path, monkeypatch):
-    from waystone.downloads import DownloadManager, PAUSED, QUEUED
+    from scuffle.downloads import DownloadManager, PAUSED, QUEUED
     monkeypatch.setattr(DownloadManager, '_run', lambda self: None)
     window.settings.root = str(tmp_path / 'games')
     window.open_library()
@@ -1185,8 +1193,8 @@ def test_game_pause_waits_for_last_game_and_respects_manual_pauses(qt, window, t
 
 
 def test_download_settings_save_custom_limit_connections_and_policy(qt, window, tmp_path, monkeypatch):
-    from waystone.downloads import DownloadManager, PAUSED, QUEUED
-    from waystone.settings import Settings
+    from scuffle.downloads import DownloadManager, PAUSED, QUEUED
+    from scuffle.settings import Settings
     monkeypatch.setattr(DownloadManager, '_run', lambda self: None)
     window.settings.root = str(tmp_path / 'games')
     window.open_library()
@@ -1214,7 +1222,7 @@ def test_download_settings_save_custom_limit_connections_and_policy(qt, window, 
 
 @pytest.mark.parametrize('size', [(900, 560), (960, 650), (1440, 900)])
 def test_download_controls_fit_supported_window_sizes(qt, styled, window, size):
-    from waystone.downloads import PAUSED, QUEUED, RUNNING, Job
+    from scuffle.downloads import PAUSED, QUEUED, RUNNING, Job
     page = window.queue_page
     jobs = [Job('wow', 'install', status=RUNNING, total_bytes=100_000_000, speed=100_000),
             Job('wowf', 'install', status=QUEUED, total_bytes=50_000_000),
@@ -1241,7 +1249,7 @@ def test_download_controls_fit_supported_window_sizes(qt, styled, window, size):
 
 
 def test_queue_total_includes_waiting_sizes_and_qualifies_paused_jobs(qt):
-    from waystone.downloads import PAUSED, QUEUED, RUNNING, Job
+    from scuffle.downloads import PAUSED, QUEUED, RUNNING, Job
     queue = pages.QueuePage()
     jobs = [Job('wow', 'install', status=RUNNING, total_bytes=100_000_000,
                 done_bytes=10_000_000, speed=100_000),
@@ -1274,7 +1282,7 @@ def test_a_start_that_failed_elsewhere_shows_in_the_list_until_it_is_read(qt, wi
 
 
 def test_the_downloads_page_stays_reachable_when_its_only_download_is_on_screen(qt, window, tmp_path):
-    from waystone.downloads import FAILED, RUNNING, Job
+    from scuffle.downloads import FAILED, RUNNING, Job
     window.settings.root = str(tmp_path / 'games')
     window.open_library()
     job = Job('wowf', 'install', status=RUNNING, stage='downloading', done_bytes=1, total_bytes=10)
@@ -1292,9 +1300,9 @@ def test_the_downloads_page_stays_reachable_when_its_only_download_is_on_screen(
 
 
 def test_the_client_options_header_never_claims_a_field_with_a_mistake_was_saved(qt):
-    from waystone import catalog
-    from waystone.launch_options import ClientOptions
-    from waystone.ui.client_options import ClientOptionsPage
+    from scuffle import catalog
+    from scuffle.launch_options import ClientOptions
+    from scuffle.ui.client_options import ClientOptionsPage
     page = ClientOptionsPage(linux=False)
     page.load(catalog.get('wow'), ClientOptions())
     page.arguments.setText('"unclosed')
@@ -1332,7 +1340,7 @@ def test_tab_after_an_arrow_key_moves_on_to_the_next_row(qt, window, tmp_path, m
 
 
 def test_the_bar_keeps_no_buttons_while_the_page_shows_its_own_download(qt, window, tmp_path):
-    from waystone.downloads import PAUSED, RUNNING, Job
+    from scuffle.downloads import PAUSED, RUNNING, Job
     window.settings.root = str(tmp_path / 'games')
     window.open_library()
     job = Job('wowf', 'install', status=RUNNING, stage='downloading', done_bytes=1, total_bytes=10)
@@ -1350,7 +1358,7 @@ def test_the_bar_keeps_no_buttons_while_the_page_shows_its_own_download(qt, wind
 def test_a_ptr_page_says_when_it_runs_another_games_build(qt, window):
     import json
     from pathlib import Path
-    from waystone import catalog
+    from scuffle import catalog
     snapshot = json.loads((Path(__file__).parent / 'fixtures/catalog-us.json').read_text())
     snapshot['products']['wow_classic_era_ptr']['version'] = '2.5.6.70006'
     window.on_catalog(window.settings.region, snapshot)
@@ -1376,7 +1384,7 @@ def test_every_page_starts_at_the_same_height_on_a_tall_window(qt, window):
 
 
 def test_the_downloads_page_and_settings_share_one_free_speed_limit(qt, window):
-    from waystone.settings import MEGABYTE, Settings
+    from scuffle.settings import MEGABYTE, Settings
     window.open_queue()
     window.queue_page.limit.setValue(37)
     assert Settings.load().bandwidth_limit == 37 * MEGABYTE
@@ -1386,8 +1394,8 @@ def test_the_downloads_page_and_settings_share_one_free_speed_limit(qt, window):
 
 @pytest.mark.parametrize('blocker', ['none', 'running', 'external_running', 'queued', 'paused', 'failed', 'pending'])
 def test_uninstall_menu_is_only_available_for_idle_installed_clients(qt, window, tmp_path, monkeypatch, blocker):
-    from waystone.downloads import Job
-    from waystone.library import atomic_json
+    from scuffle.downloads import Job
+    from scuffle.library import atomic_json
     window.settings.root = str(tmp_path / 'games')
     window.open_library()
     window.downloads.shutdown()
@@ -1457,7 +1465,7 @@ def test_uninstall_confirmation_rechecks_if_client_starts(qt, window, tmp_path, 
 
 @pytest.mark.parametrize('code', ['wow', 'wow_classic_era_ptr'])
 def test_uninstall_completion_refreshes_storage_and_not_installed_notice(qt, window, tmp_path, monkeypatch, code):
-    from waystone.downloads import DONE, RUNNING, Job
+    from scuffle.downloads import DONE, RUNNING, Job
     window.settings.root = str(tmp_path / 'games')
     window.open_library()
     window.populate()
@@ -1481,16 +1489,16 @@ def test_uninstall_completion_refreshes_storage_and_not_installed_notice(qt, win
     measured = []
     monkeypatch.setattr(window, 'measure_storage', lambda: measured.append(True))
     job.status = DONE
-    job.result = {'uninstalled': code, 'backup': str(tmp_path / 'Waystone-backup-wow-test')}
+    job.result = {'uninstalled': code, 'backup': str(tmp_path / 'Scuffle-backup-wow-test')}
     window.on_job(job)
     assert measured == [True] and window.status(code)[0] == 'Not installed'
     assert 'uninstalled' in window.client_page.banner.text.text()
-    assert 'Waystone-backup-wow-test' in window.client_page.banner.text.text()
+    assert 'Scuffle-backup-wow-test' in window.client_page.banner.text.text()
 
 
 def test_adding_an_account_refuses_the_address_of_one_already_signed_in(qt, window, tmp_path, monkeypatch,
                                                                        save_login):
-    from waystone.auth.vault import Vault
+    from scuffle.auth.vault import Vault
     opened = []
     monkeypatch.setattr(pages, 'open_browser', opened.append)
     window.settings.root = str(tmp_path / 'games')
@@ -1520,8 +1528,8 @@ def test_adding_an_account_refuses_the_address_of_one_already_signed_in(qt, wind
 
 
 def test_the_wow_account_choice_shows_only_with_several_accounts_and_is_saved(qt, window, tmp_path, save_login):
-    from waystone.auth.vault import Vault
-    from waystone.settings import Settings
+    from scuffle.auth.vault import Vault
+    from scuffle.settings import Settings
     vault = Vault(tmp_path / 'data_dir' / 'session', bridge=None)
     login = save_login(vault, 5)
     main, second = {'id': 11, 'name': 'WANDERER', 'region': 'EU'}, {'id': 12, 'name': 'WoW1', 'region': 'EU'}
@@ -1548,7 +1556,7 @@ def test_the_wow_account_choice_shows_only_with_several_accounts_and_is_saved(qt
 
 
 def test_the_sidebar_switches_battle_net_accounts_and_signs_out_of_one(qt, window, tmp_path, save_login):
-    from waystone.auth.vault import Vault
+    from scuffle.auth.vault import Vault
     vault = Vault(tmp_path / 'data_dir' / 'session', bridge=None)
     first = save_login(vault, 5)
     first.save_battle_tag('Wanderer#7395')
@@ -1587,13 +1595,13 @@ def test_a_running_game_closes_and_shift_turns_the_button_into_force_quit(qt, wi
     from types import SimpleNamespace
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication
-    from waystone.runtime.game import ASKED, NO_WINDOW
-    from waystone.ui import app as ui
+    from scuffle.runtime.game import ASKED, NO_WINDOW
+    from scuffle.ui import app as ui
     window.settings.root = str(tmp_path / 'games')
     window.open_library()
     window.downloads.shutdown()
     installed(window, monkeypatch, ['wow'])
-    # A game Waystone did not start counts too, such as one left from an earlier window.
+    # A game Scuffle did not start counts too, such as one left from an earlier window.
     monkeypatch.setattr(window.library, 'running', lambda code, processes=None: code == 'wow')
     monkeypatch.setattr(window.library, 'game_processes', lambda code: [4242])
     window._running = window.scan_running(window.library)      # as the background scan finds it
@@ -1642,7 +1650,7 @@ def test_diagnostics_copy_a_report_and_open_the_proton_log_once_there_is_one(qt,
     from PySide6.QtCore import Qt
     from PySide6.QtGui import QDesktopServices
     from PySide6.QtTest import QTest
-    from waystone.launch import log_dir
+    from scuffle.launch import log_dir
     opened = []
     monkeypatch.setattr(QDesktopServices, 'openUrl', lambda url: opened.append(url.toLocalFile()))
     page = window.settings_page
@@ -1665,7 +1673,7 @@ def test_diagnostics_copy_a_report_and_open_the_proton_log_once_there_is_one(qt,
     while page.collecting and time.monotonic() < deadline:
         qt.processEvents()
         time.sleep(0.01)
-    assert qt.clipboard().text().startswith('Waystone diagnostics\n')
+    assert qt.clipboard().text().startswith('Scuffle diagnostics\n')
     assert page.saved_note.text() == 'Diagnostics copied. Paste them into your bug report.'
     assert page.copy_button.hasFocus() and page.copy_button.text() == 'Copy diagnostics'
 
@@ -1673,9 +1681,9 @@ def test_diagnostics_copy_a_report_and_open_the_proton_log_once_there_is_one(qt,
 @pytest.fixture
 def unseen(qt, tmp_path, monkeypatch):
     """A window as a shortcut starts it: not shown, with an installation folder and Retail installed."""
-    from waystone import discovery, settings as settings_module
-    from waystone.settings import Settings
-    from waystone.ui import app as ui
+    from scuffle import discovery, settings as settings_module
+    from scuffle.settings import Settings
+    from scuffle.ui import app as ui
 
     def offline(url, *args, **kwargs):
         raise OSError('Tests never reach the version service')
@@ -1722,8 +1730,8 @@ def test_a_shortcut_starts_a_ready_client_without_showing_the_window(qt, unseen,
 @pytest.mark.parametrize('need', ['update', 'unfinished', 'downloading', 'not-installed', 'hidden-and-behind',
                                   'did-not-start'])
 def test_a_shortcut_opens_the_window_on_a_client_that_needs_something_first(qt, unseen, monkeypatch, need):
-    from waystone.downloads import QUEUED, Job
-    from waystone.library import atomic_json
+    from scuffle.downloads import QUEUED, Job
+    from scuffle.library import atomic_json
     code = 'wowf' if need == 'not-installed' else 'wow'
     queued = []
     monkeypatch.setattr(unseen.downloads, 'enqueue', lambda client, kind, **kwargs: (
@@ -1809,8 +1817,8 @@ def test_a_running_window_takes_over_a_shortcut_and_says_when_the_game_has_exite
 @pytest.mark.skipif(sys.platform == 'win32', reason='Windows finds Steam and the Start menu '
                     'outside the folders a test can redirect')
 def test_the_menu_adds_a_client_to_the_app_launcher_and_uninstalling_removes_it(qt, window, tmp_path, monkeypatch):
-    from waystone import shortcuts
-    from waystone.downloads import DONE, Job
+    from scuffle import shortcuts
+    from scuffle.downloads import DONE, Job
     window.settings.root = str(tmp_path / 'games')
     window.open_library()
     installed(window, monkeypatch, ['wow'])
@@ -1835,7 +1843,7 @@ def test_the_menu_adds_a_client_to_the_app_launcher_and_uninstalling_removes_it(
                     'outside the folders a test can redirect')
 def test_the_menu_adds_a_client_to_steam_once_steam_is_closed(qt, window, tmp_path, monkeypatch):
     from pathlib import Path
-    from waystone import steam
+    from scuffle import steam
     config = Path.home() / '.local/share/Steam/userdata/5/config'
     config.mkdir(parents=True)
     window.settings.root = str(tmp_path / 'games')
@@ -1862,7 +1870,7 @@ def test_the_menu_adds_a_client_to_steam_once_steam_is_closed(qt, window, tmp_pa
 def test_import_finds_an_installation_and_queues_seeded_installs_for_the_chosen_clients(qt, window, tmp_path,
                                                                                       monkeypatch):
     import time
-    from waystone import imports
+    from scuffle import imports
     from test_imports import battle_net
     source = battle_net(tmp_path / 'drive/World of Warcraft', {'_retail_': 'wow', '_classic_era_': 'wow_classic_era',
                                                               '_ptr_': 'wowt'})
@@ -1902,7 +1910,7 @@ def test_import_finds_an_installation_and_queues_seeded_installs_for_the_chosen_
 
 def test_import_from_a_chosen_folder_explains_a_folder_without_an_installation(qt, window, tmp_path, monkeypatch):
     import time
-    from waystone import imports
+    from scuffle import imports
     monkeypatch.setattr(imports, 'default_places', lambda: [])
     window.settings.root = str(tmp_path / 'games')
     window.open_library()
@@ -1942,8 +1950,8 @@ def wait_until(qt, check):
 
 def test_a_finished_or_failed_download_notifies_unless_the_window_shows_that_client(qt, window, tmp_path,
                                                                                    monkeypatch):
-    from waystone.downloads import DONE, FAILED, DownloadManager
-    from waystone.library import LibraryError
+    from scuffle.downloads import DONE, FAILED, DownloadManager
+    from scuffle.library import LibraryError
 
     def execute(self, job):
         if job.client == 'wowf':
@@ -1974,12 +1982,12 @@ def test_a_finished_or_failed_download_notifies_unless_the_window_shows_that_cli
 
 
 def ui_label(code):
-    from waystone import catalog
+    from scuffle import catalog
     return catalog.get(code).label
 
 
 def test_a_new_version_is_announced_once_also_after_a_restart(qt, window, tmp_path, monkeypatch):
-    from waystone.ui import app as ui
+    from scuffle.ui import app as ui
     shown = notifications(window, monkeypatch)
     window.settings.root = str(tmp_path / 'games')
     window.open_library()
@@ -2009,7 +2017,7 @@ def test_a_game_that_quits_unexpectedly_notifies(qt, window, tmp_path, monkeypat
                                                  expected):
     import threading
     from types import SimpleNamespace
-    from waystone.ui import app as ui
+    from scuffle.ui import app as ui
     shown = notifications(window, monkeypatch)
     window.settings.root = str(tmp_path / 'games')
     window.open_library()
@@ -2047,9 +2055,9 @@ def test_a_game_that_quits_unexpectedly_notifies(qt, window, tmp_path, monkeypat
 def test_closing_with_the_tray_setting_keeps_downloads_running_until_quit(qt, window, tmp_path, monkeypatch, tray):
     import json
     from PySide6.QtWidgets import QSystemTrayIcon
-    from waystone import downloads
-    from waystone.downloads import PAUSED, QUEUED, DownloadManager
-    from waystone.settings import Settings
+    from scuffle import downloads
+    from scuffle.downloads import PAUSED, QUEUED, DownloadManager
+    from scuffle.settings import Settings
     monkeypatch.setattr(QSystemTrayIcon, 'isSystemTrayAvailable', staticmethod(lambda: tray))
     monkeypatch.setattr(DownloadManager, '_run', lambda self: None)    # the job waits, so its state stays plain
     window.settings.root = str(tmp_path / 'games')
@@ -2075,7 +2083,7 @@ def test_closing_with_the_tray_setting_keeps_downloads_running_until_quit(qt, wi
 
 def test_without_a_system_tray_the_tray_setting_is_greyed_out_and_keeps_its_choice(qt, window, monkeypatch):
     from PySide6.QtWidgets import QSystemTrayIcon
-    from waystone.settings import Settings
+    from scuffle.settings import Settings
     available = {'tray': False}
     monkeypatch.setattr(QSystemTrayIcon, 'isSystemTrayAvailable', staticmethod(lambda: available['tray']))
     window.settings.keep_in_tray = True
@@ -2093,8 +2101,8 @@ def test_without_a_system_tray_the_tray_setting_is_greyed_out_and_keeps_its_choi
 
 
 def test_the_tray_starts_a_client_as_its_main_button_does(qt, window, tmp_path, monkeypatch):
-    from waystone.downloads import DownloadManager
-    from waystone.ui import app as ui
+    from scuffle.downloads import DownloadManager
+    from scuffle.ui import app as ui
     monkeypatch.setattr(DownloadManager, '_run', lambda self: None)
     window.settings.root = str(tmp_path / 'games')
     window.open_library()
@@ -2129,9 +2137,9 @@ def wait_for(qt, condition, seconds=10):
 def test_move_takes_the_installation_to_the_chosen_folder_and_the_window_follows(qt, window, tmp_path):
     from PySide6.QtCore import Qt
     from PySide6.QtTest import QTest
-    from waystone.library import Library
-    from waystone.settings import Settings
-    source, target = tmp_path / 'games' / 'Waystone', tmp_path / 'other' / 'Waystone'
+    from scuffle.library import Library
+    from scuffle.settings import Settings
+    source, target = tmp_path / 'games' / 'Scuffle', tmp_path / 'other' / 'Scuffle'
     Library(source).create()
     (source / '_retail_').mkdir()
     (source / '_retail_' / 'Wow.exe').write_bytes(b'inert')
@@ -2161,8 +2169,8 @@ def test_move_takes_the_installation_to_the_chosen_folder_and_the_window_follows
 
 @pytest.mark.parametrize('busy', ['job', 'game'])
 def test_move_is_offered_only_without_a_download_or_a_game(qt, window, tmp_path, busy):
-    from waystone.downloads import PAUSED, Job
-    from waystone.library import Library
+    from scuffle.downloads import PAUSED, Job
+    from scuffle.library import Library
     Library(tmp_path / 'games').create()
     window.settings.root = str(tmp_path / 'games')
     window.open_library()
@@ -2185,14 +2193,14 @@ def crashed_move(tmp_path, monkeypatch):
     """A real move of a real installation, killed in the middle of its copy to another drive.
 
     Arranged before the window fixture builds the window, with the same private folders."""
-    from waystone import move, settings as settings_module
-    from waystone.settings import Settings
+    from scuffle import move, settings as settings_module
+    from scuffle.settings import Settings
     from test_library import FixtureCDN, SyntheticBuild, run_build
     from test_move import crash
     for name in ['config_dir', 'data_dir', 'cache_dir']:
         monkeypatch.setattr(settings_module, name, lambda name=name: tmp_path / name)
     monkeypatch.setattr(move.system, 'running_executables', lambda *names: [])
-    source, target = tmp_path / 'drive-a' / 'Waystone', tmp_path / 'drive-b' / 'Games'
+    source, target = tmp_path / 'drive-a' / 'Scuffle', tmp_path / 'drive-b' / 'Games'
     run_build(source, FixtureCDN(SyntheticBuild(), tmp_path / 'cdn-cache'))
     Settings(root=str(source)).save()
     target.parent.mkdir()
@@ -2202,8 +2210,8 @@ def crashed_move(tmp_path, monkeypatch):
 
 
 def test_the_window_undoes_a_move_a_crash_cut_short_before_it_opens_the_folder(qt, crashed_move, window):
-    from waystone import move
-    from waystone.library import Library
+    from scuffle import move
+    from scuffle.library import Library
     source, target = crashed_move
     assert window.library.root == source and not window.library.moving()
     assert 'undone' in window.client_page.banner.text.text()

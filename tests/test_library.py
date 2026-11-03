@@ -17,8 +17,8 @@ import threading
 
 import pytest
 
-from waystone.ngdp.cdn import CDNClient
-from waystone.library import Library, LibraryError as UpdateError, Updater as LibraryUpdater
+from scuffle.ngdp.cdn import CDNClient
+from scuffle.library import Library, LibraryError as UpdateError, Updater as LibraryUpdater
 
 
 @contextmanager
@@ -40,8 +40,8 @@ def game_running(root, product="wowf"):
 
 def Updater(root, client, product="wowf", **kwargs):
     return LibraryUpdater(Library(root), product, client, **kwargs)
-from waystone.ngdp.formats import FormatError, parse_psv
-from waystone.ngdp.store import CascSource, CascStore, SPAN_HEADER_SIZE, StoreError, bucket_for_key
+from scuffle.ngdp.formats import FormatError, parse_psv
+from scuffle.ngdp.store import CascSource, CascStore, SPAN_HEADER_SIZE, StoreError, bucket_for_key
 
 
 def md5(value):
@@ -316,7 +316,7 @@ def test_empty_full_install_uses_real_anonymous_cdn_and_casc(tmp_path):
     assert (root / "_forever_/Wow.exe").read_bytes() == build.wow.decoded
     assert (root / "_forever_/INTERFACE/client.txt").read_bytes() == build.changed.decoded
     assert (root / "_forever_/Wow.exe").stat().st_mode & 0o111
-    assert not (root / ".waystone/clients/wowf/pending.json").exists()
+    assert not (root / ".scuffle/clients/wowf/pending.json").exists()
     assert events[-1]["stage"] == "complete"
     row, = parse_psv((root / ".build.info").read_bytes())
     assert row["Build Key"] == build.version["BuildConfig"] and row["Product"] == "wowf"
@@ -370,7 +370,7 @@ def test_partial_transfer_resumes_without_refetching_stored_objects(tmp_path):
     assert installed_state(root) is None
     assert not (root / ".build.info").exists()
     assert not (root / "_forever_/Wow.exe").exists()
-    assert json.loads((root / ".waystone/clients/wowf/pending.json").read_text())["phase"] == "downloading"
+    assert json.loads((root / ".scuffle/clients/wowf/pending.json").read_text())["phase"] == "downloading"
     with CascStore(root) as store:
         retained = dict(store.iter_entries())
         assert len(retained) == 4
@@ -389,7 +389,7 @@ def test_verify_checks_the_installed_build_while_an_update_waits(tmp_path):
     changed = SyntheticBuild("0.0.1.2", changed=b"version two")
     with pytest.raises(KeyboardInterrupt):
         run_build(root, FixtureCDN(changed, tmp_path / "update", interrupt_after=0))
-    assert json.loads((root / ".waystone/clients/wowf/pending.json").read_text())["phase"] == "downloading"
+    assert json.loads((root / ".scuffle/clients/wowf/pending.json").read_text())["phase"] == "downloading"
     # The plan describes the new build now. The installed one is still whole.
     with updater_for(root, FixtureCDN(changed, tmp_path / "verify")) as updater:
         report = updater.verify()
@@ -399,7 +399,7 @@ def test_verify_checks_the_installed_build_while_an_update_waits(tmp_path):
         report = updater.verify()
     assert [error["path"] for error in report["errors"]] == ["INTERFACE/client.txt"]
     run_build(root, FixtureCDN(changed, tmp_path / "finish"))
-    assert not (root / ".waystone/clients/wowf/installed-plan.sqlite").exists()
+    assert not (root / ".scuffle/clients/wowf/installed-plan.sqlite").exists()
     with updater_for(root, FixtureCDN(changed, tmp_path / "after")) as updater:
         assert updater.verify()["ok"]
 
@@ -408,7 +408,7 @@ def test_verify_checks_the_installed_build_while_an_update_waits(tmp_path):
 def test_bad_update_object_cannot_activate_over_previous_install(tmp_path, mode):
     root, old = tmp_path / "install", SyntheticBuild()
     run_build(root, FixtureCDN(old, tmp_path / "old"))
-    before_state = (root / ".waystone/clients/wowf/state.json").read_bytes()
+    before_state = (root / ".scuffle/clients/wowf/state.json").read_bytes()
     before_info = (root / ".build.info").read_bytes()
     build = SyntheticBuild("0.0.1.2", changed=b"new bytes")
     payload = build.wow.encoded
@@ -416,7 +416,7 @@ def test_bad_update_object_cannot_activate_over_previous_install(tmp_path, mode)
     client = FixtureCDN(build, tmp_path / "bad", payloads={build.wow.ekey: bad})
     with pytest.raises((StoreError, FormatError)):
         run_build(root, client)
-    assert (root / ".waystone/clients/wowf/state.json").read_bytes() == before_state
+    assert (root / ".scuffle/clients/wowf/state.json").read_bytes() == before_state
     assert (root / ".build.info").read_bytes() == before_info
     assert (root / "_forever_/Wow.exe").read_bytes() == old.wow.decoded
     with CascStore(root) as store:
@@ -454,8 +454,8 @@ def test_activation_refuses_symlink_that_escapes_install_directory(tmp_path, lin
     assert installed_state(root) is None
 
 
-@pytest.mark.parametrize("directory", ["Data", "Data/data", "Data/config", ".waystone",
-                                        ".waystone/metadata", ".waystone/clients/wowf/staging", "_forever_"])
+@pytest.mark.parametrize("directory", ["Data", "Data/data", "Data/config", ".scuffle",
+                                        ".scuffle/metadata", ".scuffle/clients/wowf/staging", "_forever_"])
 def test_managed_directory_symlinks_are_rejected_before_external_writes(tmp_path, directory):
     root, outside = tmp_path / "install", tmp_path / "outside"
     outside.mkdir()
@@ -511,7 +511,7 @@ def test_seed_install_reads_verified_objects_without_changing_source(tmp_path):
 def test_second_updater_cannot_take_the_install_lock(tmp_path):
     root = tmp_path / "install"
     with install_lock(root, create=True):
-        with pytest.raises(UpdateError, match="Another Waystone"):
+        with pytest.raises(UpdateError, match="Another Scuffle"):
             with install_lock(root):
                 pytest.fail("a second updater acquired the lock")
 
@@ -527,7 +527,7 @@ def test_verify_reports_damaged_files_and_missing_or_corrupt_content(tmp_path, d
     elif damage == "missing_file":
         executable.unlink()
     elif damage == "missing_object":
-        with sqlite3.connect(root / ".waystone/store.sqlite") as db:
+        with sqlite3.connect(root / ".scuffle/store.sqlite") as db:
             db.execute("DELETE FROM objects WHERE ekey=?", (build.common.ekey,))
     else:
         with CascStore(root) as store:
@@ -569,7 +569,7 @@ def test_invalidated_corrupt_object_is_reacquired_and_published_by_updater(tmp_p
         assert all(after[key] == location for key, location in before.items() if key != broken.ekey)
         assert updater.store.verify(broken.ekey)
         assert updater.verify()["ok"]
-    assert result["complete"] and not (root / ".waystone/clients/wowf/pending.json").exists()
+    assert result["complete"] and not (root / ".scuffle/clients/wowf/pending.json").exists()
     assert client.metadata_keys + client.fetched_keys == [broken.ekey]
     assert (root / "Data/data" / old_location.archive).read_bytes().startswith(damaged_bytes)
     with CascSource(root) as published:
@@ -602,8 +602,8 @@ def test_game_running_detects_windows_executable_argument_by_process_working_dir
     game.mkdir(parents=True)
     (unrelated / "_forever_").mkdir(parents=True)
     for folder in (root, unrelated):
-        (folder / ".waystone/clients/wowf").mkdir(parents=True)
-        (folder / ".waystone/clients/wowf/state.json").write_text('{"folder": "_forever_"}')
+        (folder / ".scuffle/clients/wowf").mkdir(parents=True)
+        (folder / ".scuffle/clients/wowf/state.json").write_text('{"folder": "_forever_"}')
     process = subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(60)",
          r"S:\wow-forever-native\_forever_\Wow.exe"],
@@ -738,7 +738,7 @@ def test_wowupdater_installation_is_adopted_in_place(tmp_path):
     root, build = tmp_path / "install", SyntheticBuild()
     run_build(root, FixtureCDN(build, tmp_path / "cache"))
     # Recreate the single-client wowupdater layout the real installation uses.
-    state_dir, client = root / ".waystone", root / ".waystone/clients/wowf"
+    state_dir, client = root / ".scuffle", root / ".scuffle/clients/wowf"
     old_state = json.loads((client / "state.json").read_text())
     old_state.pop("folder")
     old_state["executable"] = str(root / "_forever_/Wow.exe")
@@ -760,7 +760,7 @@ def test_wowupdater_installation_is_adopted_in_place(tmp_path):
 
 
 def test_cleanup_forgets_only_content_no_installed_client_needs(tmp_path, monkeypatch):
-    import waystone.ngdp.store as store_module
+    import scuffle.ngdp.store as store_module
     # Small segments, so the old build's content fills segments of its own.
     monkeypatch.setattr(store_module, "SEGMENT_SIZE", 4096)
     root = tmp_path / "install"
@@ -798,8 +798,8 @@ def test_cleanup_waits_for_an_unfinished_update_of_an_installed_client(tmp_path)
 
 def test_download_manager_pauses_and_resumes_without_fetching_twice(tmp_path):
     import time
-    from waystone.downloads import DONE, PAUSED, DownloadManager
-    from waystone.settings import Settings
+    from scuffle.downloads import DONE, PAUSED, DownloadManager
+    from scuffle.settings import Settings
 
     root, build = tmp_path / "install", SyntheticBuild()
     fetched = []
@@ -832,8 +832,8 @@ def test_download_manager_pauses_and_resumes_without_fetching_twice(tmp_path):
 
 def test_repair_job_fetches_damaged_content_again_after_a_failed_check(tmp_path):
     import time
-    from waystone.downloads import DONE, FAILED, DownloadManager
-    from waystone.settings import Settings
+    from scuffle.downloads import DONE, FAILED, DownloadManager
+    from scuffle.settings import Settings
 
     root, build = tmp_path / "install", SyntheticBuild()
     run_build(root, FixtureCDN(build, tmp_path / "first"))
@@ -857,8 +857,8 @@ def test_repair_job_fetches_damaged_content_again_after_a_failed_check(tmp_path)
 
 def test_pausing_everything_never_starts_a_waiting_download(tmp_path):
     import threading, time
-    from waystone.downloads import PAUSED, DownloadManager
-    from waystone.settings import Settings
+    from scuffle.downloads import PAUSED, DownloadManager
+    from scuffle.settings import Settings
 
     root, build = tmp_path / "install", SyntheticBuild()
     started, release = [], threading.Event()
@@ -908,7 +908,7 @@ def test_progress_counts_only_stored_objects_while_arriving_bytes_drive_the_rate
 
 def test_a_test_build_starts_and_is_found_running_by_its_own_executable(tmp_path, monkeypatch):
     # PTRs ship WowT.exe and betas WowB.exe. Neither has a Wow.exe to start.
-    from waystone import system
+    from scuffle import system
     root = tmp_path / "install"
     run_build(root, FixtureCDN(SyntheticBuild(executable_path="WowT.exe"), tmp_path / "cache"))
     library = Library(root)
@@ -936,7 +936,7 @@ def test_a_product_naming_another_clients_folder_is_not_installed_over_it(tmp_pa
 def test_a_client_installed_from_discovery_is_listed_by_the_library(tmp_path):
     root = tmp_path / "install"
     run_build(root, FixtureCDN(SyntheticBuild(), tmp_path / "cache"))
-    clients = root / ".waystone/clients"
+    clients = root / ".scuffle/clients"
     (clients / "wowe1").mkdir()
     (clients / "wowe1/state.json").write_text((clients / "wowf/state.json").read_text())
     (clients / "not-a-product").mkdir()
@@ -948,7 +948,7 @@ def test_a_paused_update_reserves_the_folder_it_moves_into(tmp_path):
     root = tmp_path / "install"
     run_build(root, FixtureCDN(SyntheticBuild(changed=b"forever content"), tmp_path / "forever-cache"))
     # Forever is installed and has an unfinished update that targets another folder.
-    pending = root / ".waystone/clients/wowf/pending.json"
+    pending = root / ".scuffle/clients/wowf/pending.json"
     pending.write_text(json.dumps({"phase": "downloading", "folder": "_moved_"}))
     event = SyntheticBuild("0.0.2.2", changed=b"event content", product="wowe1", folder="_moved_")
     with pytest.raises(UpdateError, match="_moved_, which Forever already uses"):
@@ -999,7 +999,7 @@ def test_uninstall_settings_backup_preserves_user_files(uninstall_pair, keep):
     with library.locked():
         result = library.uninstall('wowf', keep_settings=keep)
     assert not game.exists()
-    backups = list(library.root.glob('Waystone-backup-wowf-*'))
+    backups = list(library.root.glob('Scuffle-backup-wowf-*'))
     if keep:
         assert len(backups) == 1 and result['backup'] == str(backups[0])
         assert (backups[0] / 'WTF/account.wtf').read_bytes() == b'personal settings'
@@ -1011,7 +1011,7 @@ def test_uninstall_settings_backup_preserves_user_files(uninstall_pair, keep):
 
 @pytest.mark.parametrize('blocker', ['running', 'pending', 'empty_pending', 'job'])
 def test_uninstall_refuses_busy_client_without_changing_files(uninstall_pair, monkeypatch, blocker):
-    from waystone.library import atomic_json
+    from scuffle.library import atomic_json
     library, _, _ = uninstall_pair
     if blocker == 'running':
         monkeypatch.setattr(library, 'running', lambda code: code == 'wowf')
@@ -1057,9 +1057,9 @@ def test_uninstall_refuses_symlinks_without_touching_the_target(uninstall_pair, 
         assert not library.uninstall_record.exists()
 
 
-@pytest.mark.parametrize('folder', ['../outside', 'absolute', 'Data', '.waystone', '_RETAIL_', '_retail_'])
+@pytest.mark.parametrize('folder', ['../outside', 'absolute', 'Data', '.scuffle', '_RETAIL_', '_retail_'])
 def test_uninstall_refuses_unsafe_or_other_client_folder(uninstall_pair, folder):
-    from waystone.library import atomic_json
+    from scuffle.library import atomic_json
     library, _, _ = uninstall_pair
     outside = library.root.parent / 'outside'
     outside.mkdir()
@@ -1079,7 +1079,7 @@ def test_uninstall_refuses_unsafe_or_other_client_folder(uninstall_pair, folder)
 
 @pytest.mark.parametrize('point', ['rename', 'backup', 'state_move', 'build_info'])
 def test_uninstall_interruption_recovers_on_next_start(uninstall_pair, monkeypatch, point):
-    import waystone.library as module
+    import scuffle.library as module
     library, _, _ = uninstall_pair
     original_rename = module.os.rename
     def rename(source, destination):
@@ -1103,8 +1103,8 @@ def test_uninstall_interruption_recovers_on_next_start(uninstall_pair, monkeypat
     assert not restarted.uninstall_record.exists()
     assert not restarted.client_dir('wowf').exists()
     assert not (library.root / '_forever_').exists()
-    assert not list(library.root.glob('.waystone-trash-*'))
-    backups = list(library.root.glob('Waystone-backup-wowf-*'))
+    assert not list(library.root.glob('.scuffle-trash-*'))
+    backups = list(library.root.glob('Scuffle-backup-wowf-*'))
     assert len(backups) == 1 and (backups[0] / 'WTF/Config.wtf').is_file()
     assert (library.root / '_retail_/Wow.exe').is_file()
     assert [row['Product'] for row in parse_psv((library.root / '.build.info').read_bytes())] == ['wow']
@@ -1112,11 +1112,11 @@ def test_uninstall_interruption_recovers_on_next_start(uninstall_pair, monkeypat
 
 @pytest.mark.parametrize('point', ['trash_delete', 'cleanup'])
 def test_a_file_that_cannot_be_deleted_never_blocks_the_library(uninstall_pair, monkeypatch, point):
-    import waystone.library as module
+    import scuffle.library as module
     library, _, _ = uninstall_pair
     original_rmtree = module.shutil.rmtree
     def rmtree(path, *args, **kwargs):
-        if Path(path).name.startswith('.waystone-trash-'):
+        if Path(path).name.startswith('.scuffle-trash-'):
             # Partly deleted, then a file that stays, such as one held open on Windows.
             next(p for p in Path(path).rglob('*') if p.is_file()).unlink()
             raise PermissionError('in use')
@@ -1134,12 +1134,12 @@ def test_a_file_that_cannot_be_deleted_never_blocks_the_library(uninstall_pair, 
     # Other clients keep working, and the next operation removes what stayed.
     with library.locked():
         pass
-    assert not list(library.root.glob('.waystone-trash-*'))
+    assert not list(library.root.glob('.scuffle-trash-*'))
     assert library.installed() == ['wow']
 
 
 def test_uninstall_never_crosses_into_another_file_system(uninstall_pair, monkeypatch, tmp_path):
-    import waystone.library as module
+    import scuffle.library as module
     library, _, _ = uninstall_pair
     mounted = library.root / '_forever_' / 'Screenshots'
     mounted.mkdir(exist_ok=True)
@@ -1178,8 +1178,8 @@ def test_uninstall_defers_cleanup_while_another_client_runs(uninstall_pair, monk
 
 
 def test_uninstall_restart_worker_finishes_journal_even_without_auto_resume(uninstall_pair, monkeypatch):
-    from waystone.downloads import DONE, FAILED, DownloadManager
-    from waystone.settings import Settings
+    from scuffle.downloads import DONE, FAILED, DownloadManager
+    from scuffle.settings import Settings
     library, _, _ = uninstall_pair
     def crash():
         raise OSError('crash')
@@ -1208,7 +1208,7 @@ def test_uninstall_restart_worker_finishes_journal_even_without_auto_resume(unin
 
 
 def test_uninstall_recovery_refuses_a_game_started_after_the_crash(uninstall_pair, monkeypatch):
-    import waystone.library as module
+    import scuffle.library as module
     library, _, _ = uninstall_pair
     def crash(*args):
         raise OSError('crash')
@@ -1228,7 +1228,7 @@ def test_uninstall_recovery_refuses_a_game_started_after_the_crash(uninstall_pai
 
 def test_without_linux_mount_information_nothing_is_deleted(uninstall_pair, monkeypatch):
     import pathlib
-    import waystone.library as module
+    import scuffle.library as module
     library, _, _ = uninstall_pair
     monkeypatch.setattr(module.sys, 'platform', 'linux')
     original = pathlib.Path.read_text
@@ -1244,7 +1244,7 @@ def test_without_linux_mount_information_nothing_is_deleted(uninstall_pair, monk
 
 def test_trash_that_cannot_be_removed_never_blocks_the_library(uninstall_pair):
     library, _, _ = uninstall_pair
-    trash = library.root / '.waystone-trash-0123456789abcdef0123456789abcdef'
+    trash = library.root / '.scuffle-trash-0123456789abcdef0123456789abcdef'
     locked_away = trash / 'Logs'
     locked_away.mkdir(parents=True)
     log = locked_away / 'session.log'
@@ -1260,7 +1260,7 @@ def test_trash_that_cannot_be_removed_never_blocks_the_library(uninstall_pair):
             pass
         assert trash.exists() and library.installed() == ['wow', 'wowf']
         # Deleting it directly reports that something stayed, and does not raise.
-        from waystone.library import remove_tree
+        from scuffle.library import remove_tree
         assert remove_tree(trash) is False and (locked_away.parent).exists()
     finally:
         if held:

@@ -15,7 +15,7 @@ import tempfile
 import time
 
 # Folders of its own, so no state reads or touches the user's settings, sign-in or library.
-_home = tempfile.mkdtemp(prefix='waystone-screens-')
+_home = tempfile.mkdtemp(prefix='scuffle-screens-')
 for _name in ['XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'APPDATA', 'LOCALAPPDATA']:
     os.environ[_name] = os.path.join(_home, _name.lower())
 os.environ['HOME'] = _home          # so the Steam the menu finds is a stand-in, never the user's
@@ -24,10 +24,10 @@ os.environ['DBUS_SESSION_BUS_ADDRESS'] = 'unix:path=' + os.path.join(_home, 'no-
 
 from PySide6.QtWidgets import QApplication, QScrollArea
 
-from waystone import discovery
-from waystone.downloads import FAILED, PAUSED, QUEUED, RUNNING, Job, MoveTask
-from waystone.settings import Settings
-from waystone.ui import app as ui
+from scuffle import discovery
+from scuffle.downloads import FAILED, PAUSED, QUEUED, RUNNING, Job, MoveTask
+from scuffle.settings import Settings
+from scuffle.ui import app as ui
 
 SIZES = {'minimum': (900, 560), 'small': (960, 650), 'large': (1440, 900)}
 
@@ -221,7 +221,7 @@ def main(output: Path) -> None:
     window.populate()
     window.settings_page.lock_folder('')
     window.open_settings()
-    folder = Path(_home) / 'games' / 'Waystone'
+    folder = Path(_home) / 'games' / 'Scuffle'
     folder.mkdir(parents=True)
     window.open_folder_picker(str(folder))
     # The folder tree loads in the background. Give it the time a person would see.
@@ -248,7 +248,7 @@ def main(output: Path) -> None:
     window.client_list.select('wow')
     launch_states(window, shot)
     tray_menu(window, application, output)
-    from waystone.ui import pages
+    from scuffle.ui import pages
     pages.open_browser = lambda url: None
     window.signed_in = lambda: False             # the sign-in page only appears without a session
     window.on_sign_in_requested('https://eu.account.battle.net/login/?externalChallenge=login&app=wow')
@@ -270,7 +270,7 @@ def main(output: Path) -> None:
 
 def diagnostics_states(window, shot, application) -> None:
     """Before a game wrote a Proton log, then with one and the report just copied."""
-    from waystone.launch import log_dir
+    from scuffle.launch import log_dir
     page = window.settings_page
     page.show_section('diagnostics')
     shot('10h-settings-diagnostics')
@@ -288,8 +288,8 @@ def diagnostics_states(window, shot, application) -> None:
 
 def shortcut_states(window, shot, output: Path, application) -> None:
     """The client menu with the app launcher and Steam entries, the notices they give, and their images."""
-    from waystone import steam
-    from waystone.ui import style
+    from scuffle import steam
+    from scuffle.ui import style
     (Path(_home) / '.local/share/Steam/userdata/5/config').mkdir(parents=True, exist_ok=True)
     menu = window.client_page.more.menu()
     window.client_page.more.setFocus()
@@ -322,7 +322,7 @@ def shortcut_states(window, shot, output: Path, application) -> None:
 
 def launch_states(window, shot) -> None:
     """The Linux launch settings and one client's launch options, fine and with mistakes."""
-    from waystone.launch_options import ClientOptions
+    from scuffle.launch_options import ClientOptions
     page = window.settings_page
     if page.launch is not None:
         window.open_settings('launch')
@@ -391,7 +391,7 @@ def fake_battle_net(folder: Path, clients: dict[str, str]) -> Path:
 
 def import_states(window, shot, application) -> None:
     """Importing Classic Era from installations found in a throwaway home, never the user's own folders."""
-    from waystone import imports
+    from scuffle import imports
     home = Path(_home)
     fake_battle_net(home / 'Games/battlenet/drive_c/Program Files (x86)/World of Warcraft',
                     {'_retail_': 'wow', '_classic_era_': 'wow_classic_era', '_ptr_': 'wowt'})
@@ -462,7 +462,7 @@ def fake_installed(window, code: str) -> None:
     """Show a client as installed, as the tests do, when this machine has none. Nothing is written."""
     import tempfile
     if not window.library:
-        window.settings.root = tempfile.mkdtemp(prefix='waystone-screens-')
+        window.settings.root = tempfile.mkdtemp(prefix='scuffle-screens-')
         window.open_library()
     state = window.library.state
     window.library.state = lambda c: ({'version': '12.0.5.66741', 'region': 'eu', 'locale': 'enUS',
@@ -511,7 +511,7 @@ def move_states(window, shot, application) -> None:
         application.processEvents()
         time.sleep(0.02)
     shot('14c-move-picker')
-    target = str(Path(_home) / 'second-drive' / 'Waystone')
+    target = str(Path(_home) / 'second-drive' / 'Scuffle')
     page = window.move_page
     source = str(window.library.root)
     page.load(source, target)

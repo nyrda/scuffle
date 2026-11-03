@@ -13,10 +13,10 @@ import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / '.pytest_cache' / 'uninstall-mutations'
-LIB = 'src/waystone/library.py'
-QUEUE = 'src/waystone/downloads.py'
-APP = 'src/waystone/ui/app.py'
-PAGES = 'src/waystone/ui/pages.py'
+LIB = 'src/scuffle/library.py'
+QUEUE = 'src/scuffle/downloads.py'
+APP = 'src/scuffle/ui/app.py'
+PAGES = 'src/scuffle/ui/pages.py'
 
 
 def test(file, name, parameter=''):

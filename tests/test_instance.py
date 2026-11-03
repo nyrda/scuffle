@@ -7,8 +7,8 @@ import threading
 
 import pytest
 
-from waystone import cli, instance
-from waystone.library import LibraryError
+from scuffle import cli, instance
+from scuffle.library import LibraryError
 
 
 def test_a_later_start_hands_its_request_to_the_window_and_waits_for_the_game():
@@ -76,7 +76,7 @@ def test_a_request_the_window_refuses_ends_with_its_reason():
 def test_a_waiting_shortcut_keeps_waiting_for_the_game_when_the_window_closes_first(tmp_path):
     executable = tmp_path / '_retail_' / 'Wow.exe'
     executable.parent.mkdir()
-    # A process that runs the game's file as far as Waystone can tell, by its first argument.
+    # A process that runs the game's file as far as Scuffle can tell, by its first argument.
     game = subprocess.Popen([str(executable), '-c', 'sleep 1; true'], executable=shutil.which('bash'))
     window = instance.claim({'show': True})
     window.serve(lambda request, reply: (reply.send(ok=True, executable=str(executable)), reply.close()))

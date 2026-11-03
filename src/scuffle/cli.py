@@ -1,0 +1,176 @@
+"""Command-line access to the same operations as the interface."""
+from __future__ import annotations
+
+import argparse
+import getpass
+import json
+import os
+from pathlib import Path
+import sys
+
+from . import catalog, move, system
+from .instance import InstanceError, exclusive
+from .library import Library, LibraryError, Updater
+from .ngdp.cdn import CDNClient
+from .settings import Settings, cache_dir
+
+
+def terminal_sign_in(url: str) -> bytes:
+    from .launch import open_browser, parse_ticket
+    print(f'Sign in to Battle.net in your browser:\n\n  {url}\n\n'
+          'Afterwards the browser cannot open http://localhost:0/?ST=... '
+          'Copy that whole address and paste it here.', file=sys.stderr, flush=True)
+    open_browser(url)
+    text = getpass.getpass('Address (hidden): ') if sys.stdin.isatty() else sys.stdin.readline(4096)
+    return parse_ticket(text)
+
+
+def progress(event: dict) -> None:
+    print(json.dumps(event), file=sys.stderr, flush=True)
+
+
+def updater(library: Library, code: str, args) -> Updater:
+    state = library.state(code) or {}
+    region = args.region or state.get('region', 'eu')
+    locale = args.locale or state.get('locale', 'enUS')
+    client = CDNClient(cache_dir(), region, code, workers=args.workers)
+    return Updater(library, code, client, region=region, locale=locale,
+                   seed_from=getattr(args, 'seed_from', None), progress=progress)
+
+
+def client_code(code: str) -> str:
+    """Any product code. Discovery may have found one the built-in list lacks."""
+    if not catalog.is_product(code):
+        raise argparse.ArgumentTypeError(f'{code!r} is not a World of Warcraft product code')
+    return code
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog='scuffle', description=__doc__)
+    parser.add_argument('--root', type=Path, help='Installation folder, by default the saved one')
+    commands = parser.add_subparsers(dest='command')
+    commands.add_parser('clients', help='List the clients and their installed versions')
+    commands.add_parser('sign-in', help='Sign in to a Battle.net account through the browser and make it active')
+    commands.add_parser('sign-out', help='Sign out of the active Battle.net account')
+    commands.add_parser('diagnostics', help='Print a report for bug reports, without sign-in data or account names')
+    play = commands.add_parser('play', help='Renew the active account\'s session and start a client')
+    play.add_argument('client', type=client_code)
+    play.add_argument('--mode', help='Game mode, such as hardcore for Classic Era')
+    play.add_argument('--wait', action='store_true', help='Wait until the game exits')
+    play.add_argument('--shortcut', action='store_true',
+                      help='Start as a shortcut does: through the Scuffle window if it runs, and with the '
+                           'window when the client needs a sign-in or an update')
+    adopt = commands.add_parser('adopt-wowupdater', help='Adopt a wowupdater installation in place')
+    adopt.add_argument('source', type=Path)
+    for name in ['install', 'update', 'verify']:
+        command = commands.add_parser(name)
+        command.add_argument('client', type=client_code)
+        command.add_argument('--region')
+        command.add_argument('--locale')
+        command.add_argument('--workers', type=int, default=16)
+        if name == 'install':
+            command.add_argument('--seed-from', type=Path, help='Read-only installation to copy verified content from')
+        if name == 'verify':
+            command.add_argument('--quick', action='store_true', help='Skip reading every stored object')
+    args = parser.parse_args(argv)
+    if args.command is None:
+        from .ui.app import main as interface
+        return interface()
+    if args.command == 'diagnostics':
+        # Before the settings load, so a broken settings file still gets a report.
+        from .diagnostics import command_line_report
+        print(command_line_report(args.root), end='', flush=True)
+        return
+    if args.command == 'play' and args.shortcut:
+        # The window's own Play, which handles sign-in and updates and keeps one Scuffle per user.
+        from .ui.app import main as interface
+        return interface({'play': args.client, 'mode': args.mode, 'wait': args.wait})
+    if args.command == 'clients':
+        return run(args)        # reads only
+    # The window's queue, launches and session must not run beside a command's.
+    with exclusive():
+        return run(args)
+
+
+def run(args):
+    settings = Settings.load()
+    if args.root is None:
+        try:
+            move.recover(settings)      # an interrupted move decides which folder is the installation
+        except (LibraryError, OSError):
+            pass                        # such as another Scuffle moving it. The library refuses changes meanwhile
+    root = args.root or (Path(settings.root) if settings.root else None)
+    if root is None:
+        raise LibraryError('Choose an installation folder with --root')
+    library = Library(root)
+    if args.command in ('sign-in', 'sign-out', 'play'):
+        from .launch import Launcher
+        launcher = Launcher(settings, library)
+        if args.command == 'sign-out':
+            launcher.vault.forget()
+        elif args.command == 'sign-in':
+            states = [library.state(code) for code in library.installed()]
+            if not states:
+                raise LibraryError('Install a client before signing in')
+            launcher.sign_in(int(states[0]['version'].rsplit('.', 1)[-1]), terminal_sign_in)
+        else:
+            process = launcher.play(args.client, terminal_sign_in, mode=args.mode)
+            print(json.dumps({'started': args.client, 'pid': process.pid}), flush=True)
+            if args.wait:
+                process.wait()
+        return
+
+    if args.command == 'adopt-wowupdater':
+        source = args.source.resolve()
+        if source != library.root:
+            if library.root.exists():
+                raise LibraryError(f'{library.root} already exists')
+            os.rename(source, library.root)
+        Library.migrate_wowupdater(library.root)
+        print(json.dumps({'adopted': str(library.root), 'clients': Library(library.root).installed()}))
+        return
+    if args.command == 'clients':
+        from . import discovery
+        catalog.apply((discovery.load(cache_dir(), settings.region) or {}).get('products'))
+        installed = library.installed() if library.exists() else []
+        codes = [c.code for c in catalog.clients()]
+        rows = []
+        for client in catalog.clients() + [catalog.get(code) for code in installed if code not in codes]:
+            state = library.state(client.code) if library.exists() else None
+            release = catalog.release(client.code)
+            rows.append({'client': client.code, 'label': client.label, 'category': client.category,
+                         'test': client.test, 'published': release.version if release else None,
+                         'installed': state['version'] if state else None,
+                         'folder': state['folder'] if state else None})
+        print(json.dumps(rows, indent=2))
+        return
+    if args.command == 'install':
+        library.create()
+    elif library.state(args.client) is None:
+        raise LibraryError(f'{catalog.get(args.client).label} is not installed')
+    with library.locked():
+        job = updater(library, args.client, args)
+        try:
+            if args.command == 'verify':
+                result = job.verify(deep=not args.quick)
+            else:
+                result = job.run()
+                result = {k: result[k] for k in ['product', 'version', 'folder', 'objects', 'encoded_bytes',
+                                                 'seeded_objects', 'downloaded_objects']}
+        finally:
+            job.close()
+    print(json.dumps(result, indent=2))
+    if args.command == 'verify' and not result['ok']:
+        raise SystemExit(2)
+
+
+def entrypoint():
+    system.attach_console()
+    try:
+        main()
+    except (LibraryError, OSError, ValueError, InstanceError) as error:
+        raise SystemExit(str(error))
+
+
+if __name__ == '__main__':
+    entrypoint()

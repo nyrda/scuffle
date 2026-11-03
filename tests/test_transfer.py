@@ -6,10 +6,10 @@ import io
 
 import pytest
 
-from waystone.ngdp import cdn
-from waystone.ngdp.cdn import CDNClient, Throttle, TransferCancelled
-from waystone.ngdp.models import DownloadEntry, Location
-from waystone.rates import RateSmoother
+from scuffle.ngdp import cdn
+from scuffle.ngdp.cdn import CDNClient, Throttle, TransferCancelled
+from scuffle.ngdp.models import DownloadEntry, Location
+from scuffle.rates import RateSmoother
 
 
 class Clock:

@@ -5,8 +5,8 @@ import struct
 
 import pytest
 
-from waystone.auth.bgs import BGS, CredentialRejected, WOW_TITLE
-from waystone.auth.protobuf import blob, fields, first, integer
+from scuffle.auth.bgs import BGS, CredentialRejected, WOW_TITLE
+from scuffle.auth.protobuf import blob, fields, first, integer
 
 # Bytes sent by the launcher version that authenticated against Battle.net.
 # A change here alters what the server receives before it consumes a ticket.

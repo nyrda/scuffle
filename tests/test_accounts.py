@@ -5,12 +5,12 @@ import sys
 
 import pytest
 
-from waystone import launch
-from waystone.auth import bgs
-from waystone.auth.protobuf import blob, fields, integer
-from waystone.auth.vault import Vault
-from waystone.runtime.game import _launch_arguments
-from waystone.settings import Settings
+from scuffle import launch
+from scuffle.auth import bgs
+from scuffle.auth.protobuf import blob, fields, integer
+from scuffle.auth.vault import Vault
+from scuffle.runtime.game import _launch_arguments
+from scuffle.settings import Settings
 
 OWNER = 412345678
 MAIN = {'id': 2886143, 'name': 'WANDERER', 'region': 'EU'}
@@ -59,7 +59,7 @@ def test_names_that_cannot_be_read_are_unknown_rather_than_no_accounts(fail, nam
 
 def test_a_failed_lookup_keeps_the_list_of_the_same_login_only(tmp_path, save_login):
     vault = Vault(tmp_path / 'session', bridge=None)
-    login = save_login(vault)           # an older Waystone's session, whose account id is not known yet
+    login = save_login(vault)           # an older Scuffle's session, whose account id is not known yet
     login.save_accounts(OWNER, [MAIN, SECOND])
     login.save_accounts(OWNER, None)
     assert login.accounts() == {'owner': OWNER, 'game_accounts': [MAIN, SECOND]}
@@ -138,7 +138,7 @@ def test_a_launch_passes_the_account_chosen_for_this_login(tmp_path, monkeypatch
 
 def test_saved_choices_that_are_not_an_account_id_are_dropped(tmp_path, monkeypatch):
     import json
-    from waystone import settings as settings_module
+    from scuffle import settings as settings_module
     monkeypatch.setattr(settings_module, 'config_dir', lambda: tmp_path)
     (tmp_path / 'settings.json').write_text(json.dumps({'game_accounts': {
         str(OWNER): SECOND['id'], 'name': 1, '7': 'WoW1', '8': True}}))

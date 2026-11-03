@@ -1,4 +1,4 @@
-"""Windows does the bridge's work in Waystone: DPAPI, the device identity, the game's credential and closing it.
+"""Windows does the bridge's work in Scuffle: DPAPI, the device identity, the game's credential and closing it.
 
 These tests write only below a throwaway key under HKCU\\Software, never to Battle.net's own keys.
 """
@@ -14,9 +14,9 @@ import pytest
 pytestmark = pytest.mark.skipif(sys.platform != 'win32', reason='Windows only')
 if sys.platform == 'win32':
     import winreg
-    from waystone.runtime import windows
-    from waystone.runtime.bridge import BridgeError
-    from waystone.runtime.game import ASKED, NO_WINDOW, NOT_RUNNING, RuntimeFailure
+    from scuffle.runtime import windows
+    from scuffle.runtime.bridge import BridgeError
+    from scuffle.runtime.game import ASKED, NO_WINDOW, NOT_RUNNING, RuntimeFailure
 
 
 def delete_tree(root, path):
@@ -35,7 +35,7 @@ def delete_tree(root, path):
 
 @pytest.fixture
 def keys(monkeypatch):
-    base = f'Software\\Waystone-tests-{uuid.uuid4().hex}'
+    base = f'Software\\Scuffle-tests-{uuid.uuid4().hex}'
     monkeypatch.setattr(windows, 'IDENTITY_KEY', base + '\\Identity')
     monkeypatch.setattr(windows, 'LAUNCH_KEY', base + '\\Launch Options\\WoW')
     yield base

@@ -5,12 +5,12 @@ import sys
 
 import pytest
 
-from waystone import launch
-from waystone.auth.bgs import CredentialRejected
-from waystone.auth.vault import Vault
-from waystone.launch import Launcher, looks_like_redirect, parse_ticket
-from waystone.runtime.bridge import bridge_executable, read_frame
-from waystone.settings import Settings, data_dir
+from scuffle import launch
+from scuffle.auth.bgs import CredentialRejected
+from scuffle.auth.vault import Vault
+from scuffle.launch import Launcher, looks_like_redirect, parse_ticket
+from scuffle.runtime.bridge import bridge_executable, read_frame
+from scuffle.settings import Settings, data_dir
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -33,9 +33,9 @@ def test_bridge_frame_payload_is_returned():
 
 
 def test_a_packaged_bridge_runs_from_a_lasting_copy_that_an_update_never_overwrites(tmp_path, monkeypatch):
-    # A one-file build unpacks into a temporary folder that goes away when Waystone exits,
+    # A one-file build unpacks into a temporary folder that goes away when Scuffle exits,
     # while the bridge keeps waiting for the game.
-    monkeypatch.delenv('WAYSTONE_BRIDGE', raising=False)
+    monkeypatch.delenv('SCUFFLE_BRIDGE', raising=False)
     packaged = tmp_path / 'bundle' / 'bridge' / 'wow_auth_bridge.exe'
     packaged.parent.mkdir(parents=True)
     packaged.write_bytes(b'MZ first')
@@ -53,20 +53,20 @@ def test_a_packaged_bridge_runs_from_a_lasting_copy_that_an_update_never_overwri
 
 
 def test_the_appimage_bridge_runs_from_a_lasting_copy_and_the_nix_bridge_in_place(tmp_path, monkeypatch):
-    # The AppImage's mount goes away when Waystone exits, while the bridge waits for the game.
+    # The AppImage's mount goes away when Scuffle exits, while the bridge waits for the game.
     appdir = tmp_path / 'mount'
-    packaged = appdir / 'usr' / 'libexec' / 'waystone' / 'wow_auth_bridge.exe'
+    packaged = appdir / 'usr' / 'libexec' / 'scuffle' / 'wow_auth_bridge.exe'
     packaged.parent.mkdir(parents=True)
     packaged.write_bytes(b'MZ appimage')
     monkeypatch.setenv('APPDIR', str(appdir))
-    monkeypatch.setenv('WAYSTONE_BRIDGE', str(packaged))
+    monkeypatch.setenv('SCUFFLE_BRIDGE', str(packaged))
     copy = bridge_executable()
     assert copy.parent == data_dir() / 'bin' and copy.read_bytes() == b'MZ appimage'
 
     store = tmp_path / 'store' / 'libexec' / 'wow_auth_bridge.exe'
     store.parent.mkdir(parents=True)
     store.write_bytes(b'MZ nix')
-    monkeypatch.setenv('WAYSTONE_BRIDGE', str(store))
+    monkeypatch.setenv('SCUFFLE_BRIDGE', str(store))
     assert bridge_executable() == store
 
 

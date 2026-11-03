@@ -1,27 +1,27 @@
 #!/bin/sh
-# The AppImage's start: Waystone, or umu-run when usr/bin/umu-run asks for it.
+# The AppImage's start: Scuffle, or umu-run when usr/bin/umu-run asks for it.
 here=$(dirname "$(readlink -f "$0")")
 python=$here/usr/python/bin/python3.14
 # -I keeps the user's Python variables and packages out. -B writes no bytecode, so nothing
 # is written into the image, even when it runs extracted.
-if [ "${WAYSTONE_APPRUN-}" = umu-run ]; then
-    unset WAYSTONE_APPRUN
+if [ "${SCUFFLE_APPRUN-}" = umu-run ]; then
+    unset SCUFFLE_APPRUN
     umu=$here/usr/lib/umu/umu-run
     if [ ! -f "$umu" ]; then
-        echo "umu-run is missing from this Waystone AppImage at $umu" >&2
+        echo "umu-run is missing from this Scuffle AppImage at $umu" >&2
         exit 127
     fi
     exec "$python" -I -B "$umu" "$@"
 fi
-# Waystone copies a bridge inside APPDIR to its data folder, since the mount goes away on exit.
+# Scuffle copies a bridge inside APPDIR to its data folder, since the mount goes away on exit.
 export APPDIR="$here"
-export WAYSTONE_BRIDGE="$here/usr/libexec/waystone/wow_auth_bridge.exe"
-for part in "$python" "$WAYSTONE_BRIDGE"; do
+export SCUFFLE_BRIDGE="$here/usr/libexec/scuffle/wow_auth_bridge.exe"
+for part in "$python" "$SCUFFLE_BRIDGE"; do
     if [ ! -f "$part" ]; then
-        echo "This Waystone AppImage is incomplete: $part is missing" >&2
+        echo "This Scuffle AppImage is incomplete: $part is missing" >&2
         exit 127
     fi
 done
 # The bundled umu-run comes first, as the Nix package puts its own first.
 export PATH="$here/usr/bin${PATH:+:$PATH}"
-exec "$python" -I -B -m waystone "$@"
+exec "$python" -I -B -m scuffle "$@"

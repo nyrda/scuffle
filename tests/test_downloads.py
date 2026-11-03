@@ -6,11 +6,11 @@ import threading
 
 import pytest
 
-from waystone.downloads import DONE, FAILED, PAUSED, QUEUED, RUNNING, DownloadManager
-from waystone.library import Cancelled, Library, Plan, atomic_json
-from waystone.ngdp.models import DownloadEntry
-from waystone.ngdp.store import CascStore
-from waystone.settings import Settings, data_dir
+from scuffle.downloads import DONE, FAILED, PAUSED, QUEUED, RUNNING, DownloadManager
+from scuffle.library import Cancelled, Library, Plan, atomic_json
+from scuffle.ngdp.models import DownloadEntry
+from scuffle.ngdp.store import CascStore
+from scuffle.settings import Settings, data_dir
 
 
 @pytest.fixture
@@ -233,7 +233,7 @@ def test_auto_resume_waits_when_the_folder_is_gone_such_as_an_unmounted_drive(ma
 
 
 def test_a_failed_queue_save_never_stops_the_downloads(managers, monkeypatch):
-    from waystone import downloads
+    from scuffle import downloads
     manager = managers()
     def full(path, value):
         raise OSError(28, 'No space left on device')
@@ -244,7 +244,7 @@ def test_a_failed_queue_save_never_stops_the_downloads(managers, monkeypatch):
 
 @pytest.mark.parametrize('status', [QUEUED, RUNNING, PAUSED, FAILED])
 def test_uninstall_cannot_replace_a_download_job(managers, status):
-    from waystone.library import LibraryError
+    from scuffle.library import LibraryError
     manager = managers()
     existing = manager.enqueue('wow', 'update')
     existing.status = status
@@ -316,7 +316,7 @@ def test_uninstall_worker_reports_database_errors(managers, monkeypatch):
 
 
 def test_a_long_stage_before_the_transfer_reports_its_count_until_bytes_move(managers, monkeypatch):
-    from waystone import downloads
+    from scuffle import downloads
     manager = managers()
     seen = []
 
@@ -429,7 +429,7 @@ def test_an_import_whose_source_is_gone_fails_clearly_before_reading_anything(ma
 
 @pytest.mark.parametrize('case', ['inside_root', 'download_exists'])
 def test_an_import_is_refused_inside_the_installation_folder_or_over_a_download(managers, tmp_path, case):
-    from waystone.library import LibraryError
+    from scuffle.library import LibraryError
     manager = managers()
     source = str(tmp_path / 'other')
     if case == 'inside_root':

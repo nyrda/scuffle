@@ -8,7 +8,7 @@
       pkgs = import nixpkgs { inherit system; };
       version = (builtins.fromTOML (builtins.readFile ./pyproject.toml)).project.version;
       bridge = pkgs.pkgsCross.mingwW64.stdenv.mkDerivation {
-        pname = "waystone-bridge";
+        pname = "scuffle-bridge";
         inherit version;
         src = ./bridge;
         dontConfigure = true;
@@ -23,7 +23,7 @@
       };
       python = pkgs.python3;
       app = python.pkgs.buildPythonApplication {
-        pname = "waystone";
+        pname = "scuffle";
         inherit version;
         pyproject = true;
         src = pkgs.lib.fileset.toSource {
@@ -34,38 +34,38 @@
         nativeBuildInputs = [ pkgs.copyDesktopItems ];
         # jeepney sends desktop notifications over D-Bus. PySide6 cannot marshal the uint32 they need.
         dependencies = [ python.pkgs.pyside6 python.pkgs.jeepney ];
-        # The window sets its Wayland app id to "waystone", which matches this entry.
+        # The window sets its Wayland app id to "scuffle", which matches this entry.
         desktopItems = [
           (pkgs.makeDesktopItem {
-            name = "waystone";
-            desktopName = "Waystone";
+            name = "scuffle";
+            desktopName = "Scuffle";
             comment = "Install, update and launch the public World of Warcraft clients";
-            exec = "waystone";
-            icon = "waystone";
+            exec = "scuffle";
+            icon = "scuffle";
             categories = [ "Game" ];
-            startupWMClass = "waystone";
+            startupWMClass = "scuffle";
           })
         ];
         postInstall = ''
-          install -Dm644 src/waystone/ui/icon.svg $out/share/icons/hicolor/scalable/apps/waystone.svg
+          install -Dm644 src/scuffle/ui/icon.svg $out/share/icons/hicolor/scalable/apps/scuffle.svg
         '';
         makeWrapperArgs = [
-          "--set" "WAYSTONE_BRIDGE" "${bridge}/libexec/wow_auth_bridge.exe"
+          "--set" "SCUFFLE_BRIDGE" "${bridge}/libexec/wow_auth_bridge.exe"
           # NixOS needs the Nix build of umu-launcher for its FHS container. nsenter closes a game in it.
           "--prefix" "PATH" ":" (pkgs.lib.makeBinPath [ pkgs.umu-launcher pkgs.util-linux ])
         ];
         # A private dbus-daemon carries the notification tests.
         nativeCheckInputs = [ python.pkgs.pytestCheckHook pkgs.dbus ];
-        pythonImportsCheck = [ "waystone.library" "waystone.launch" "waystone.cli" ];
-        meta.mainProgram = "waystone";
+        pythonImportsCheck = [ "scuffle.library" "scuffle.launch" "scuffle.cli" ];
+        meta.mainProgram = "scuffle";
       };
       # A Linux package for distributions without Nix. See packaging/appimage.
-      appimage = pkgs.callPackage ./packaging/appimage { inherit version bridge app; source = ./src/waystone; };
+      appimage = pkgs.callPackage ./packaging/appimage { inherit version bridge app; source = ./src/scuffle; };
     in {
       packages.${system} = { default = app; inherit bridge appimage; };
       devShells.${system}.default = pkgs.mkShell {
         packages = [ (python.withPackages (p: [ p.pytest p.pyside6 p.jeepney ])) pkgs.umu-launcher pkgs.dbus ];
-        WAYSTONE_BRIDGE = "${bridge}/libexec/wow_auth_bridge.exe";
+        SCUFFLE_BRIDGE = "${bridge}/libexec/wow_auth_bridge.exe";
       };
       checks.${system}.default = app;
     };

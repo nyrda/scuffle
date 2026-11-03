@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from waystone import catalog, discovery
+from scuffle import catalog, discovery
 
 FIXTURES = Path(__file__).parent / 'fixtures'
 INSTALL_EKEY = bytes.fromhex('69ab17d415ecc051c5eafd9c91f97ae1')
@@ -229,7 +229,7 @@ def test_a_public_product_whose_new_build_cannot_be_reached_stays_offered(tmp_pa
 
 
 def test_a_server_error_is_retried_and_a_missing_object_is_a_verdict():
-    from waystone.ngdp.cdn import HTTPStatusError, IntegrityError
+    from scuffle.ngdp.cdn import HTTPStatusError, IntegrityError
     assert discovery.passing(HTTPStatusError(503, 'https://cdn.invalid/x'))
     assert discovery.passing(ConnectionResetError())
     assert not discovery.passing(HTTPStatusError(404, 'https://cdn.invalid/x'))

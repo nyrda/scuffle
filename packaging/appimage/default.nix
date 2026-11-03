@@ -67,14 +67,14 @@ let
   # Qt libraries that QtCore, QtGui, QtWidgets and the kept plugins load. The build fails
   # if a kept library needs one that is not here.
   qtLibraries = [ "Core" "DBus" "Gui" "OpenGL" "Svg" "WaylandClient" "Widgets" "WlShellIntegration" "XcbQpa" ];
-  # Plugins Waystone uses: X11, Wayland and the offscreen platform, desktop themes and
+  # Plugins Scuffle uses: X11, Wayland and the offscreen platform, desktop themes and
   # input methods, SVG icons and images.
   qtPlugins = [ "iconengines" "imageformats" "platforminputcontexts" "platforms" "platformthemes"
                 "wayland-decoration-client" "wayland-graphics-integration-client"
                 "wayland-shell-integration" "xcbglintegrations" ];
 in
 stdenvNoCC.mkDerivation {
-  pname = "waystone-appimage";
+  pname = "scuffle-appimage";
   inherit version;
   dontUnpack = true;
   dontFixup = true;
@@ -89,7 +89,7 @@ stdenvNoCC.mkDerivation {
     mkdir -p $prefix
     tar -xzf ${python} -C $prefix --strip-components=1
 
-    # Only what Waystone and umu-run import, without the build and GUI tools of Python.
+    # Only what Scuffle and umu-run import, without the build and GUI tools of Python.
     rm -r $prefix/include $prefix/share $prefix/lib/pkgconfig $prefix/lib/libpython3*.so*
     rm -r $prefix/lib/itcl* $prefix/lib/tcl* $prefix/lib/tk* $prefix/lib/thread* $prefix/lib/libtcl*
     rm -r $stdlib/{ensurepip,idlelib,tkinter,turtledemo,venv,config-3.14-x86_64-linux-gnu} $stdlib/lib-dynload/_tkinter*
@@ -128,24 +128,24 @@ stdenvNoCC.mkDerivation {
     done < <(find $site -name '*.so*' -type f -print0)
     [ $missing = 0 ]
 
-    cp -r ${source} $site/waystone
-    chmod -R u+w $site/waystone
-    # The package metadata, so the version Waystone reports, as in diagnostics, is this build's.
-    mkdir $site/waystone-${version}.dist-info
-    printf 'Metadata-Version: 2.1\nName: waystone\nVersion: ${version}\n' > $site/waystone-${version}.dist-info/METADATA
+    cp -r ${source} $site/scuffle
+    chmod -R u+w $site/scuffle
+    # The package metadata, so the version Scuffle reports, as in diagnostics, is this build's.
+    mkdir $site/scuffle-${version}.dist-info
+    printf 'Metadata-Version: 2.1\nName: scuffle\nVersion: ${version}\n' > $site/scuffle-${version}.dist-info/METADATA
 
     mkdir -p $appdir/usr/lib/umu
     tar -xf ${umu} -C $appdir/usr/lib/umu --strip-components=1 umu/umu-run
-    install -Dm644 ${bridge}/libexec/wow_auth_bridge.exe $appdir/usr/libexec/waystone/wow_auth_bridge.exe
+    install -Dm644 ${bridge}/libexec/wow_auth_bridge.exe $appdir/usr/libexec/scuffle/wow_auth_bridge.exe
     install -Dm755 ${./AppRun} $appdir/AppRun
     install -Dm755 ${./umu-run} $appdir/usr/bin/umu-run
 
     # The same desktop entry and icon as the Nix package. AppImage tools read them at the top.
-    install -Dm644 ${app}/share/applications/waystone.desktop $appdir/usr/share/applications/waystone.desktop
-    install -Dm644 ${app}/share/icons/hicolor/scalable/apps/waystone.svg $appdir/usr/share/icons/hicolor/scalable/apps/waystone.svg
-    ln -s usr/share/applications/waystone.desktop $appdir/waystone.desktop
-    ln -s usr/share/icons/hicolor/scalable/apps/waystone.svg $appdir/waystone.svg
-    ln -s waystone.svg $appdir/.DirIcon
+    install -Dm644 ${app}/share/applications/scuffle.desktop $appdir/usr/share/applications/scuffle.desktop
+    install -Dm644 ${app}/share/icons/hicolor/scalable/apps/scuffle.svg $appdir/usr/share/icons/hicolor/scalable/apps/scuffle.svg
+    ln -s usr/share/applications/scuffle.desktop $appdir/scuffle.desktop
+    ln -s usr/share/icons/hicolor/scalable/apps/scuffle.svg $appdir/scuffle.svg
+    ln -s scuffle.svg $appdir/.DirIcon
 
     # The mount is read-only, so bytecode is compiled now. Unchecked hashes keep the files
     # independent of timestamps. The bundled Python runs through the build's loader.
@@ -153,7 +153,7 @@ stdenvNoCC.mkDerivation {
       -q --invalidation-mode unchecked-hash -s $appdir -p / $stdlib
 
     # mksquashfs gives every file and the image the time in SOURCE_DATE_EPOCH, which Nix sets.
-    mksquashfs $appdir waystone.squashfs -quiet -no-progress -noappend -all-root -no-xattrs \
+    mksquashfs $appdir scuffle.squashfs -quiet -no-progress -noappend -all-root -no-xattrs \
       -comp zstd -Xcompression-level 19 -b 1M
     runHook postBuild
   '';
@@ -161,13 +161,13 @@ stdenvNoCC.mkDerivation {
   installPhase = ''
     runHook preInstall
     mkdir -p $out
-    cat ${runtime} waystone.squashfs > $out/Waystone-${version}-x86_64.AppImage
-    chmod 755 $out/Waystone-${version}-x86_64.AppImage
+    cat ${runtime} scuffle.squashfs > $out/Scuffle-${version}-x86_64.AppImage
+    chmod 755 $out/Scuffle-${version}-x86_64.AppImage
     runHook postInstall
   '';
 
   meta = {
-    description = "Waystone as an AppImage for Linux distributions without Nix";
+    description = "Scuffle as an AppImage for Linux distributions without Nix";
     platforms = [ "x86_64-linux" ];
   };
 }

@@ -8,9 +8,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from waystone import system
-from waystone.runtime import game
-from waystone.runtime.game import ASKED, NO_WINDOW, NOT_RUNNING, LinuxRuntime, RuntimeFailure
+from scuffle import system
+from scuffle.runtime import game
+from scuffle.runtime.game import ASKED, NO_WINDOW, NOT_RUNNING, LinuxRuntime, RuntimeFailure
 
 pytestmark = pytest.mark.skipif(sys.platform == 'win32', reason='Linux processes')
 
@@ -112,7 +112,7 @@ def test_a_bridge_the_container_cannot_see_points_at_force_quit(tmp_path, monkey
     monkeypatch.setattr(game.os, 'readlink', lambda path: str(files / 'lib/wine/x86_64-unix/wine64-preloader'))
     monkeypatch.setattr(game.shutil, 'which', lambda name: '/usr/bin/nsenter')
     monkeypatch.setattr(game.subprocess, 'run', lambda *a, **k: pytest.fail('ran without a visible bridge'))
-    with pytest.raises(RuntimeFailure, match='cannot see the Waystone bridge'):
+    with pytest.raises(RuntimeFailure, match='cannot see the Scuffle bridge'):
         runtime(tmp_path, monkeypatch).close(tmp_path / 'Wow.exe', [os.getpid()])
 
 

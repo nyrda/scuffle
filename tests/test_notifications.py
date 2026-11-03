@@ -17,7 +17,7 @@ pytestmark = pytest.mark.skipif(not sys.platform.startswith('linux'), reason='th
 from jeepney import DBusAddress, HeaderFields, MessageType, message_bus, new_method_return, new_signal  # noqa: E402
 from jeepney.io.blocking import open_dbus_connection  # noqa: E402
 
-from waystone.ui.notifications import Notifier  # noqa: E402
+from scuffle.ui.notifications import Notifier  # noqa: E402
 
 # Only what a session bus needs. No service folders, so nothing on this machine is started.
 CONFIG = '''<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
@@ -114,12 +114,12 @@ def test_a_notification_reaches_the_service_and_its_click_names_the_client(qt, s
         id, sender, signature, body = service.shown.get(timeout=5)
         assert signature == 'susssasa{sv}i'
         app, replaces, icon, title, text, actions, hints, timeout = body
-        assert (app, replaces, title, timeout) == ('Waystone', 0, 'Classic Era did not install', -1)
+        assert (app, replaces, title, timeout) == ('Scuffle', 0, 'Classic Era did not install', -1)
         # The service reads markup, so the error's own characters are escaped.
         assert text == 'The disk is full &amp; the &lt;download&gt; stopped.'
         assert icon.startswith('file://') and icon.endswith('icon.svg')
         assert actions[0] == 'default'
-        assert hints == {'desktop-entry': ('s', 'waystone'), 'category': ('s', 'transfer.error')}
+        assert hints == {'desktop-entry': ('s', 'scuffle'), 'category': ('s', 'transfer.error')}
         notifier.show('World of Warcraft is installed', 'Ready to play.', 'wow')
         second, *_ = service.shown.get(timeout=5)
         service.clicks.put((id, sender))

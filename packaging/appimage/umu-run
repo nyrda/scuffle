@@ -1,9 +1,9 @@
 #!/bin/sh
-# umu-run waits for the game, which may outlive Waystone. The AppImage's mount goes away
-# when Waystone exits, so umu-run starts the AppImage again for a mount of its own. An
+# umu-run waits for the game, which may outlive Scuffle. The AppImage's mount goes away
+# when Scuffle exits, so umu-run starts the AppImage again for a mount of its own. An
 # extracted AppImage, as appimage-run makes, stays where it is and runs from there.
 appdir=$(dirname "$(dirname "$(dirname "$(readlink -f "$0")")")")
 if [ -n "${APPIMAGE-}" ] && [ -f "$APPIMAGE" ] && [ "$(stat -c %d "$appdir")" != "$(stat -c %d "$appdir/..")" ]; then
-    WAYSTONE_APPRUN=umu-run exec "$APPIMAGE" "$@"
+    SCUFFLE_APPRUN=umu-run exec "$APPIMAGE" "$@"
 fi
-WAYSTONE_APPRUN=umu-run exec "$appdir/AppRun" "$@"
+SCUFFLE_APPRUN=umu-run exec "$appdir/AppRun" "$@"

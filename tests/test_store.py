@@ -8,7 +8,7 @@ import zlib
 
 import pytest
 
-from waystone.ngdp.store import (
+from scuffle.ngdp.store import (
     CascSource, CascStore, SEGMENT_SIZE, StoreError, _index_entries,
     _legacy_span_header, _span_header, bucket_for_key, hashlittle, hashlittle2,
 )
@@ -94,7 +94,7 @@ def test_interrupted_tail_recovers_complete_orphan_and_preserves_partial(tmp_pat
     script = r'''
 import os,sys
 from pathlib import Path
-from waystone.ngdp.store import CascStore,_span_header
+from scuffle.ngdp.store import CascStore,_span_header
 root=Path(sys.argv[1]);key=bytes.fromhex(sys.argv[2]);data=bytes.fromhex(sys.argv[3])
 store=CascStore(root);store.put(key,data)
 # Simulate an append whose catalogue transaction did not reach disk.
@@ -128,7 +128,7 @@ def test_a_crash_before_a_batch_commits_loses_no_appended_object(tmp_path):
     script = r'''
 import os,sys
 from pathlib import Path
-from waystone.ngdp.store import CascStore
+from scuffle.ngdp.store import CascStore
 store=CascStore(Path(sys.argv[1]))
 for pair in sys.argv[2:]:
     key,data=(bytes.fromhex(x) for x in pair.split(":"))
@@ -149,7 +149,7 @@ os._exit(0)
 
 
 def test_a_failed_append_rolls_back_alone_and_leaves_no_bytes(tmp_path, monkeypatch):
-    from waystone.ngdp import store as store_module
+    from scuffle.ngdp import store as store_module
     root = tmp_path / "install"
     (first, first_data), (failed, failed_data), (last, last_data) = (blte(f"object {i}".encode()) for i in range(3))
     with CascStore(root) as store:
@@ -401,7 +401,7 @@ def test_segment_repair_refuses_unowned_root(tmp_path):
     with pytest.raises(StoreError, match="existing catalogue"):
         CascStore.recover_damaged_segments(tmp_path)
     assert data.read_bytes() == b"official store without updater catalogue"
-    assert not (tmp_path / ".waystone").exists()
+    assert not (tmp_path / ".scuffle").exists()
 
 
 def test_verify_indexes_checks_latest_generation_without_mutation(tmp_path):
@@ -593,7 +593,7 @@ def test_recovery_preserves_legacy_tail_until_explicit_header_upgrade(tmp_path):
         stream.write(_legacy_span_header(key, size, offset))
     # Simulate a pre-checkpoint catalogue from the previous updater version.
     import sqlite3
-    with sqlite3.connect(root / ".waystone/store.sqlite") as db:
+    with sqlite3.connect(root / ".scuffle/store.sqlite") as db:
         db.execute("UPDATE segments SET durable_end=0")
     with CascStore(root) as store:
         assert store.has(key)
@@ -608,7 +608,7 @@ def test_recovery_preserves_legacy_tail_until_explicit_header_upgrade(tmp_path):
 @pytest.mark.parametrize("after_commit", [False, True])
 def test_interruption_during_a_batch_commit_keeps_catalogue_and_data_in_agreement(tmp_path, monkeypatch,
                                                                                    after_commit):
-    from waystone.ngdp import store as store_module
+    from scuffle.ngdp import store as store_module
     monkeypatch.setattr(store_module, "COMMIT_OBJECTS", 1)       # this put commits its batch
     root = tmp_path / "install"
     key, data = blte(b"commit completion before signal delivery")
@@ -823,7 +823,7 @@ def test_recovery_seals_oversized_unclaimed_segment_instead_of_overwriting(tmp_p
 
 def test_compaction_interrupted_mid_move_keeps_the_object_another_client_needs(tmp_path, monkeypatch):
     import sqlite3
-    from waystone.ngdp import store as module
+    from scuffle.ngdp import store as module
     monkeypatch.setattr(module, "SEGMENT_SIZE", 2048)          # a few objects per segment
     objects = [blte(os.urandom(300) + bytes([i]), table=False) for i in range(8)]
     with CascStore(tmp_path) as casc:

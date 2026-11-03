@@ -7,13 +7,13 @@ import pytest
 FOLDERS = ['XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'APPDATA', 'LOCALAPPDATA', 'HOME']
 # The user's session bus would show real notifications and a real tray icon. Tests that need a
 # bus start a private one.
-NO_BUS = 'unix:path=/nonexistent/waystone-tests/bus'
+NO_BUS = 'unix:path=/nonexistent/scuffle-tests/bus'
 # The user's own folders, found before any test changes the environment.
-REAL = [Path(os.environ.get(name, Path.home() / default)) / 'waystone' for name, default in
+REAL = [Path(os.environ.get(name, Path.home() / default)) / 'scuffle' for name, default in
         [('XDG_CONFIG_HOME', '.config'), ('XDG_DATA_HOME', '.local/share'), ('XDG_CACHE_HOME', '.cache')]]
 DATA = Path(os.environ.get('XDG_DATA_HOME', Path.home() / '.local/share'))
-# The app launcher entries, icons and Steam shortcuts Waystone can write for the user.
-SHORTCUTS = [(DATA / 'applications', 'waystone-*'), (DATA / 'icons/hicolor', '*/apps/waystone-*'),
+# The app launcher entries, icons and Steam shortcuts Scuffle can write for the user.
+SHORTCUTS = [(DATA / 'applications', 'scuffle-*'), (DATA / 'icons/hicolor', '*/apps/scuffle-*'),
              *[(Path.home() / root / 'userdata', '*/config/shortcuts.vdf')
                for root in ['.steam/steam', '.steam/root', '.local/share/Steam']]]
 
@@ -34,7 +34,7 @@ def pytest_sessionfinish(session, exitstatus):
     changed = sorted(str(path) for path, stamp in snapshot().items() if BEFORE.get(path) != stamp)
     if changed:
         session.exitstatus = 1
-        print(f"\nA test wrote into the user's own Waystone folders: {', '.join(changed)}")
+        print(f"\nA test wrote into the user's own Scuffle folders: {', '.join(changed)}")
 
 
 @pytest.fixture(autouse=True, scope='session')

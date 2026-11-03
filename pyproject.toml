@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "waystone"
+name = "scuffle"
 version = "0.1.0"
 description = "Install, update and launch the public World of Warcraft clients without Battle.net"
 requires-python = ">=3.11"
@@ -13,13 +13,13 @@ dependencies = []
 ui = ["PySide6", "jeepney; sys_platform == 'linux'"]
 
 [project.scripts]
-waystone = "waystone.cli:entrypoint"
+scuffle = "scuffle.cli:entrypoint"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-"waystone.ui" = ["icon.svg"]
+"scuffle.ui" = ["icon.svg"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

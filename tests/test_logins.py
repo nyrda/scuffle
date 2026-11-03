@@ -7,12 +7,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from waystone import launch
-from waystone.auth import bgs, vault as vault_module
-from waystone.auth.bgs import CredentialRejected
-from waystone.auth.protobuf import blob, fields, integer
-from waystone.auth.vault import Vault
-from waystone.settings import Settings
+from scuffle import launch
+from scuffle.auth import bgs, vault as vault_module
+from scuffle.auth.bgs import CredentialRejected
+from scuffle.auth.protobuf import blob, fields, integer
+from scuffle.auth.vault import Vault
+from scuffle.settings import Settings
 
 MAIN, ALT, THIRD = 412345678, 523456789, 634567890
 EMAIL = 'player@example.com'
@@ -134,7 +134,7 @@ def saved_ticket(login) -> bytes:
 
 
 def older_session(vault, battlenet, owner, listed=True):
-    """The one session an older Waystone keeps directly in its session folder."""
+    """The one session an older Scuffle keeps directly in its session folder."""
     vault.directory.mkdir(mode=0o700, parents=True)
     vault.legacy_session.write_bytes(Bridge().protect(battlenet.ticket(owner)))
     if listed:

@@ -3,8 +3,8 @@ import json
 
 import pytest
 
-from waystone import catalog, settings as settings_module
-from waystone.settings import Settings
+from scuffle import catalog, settings as settings_module
+from scuffle.settings import Settings
 
 
 @pytest.fixture
@@ -76,7 +76,7 @@ def test_other_clients_appear_only_while_they_are_shown():
 
 
 def test_launch_options_of_a_discovered_client_survive_a_restart(config):
-    from waystone.launch_options import ClientOptions
+    from scuffle.launch_options import ClientOptions
     saved = Settings()
     saved.client_launch = {'wowlivetest': ClientOptions(switches=['-console'])}
     saved.save()

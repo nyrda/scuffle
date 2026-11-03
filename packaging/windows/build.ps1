@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-Build dist\Waystone.exe, the one-file Windows package.
+Build dist\Scuffle.exe, the one-file Windows package.
 
 .DESCRIPTION
 Runs on Windows from a checkout. Build tools are installed from the hashed
@@ -36,17 +36,17 @@ if (-not (Test-Path $stamp) -or (Get-Content $stamp) -ne $wanted) {
 }
 $python = Join-Path $Venv 'Scripts\python.exe'
 
-$icon = Join-Path $work 'Waystone.ico'
-Invoke-Native $python (Join-Path $root 'packaging\make_icon.py') (Join-Path $root 'src\waystone\ui\icon.svg') $icon
+$icon = Join-Path $work 'Scuffle.ico'
+Invoke-Native $python (Join-Path $root 'packaging\make_icon.py') (Join-Path $root 'src\scuffle\ui\icon.svg') $icon
 
-$env:WAYSTONE_ICON = $icon
+$env:SCUFFLE_ICON = $icon
 Invoke-Native $python -m PyInstaller --noconfirm --clean --log-level WARN `
     --distpath (Join-Path $root 'dist') --workpath (Join-Path $work 'pyinstaller') `
-    (Join-Path $PSScriptRoot 'waystone.spec')
+    (Join-Path $PSScriptRoot 'scuffle.spec')
 
 # The windowed program writes to a redirected stream, and PowerShell waits for it.
-$exe = Join-Path $root 'dist\Waystone.exe'
+$exe = Join-Path $root 'dist\Scuffle.exe'
 $help = & $exe --help | Out-String
-if ($LASTEXITCODE -or $help -notmatch 'usage: waystone') { throw "Waystone.exe --help failed:`n$help" }
+if ($LASTEXITCODE -or $help -notmatch 'usage: scuffle') { throw "Scuffle.exe --help failed:`n$help" }
 $size = [math]::Round((Get-Item $exe).Length / 1MB, 1)
 Write-Output "Built $exe ($size MB)"

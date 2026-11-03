@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from waystone import imports
-from waystone.auth import protobuf
-from waystone.imports import NotImportable, Place, Search
+from scuffle import imports
+from scuffle.auth import protobuf
+from scuffle.imports import NotImportable, Place, Search
 
 
 def battle_net(folder: Path, clients: dict[str, str], *, listed=None, executables=True) -> Path:
@@ -46,17 +46,17 @@ def test_inspect_names_the_clients_by_flavor_and_folder_and_skips_leftovers(tmp_
 
 @pytest.mark.parametrize('case, reason', [
     ('empty', 'No World of Warcraft installation'),
-    ('waystone', 'Waystone installation folder'),
+    ('scuffle', 'Scuffle installation folder'),
     ('no_content', 'no game content'),
-    ('unknown', 'no client Waystone knows'),
+    ('unknown', 'no client Scuffle knows'),
 ])
 def test_inspect_explains_why_a_folder_cannot_be_imported(tmp_path, case, reason):
     folder = tmp_path / 'chosen'
     folder.mkdir()
-    if case == 'waystone':
+    if case == 'scuffle':
         battle_net(folder / 'x', {'_retail_': 'wow'})
         folder = folder / 'x'
-        (folder / '.waystone').mkdir()
+        (folder / '.scuffle').mkdir()
     elif case == 'no_content':
         battle_net(folder / 'x', {'_retail_': 'wow'})
         folder = folder / 'x'
@@ -75,7 +75,7 @@ def product_db(paths: list[str]) -> bytes:
     return b''.join(protobuf.blob(1, install(path)) for path in paths)
 
 
-def test_search_finds_prefixes_steam_and_drives_and_leaves_the_waystone_folder_out(tmp_path):
+def test_search_finds_prefixes_steam_and_drives_and_leaves_the_scuffle_folder_out(tmp_path):
     home = tmp_path / 'home'
     battle_net(home / '.wine/drive_c/Program Files (x86)/World of Warcraft', {'_retail_': 'wow'})
     # A Lutris prefix with the game in a place only Battle.net's own record names.
@@ -91,11 +91,11 @@ def test_search_finds_prefixes_steam_and_drives_and_leaves_the_waystone_folder_o
                {'_classic_era_': 'wow_classic_era'})
     drive = tmp_path / 'mnt'
     battle_net(drive / 'games/World of Warcraft', {'_anniversary_': 'wow_anniversary'})
-    waystone = drive / 'games/Waystone'
-    battle_net(waystone, {'_retail_': 'wow'})
+    scuffle = drive / 'games/Scuffle'
+    battle_net(scuffle, {'_retail_': 'wow'})
     places = [p for p in imports.linux_places(home) if p.path.is_relative_to(home)]
     places.append(Place(drive, 'Mounted drive', 3))
-    search = Search(places, exclude=waystone)
+    search = Search(places, exclude=scuffle)
     found = {f.path: f for f in search}
     assert search.complete
     assert {path.relative_to(tmp_path).as_posix(): f.where for path, f in found.items()} == {
@@ -139,7 +139,7 @@ def test_copying_settings_keeps_the_targets_files_and_never_writes_the_source(tm
     (tmp_path / 'private.txt').write_bytes(b'outside the client folder')
     (source / 'Interface/AddOns/linked.txt').symlink_to(tmp_path / 'private.txt')
     (source / 'Interface/AddOns/Dev').symlink_to(tmp_path)
-    target = tmp_path / 'waystone/_retail_'
+    target = tmp_path / 'scuffle/_retail_'
     default = b'SET portal "EU"\n'
     (target / 'WTF/Account/ME').mkdir(parents=True)
     (target / 'WTF/Config.wtf').write_bytes(default)
@@ -166,7 +166,7 @@ def test_copying_settings_never_writes_through_a_link_in_the_target(tmp_path):
     (source / 'WTF/Config.wtf').write_bytes(b'user')
     elsewhere = tmp_path / 'elsewhere'
     elsewhere.mkdir()
-    target = tmp_path / 'waystone/_retail_'
+    target = tmp_path / 'scuffle/_retail_'
     target.mkdir(parents=True)
     (target / 'wtf').symlink_to(elsewhere, target_is_directory=True)
     result = imports.copy_settings(source, target)

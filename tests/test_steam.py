@@ -1,4 +1,4 @@
-"""Steam's shortcuts.vdf: Waystone's entries come and go, and nothing else in the file changes."""
+"""Steam's shortcuts.vdf: Scuffle's entries come and go, and nothing else in the file changes."""
 from pathlib import Path
 import shutil
 import subprocess
@@ -6,12 +6,12 @@ import sys
 
 import pytest
 
-from waystone import shortcuts, steam
+from scuffle import shortcuts, steam
 
 FIXTURE = Path(__file__).parent / 'fixtures/shortcuts.vdf'
 # Windows finds Steam in the registry and lists processes differently.
 linux_steam = pytest.mark.skipif(sys.platform == 'win32', reason='Linux keeps Steam under the home folder')
-COMMAND = ['/home/me/.nix-profile/bin/waystone', 'play', 'wow', '--shortcut', '--wait']
+COMMAND = ['/home/me/.nix-profile/bin/scuffle', 'play', 'wow', '--shortcut', '--wait']
 
 
 def png(color: bytes = b'\0') -> bytes:
@@ -65,12 +65,12 @@ def test_adding_and_removing_a_client_keeps_every_other_entry_byte_for_byte(inst
     # The new entry goes in at the end of the list. Everything before it is the old file.
     assert written.startswith(original[:-2]) and written.endswith(b'\x08\x08\x08')
     assert (first / steam.BACKUP).read_bytes() == original
-    # The account without a file gets one with only Waystone's entry.
+    # The account without a file gets one with only Scuffle's entry.
     entries = steam.shortcut_list(steam.parse((second / 'shortcuts.vdf').read_bytes()))
     assert [key for _, key, _ in entries] == [b'0']
     entry = entries[0][2]
     assert steam.field(entry, 'AppName') == b'World of Warcraft'
-    assert steam.field(entry, 'Exe') == b'"/home/me/.nix-profile/bin/waystone"'
+    assert steam.field(entry, 'Exe') == b'"/home/me/.nix-profile/bin/scuffle"'
     assert steam.field(entry, 'LaunchOptions') == b'play wow --shortcut --wait'
     appid = steam.entry_app_id(entry)
     icon = second / 'grid' / f'{appid}_icon.png'
@@ -90,19 +90,19 @@ def test_adding_and_removing_a_client_keeps_every_other_entry_byte_for_byte(inst
 
 
 @linux_steam
-def test_only_waystones_marked_entries_and_artwork_are_removed(installation):
+def test_only_scuffles_marked_entries_and_artwork_are_removed(installation):
     root, (first, second) = installation
     found = steam.find()
     found.add('wow', 'World of Warcraft', COMMAND, images())
     found.add('wow_classic', 'Mists of Pandaria Classic',
-              ['/home/me/.nix-profile/bin/waystone', 'play', 'wow_classic', '--shortcut', '--wait'], images())
+              ['/home/me/.nix-profile/bin/scuffle', 'play', 'wow_classic', '--shortcut', '--wait'], images())
     appid = steam.entry_app_id(steam.shortcut_list(steam.parse((second / 'shortcuts.vdf').read_bytes()))[0][2])
     portrait = second / 'grid' / f'{appid}p.png'
     portrait.write_bytes(png(b'\x09'))       # artwork the user picked in Steam, without a marker
     found.remove('wow')
     names = [steam.field(entry, 'AppName') or steam.field(entry, 'appname')
              for _, _, entry in steam.shortcut_list(steam.parse((first / 'shortcuts.vdf').read_bytes()))]
-    # The user's own World of Warcraft entry runs Waystone too, but was not made by it.
+    # The user's own World of Warcraft entry runs Scuffle too, but was not made by it.
     assert names == ['Heroic – Ünïcode'.encode(), b'Old Emulator', b'World of Warcraft', b'Mists of Pandaria Classic']
     assert portrait.read_bytes() == png(b'\x09')
     assert found.has('wow_classic') and not found.has('wow')
@@ -131,7 +131,7 @@ def test_nothing_is_written_while_steam_runs(installation, tmp_path):
 
 @linux_steam
 @pytest.mark.parametrize('damage', [b'\x09odd\x00', b'', None], ids=['unknown-type', 'cut-short', 'no-access'])
-def test_a_file_waystone_cannot_read_stops_every_change(installation, damage):
+def test_a_file_scuffle_cannot_read_stops_every_change(installation, damage):
     root, (first, second) = installation
     data = FIXTURE.read_bytes()
     # A field of a type with unknown length inside the first entry, or the end missing.
@@ -139,7 +139,7 @@ def test_a_file_waystone_cannot_read_stops_every_change(installation, damage):
     (second / 'shortcuts.vdf').write_bytes(broken)
     found = steam.find()
     if damage is None:
-        second.parent.chmod(0)          # an account folder Waystone may not enter
+        second.parent.chmod(0)          # an account folder Scuffle may not enter
     try:
         with pytest.raises(PermissionError if damage is None else steam.VdfError):
             found.add('wow', 'World of Warcraft', COMMAND, images())

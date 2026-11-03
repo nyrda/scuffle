@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# Build dist/Waystone.exe on a Windows machine over SSH.
+# Build dist/Scuffle.exe on a Windows machine over SSH.
 #
 # Usage: packaging/windows/remote-build.sh <ssh host> [remote folder]
 #
 # The working tree, with uncommitted changes, goes to <remote folder> in the
 # remote user's home, build.ps1 runs there, and the result comes back to
-# dist/Waystone.exe. The remote machine needs Python from python.org with the
+# dist/Scuffle.exe. The remote machine needs Python from python.org with the
 # py launcher. The remote folder keeps the build tools between runs.
 set -euo pipefail
 
 host=${1:?usage: remote-build.sh <ssh host> [remote folder]}
-remote=${2:-waystone-build}
+remote=${2:-scuffle-build}
 root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 cd "$root"
 
@@ -37,5 +37,5 @@ remote_powershell "
     if (\$LASTEXITCODE) { exit 1 }
     & '$remote\\source\\packaging\\windows\\build.ps1' -Venv (Join-Path \$HOME '$remote\\venv')"
 mkdir -p dist
-scp -q "$host:$remote/source/dist/Waystone.exe" dist/Waystone.exe
-echo "Fetched $root/dist/Waystone.exe"
+scp -q "$host:$remote/source/dist/Scuffle.exe" dist/Scuffle.exe
+echo "Fetched $root/dist/Scuffle.exe"

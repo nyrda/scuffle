@@ -16,10 +16,10 @@ import pytest
 
 from test_library import FixtureCDN, SyntheticBuild, run_build
 
-from waystone import move
-from waystone.library import Library, LibraryError, Updater
-from waystone.ngdp.store import StoreError
-from waystone.settings import Settings
+from scuffle import move
+from scuffle.library import Library, LibraryError, Updater
+from scuffle.ngdp.store import StoreError
+from scuffle.settings import Settings
 
 SRC = Path(__file__).resolve().parents[1] / 'src'
 
@@ -27,7 +27,7 @@ SRC = Path(__file__).resolve().parents[1] / 'src'
 @pytest.fixture
 def installed(tmp_path):
     """Two installed clients that share content, with the setting pointing at them."""
-    root = tmp_path / 'drive-a' / 'Waystone'
+    root = tmp_path / 'drive-a' / 'Scuffle'
     forever = SyntheticBuild()
     retail = SyntheticBuild('0.0.2.2', changed=b'retail only', product='wow', folder='_retail_')
     run_build(root, FixtureCDN(forever, tmp_path / 'forever-cache'))
@@ -47,7 +47,7 @@ def tree(root: Path) -> dict:
 def complete(root: Path, builds: dict, scratch: Path) -> bool:
     """Whether root is a whole installation: both clients verify. Checked on a copy, so a
     partial folder is never written to by the check itself."""
-    if not (root / '.waystone/identity.json').is_file():
+    if not (root / '.scuffle/identity.json').is_file():
         return False
     probe = scratch / f'probe-{len(list(scratch.glob("probe-*")))}'
     shutil.copytree(root, probe)
@@ -216,11 +216,11 @@ def test_move_refuses_in_plain_words_and_changes_nothing(installed, tmp_path, mo
 
 
 def test_nothing_starts_during_a_move_and_cancel_leaves_the_source_as_it_was(installed, tmp_path, monkeypatch):
-    from waystone.downloads import DONE, DownloadManager
-    from waystone.launch import Launcher, LaunchError
+    from scuffle.downloads import DONE, DownloadManager
+    from scuffle.launch import Launcher, LaunchError
     source, settings, builds = installed
     def stamps():
-        # Files only: the marker comes and goes in .waystone, so that folder's own time changes.
+        # Files only: the marker comes and goes in .scuffle, so that folder's own time changes.
         return {p: p.stat().st_mtime_ns for p in source.rglob('*')
                 if p.is_file() and p.name not in {'library.lock', 'store.lock'}}
     before = stamps()
@@ -233,7 +233,7 @@ def test_nothing_starts_during_a_move_and_cancel_leaves_the_source_as_it_was(ins
 
     def hold(task):
         # Listeners run on the worker, so this keeps the move in the middle of its copy.
-        on_worker = threading.current_thread().name == 'waystone-downloads'
+        on_worker = threading.current_thread().name == 'scuffle-downloads'
         if on_worker and task.stage == 'copying' and task.done_bytes and not release.is_set():
             copying.set()
             release.wait(10)
@@ -324,7 +324,7 @@ def scratch(tmp_path):
         yield tmp_path
         return
     import tempfile
-    folder = Path(tempfile.mkdtemp(prefix='waystone-move-', dir='/dev/shm'))
+    folder = Path(tempfile.mkdtemp(prefix='scuffle-move-', dir='/dev/shm'))
     try:
         yield folder
     finally:
@@ -339,7 +339,7 @@ def test_a_crash_at_any_step_leaves_one_complete_folder_and_recovery_settles_it(
         monkeypatch.setenv(name, str(tmp_path / 'home' / name.lower()))
     # No game runs here. Listing every process of the machine at each step costs most of the time.
     monkeypatch.setattr(move.system, 'running_executables', lambda *names: [])
-    source = tmp_path / 'drive-a' / 'Waystone'
+    source = tmp_path / 'drive-a' / 'Scuffle'
     builds = {'wowf': SyntheticBuild()}
     run_build(source, FixtureCDN(builds['wowf'], tmp_path / 'cache'))
     Settings(root=str(source)).save()
@@ -383,7 +383,7 @@ def test_recovery_never_deletes_a_folder_the_move_did_not_make(scratch, monkeypa
     for name in ('XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME'):
         monkeypatch.setenv(name, str(scratch / 'home' / name.lower()))
     monkeypatch.setattr(move.system, 'running_executables', lambda *names: [])
-    source, target = scratch / 'drive-a' / 'Waystone', scratch / 'drive-b' / 'Games'
+    source, target = scratch / 'drive-a' / 'Scuffle', scratch / 'drive-b' / 'Games'
     build = SyntheticBuild()
     run_build(source, FixtureCDN(build, scratch / 'cache'))
     Settings(root=str(source)).save()
@@ -405,7 +405,7 @@ def crash_in_phase(scratch, monkeypatch, phase):
     for name in ('XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME'):
         monkeypatch.setenv(name, str(scratch / 'home' / name.lower()))
     monkeypatch.setattr(move.system, 'running_executables', lambda *names: [])
-    source, target = scratch / 'drive-a' / 'Waystone', scratch / 'drive-b' / 'Games'
+    source, target = scratch / 'drive-a' / 'Scuffle', scratch / 'drive-b' / 'Games'
     builds = {'wowf': SyntheticBuild()}
     run_build(source, FixtureCDN(builds['wowf'], scratch / 'cache'))
     Settings(root=str(source)).save()
@@ -426,7 +426,7 @@ def crash_in_phase(scratch, monkeypatch, phase):
 
 @pytest.mark.parametrize('phase', ['switched', 'deleting'])
 def test_recovery_keeps_the_old_folder_when_the_new_one_vanished_after_a_crash(scratch, monkeypatch, phase):
-    """The copy was checked and switched to, then the user deleted it before Waystone started again."""
+    """The copy was checked and switched to, then the user deleted it before Scuffle started again."""
     source, target, builds = crash_in_phase(scratch, monkeypatch, phase)
     shutil.rmtree(target)
     left = tree(source)
