@@ -99,6 +99,9 @@ class Library:
     def state(self, code):
         return {'version': '12.1.5.70575'}
 
+    def moving(self):
+        return False
+
     def pending(self, code):
         return None
 

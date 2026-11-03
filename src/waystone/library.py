@@ -158,6 +158,7 @@ class Library:
         self.clients_dir = self.state_dir / 'clients'
         self.has_download_job: Callable[[str], bool] = lambda code: False
         self.uninstall_record = self.state_dir / 'uninstall.json'
+        self.move_record = self.state_dir / 'move.json'      # the folder is being moved, see move.py
 
     # Identity and locking
 
@@ -177,7 +178,8 @@ class Library:
 
     def reject_symlinks(self) -> None:
         names = [STATE_DIR, f'{STATE_DIR}/metadata', f'{STATE_DIR}/clients', 'Data', 'Data/data', 'Data/config',
-                 f'{STATE_DIR}/library.lock', f'{STATE_DIR}/identity.json', f'{STATE_DIR}/uninstall.json']
+                 f'{STATE_DIR}/library.lock', f'{STATE_DIR}/identity.json', f'{STATE_DIR}/uninstall.json',
+                 f'{STATE_DIR}/move.json']
         if self.clients_dir.is_dir() and not self.clients_dir.is_symlink():
             for client in self.clients_dir.iterdir():
                 names += [str(client.relative_to(self.root)), str(client.relative_to(self.root) / 'staging')]
@@ -196,6 +198,10 @@ class Library:
             raise LibraryError(f'{self.root} is not a Waystone installation')
         try:
             with system.locked_file(self.state_dir / 'library.lock', blocking=False):
+                if self.moving():
+                    # Checked under the lock, which the move holds while it writes the marker.
+                    raise LibraryError('This installation folder is being moved. Waystone finishes or '
+                                       'undoes the move when it starts.')
                 if self.uninstall_record.exists():
                     self.recovered_uninstall = self._finish_uninstall()
                 elif not self.uninstall_record.is_symlink():
@@ -203,6 +209,9 @@ class Library:
                 yield self
         except system.LockBusy:
             raise LibraryError('Another Waystone operation is using this installation') from None
+
+    def moving(self) -> bool:
+        return self.move_record.exists() or self.move_record.is_symlink()
 
     # Clients
 

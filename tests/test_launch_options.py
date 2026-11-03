@@ -196,6 +196,9 @@ class Library:
     def state(self, code):
         return {'version': '1.15.8.66710', 'launch_arguments': ['-launch']}     # an older record still names it
 
+    def moving(self):
+        return False
+
     def pending(self, code):
         return None
 

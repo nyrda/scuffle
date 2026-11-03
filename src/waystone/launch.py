@@ -182,6 +182,8 @@ class Launcher:
         state = self.library.state(code)
         if state is None:
             raise LaunchError(f'{entry.label} is not installed')
+        if self.library.moving():
+            raise LaunchError('The installation folder is being moved. Play once the move is done.')
         if self.library.pending(code):
             raise LaunchError(f'{entry.label} has an unfinished update')
         if self.library.running(code):

@@ -88,6 +88,30 @@ def progress_variants(job) -> list[str]:
     return [f'{percent} · {sizes}', percent]
 
 
+# What each stage of moving the installation folder is doing.
+MOVE_STAGES = {
+    'checking': 'Checking the folder…', 'copying': 'Copying…', 'verifying': 'Checking the copy…',
+    'switching': 'Switching to the new folder…', 'removing_old': 'Removing the old folder…',
+    'removing_copy': 'Removing the unfinished copy…',
+}
+
+
+def move_variants(task) -> list[str]:
+    """A move's details, from the fullest to the shortest line, as a download shows them."""
+    if task.cancel_requested and task.cancellable:
+        return ['Cancelling…']
+    if task.stage != 'copying' or not task.total_bytes:
+        return [MOVE_STAGES.get(task.stage, 'Moving…')]
+    percent = f'{task.fraction:.0%}'
+    sizes = f'{size_text(task.done_bytes)} of {size_text(task.total_bytes)}'
+    if task.speed <= 0:
+        return [f'{percent} · Estimating time and speed · {sizes}', f'{percent} · Estimating… · {sizes}',
+                f'{percent} · {sizes}', percent]
+    speed = f'{task.speed / 1_000_000:.0f} MB/s' if task.speed >= 10_000_000 else f'{size_text(task.speed)}/s'
+    left = duration_text((task.total_bytes - task.done_bytes) / task.speed)
+    return [f'{percent} · {left} · {speed} · {sizes}', f'{percent} · {left} · {speed}', f'{percent} · {left}', percent]
+
+
 def duration_text(seconds: float) -> str:
     """About how long, rounded to minutes the same way everywhere."""
     minutes = max(1, round(seconds / 60))
@@ -595,6 +619,7 @@ class DownloadBar(QFrame):
     open_client = Signal(str)
     limit_changed = Signal(int)
     show_queue = Signal()
+    cancel_move = Signal()
 
     LIMITS = [0, 1, 2, 5, 10, 25, 50, 100]          # MB/s, 0 means unlimited
 
@@ -635,7 +660,8 @@ class DownloadBar(QFrame):
         self.toggle = fixed(QPushButton('Pause'), 80)
         self.toggle.clicked.connect(self._toggle)
         self.cancel = fixed(QPushButton('Cancel'), 80)
-        self.cancel.clicked.connect(lambda: self.client and self.cancel_clicked.emit(self.client))
+        self.cancel.clicked.connect(self._cancel)
+        self._moving = False
         self.queue = fixed(QPushButton('Downloads'), 120)
         self.queue.setToolTip('Show every download, and set the speed limit')
         self.queue.clicked.connect(self.show_queue.emit)
@@ -665,7 +691,10 @@ class DownloadBar(QFrame):
 
     def show_job(self, job, label_text: str, waiting: int, controls: bool = True) -> None:
         from ..downloads import PAUSED, QUEUED, RUNNING
-        self.client, self._paused = job.client, job.status == PAUSED
+        self.client, self._paused, self._moving = job.client, job.status == PAUSED, False
+        self.queue.show()
+        self.title.setCursor(Qt.PointingHandCursor)
+        self.title.setToolTip('Show this client')
         verb = {'install': 'Installing', 'update': 'Updating', 'verify': 'Verifying',
                 'repair': 'Repairing', 'uninstall': 'Uninstalling'}[job.kind]
         if job.status in {PAUSED, QUEUED}:
@@ -694,9 +723,34 @@ class DownloadBar(QFrame):
         self.toggle.setToolTip(f'{self.toggle.text()} {label_text}')
         self.queue.setText(f'Downloads · {waiting + 1}' if waiting else 'Downloads')
 
+    def show_move(self, task) -> None:
+        """Moving the installation folder, in place of the downloads, since none can run meanwhile."""
+        self.client, self._paused, self._moving = '', False, True
+        self.title.setText('Finishing the move of the installation folder' if task.settle
+                           else 'Moving the installation folder')
+        self.title.setToolTip(f'From {task.source} to {task.destination}')
+        self.title.setCursor(Qt.ArrowCursor)
+        self.detail.set_variants(move_variants(task))
+        tone(self.progress, '')
+        if task.stage == 'copying' and task.total_bytes:
+            self.progress.setRange(0, 1000)
+            self.progress.setValue(int(task.fraction * 1000))
+        else:
+            self.progress.setRange(0, 0)
+        self.progress.show()
+        self.toggle.hide()
+        self.queue.hide()
+        # Until the copy is checked a cancel leaves the old folder as it was. Afterwards the move finishes.
+        self.cancel.setVisible(not task.settle)
+        self.cancel.setEnabled(task.cancellable and not task.cancel_requested)
+        self.cancel.setToolTip('Stop the move. The copy is removed and the folder stays where it is.'
+                               if task.cancellable else 'The new folder is in use now, so the move finishes.')
+
     def show_summary(self, title: str, detail: str, count: int) -> None:
         """No other download to show, but the Downloads page still has something on it."""
-        self.client = ''
+        self.client, self._moving = '', False
+        self.queue.show()
+        self.title.setToolTip('Show this client')
         self.title.setText(title)
         self.detail.set_variants([detail])
         tone(self.progress, '')
@@ -714,6 +768,12 @@ class DownloadBar(QFrame):
         self.progress.setValue(0)
         self.toggle.hide()
         self.cancel.hide()
+
+    def _cancel(self):
+        if self._moving:
+            self.cancel_move.emit()
+        elif self.client:
+            self.cancel_clicked.emit(self.client)
 
     def _toggle(self):
         if self.client:

@@ -597,6 +597,7 @@ class SettingsPage(Page):
     closed = Signal()
     choose_folder = Signal(str)
     copy_diagnostics = Signal()
+    move_folder = Signal()
 
     def __init__(self):
         super().__init__()
@@ -660,11 +661,16 @@ class SettingsPage(Page):
         self.root.clicked.connect(lambda: self.browse.isEnabled() and self.choose_root())
         self.browse = fixed(QPushButton('Choose…'))
         self.browse.clicked.connect(self.choose_root)
+        # Choose… only points Waystone at another folder. Move… takes everything along.
+        self.move_button = fixed(QPushButton('Move…'))
+        self.move_button.clicked.connect(self.move_folder.emit)
+        self.move_button.hide()             # shown once there is an installation to move
         self.folder_locked = ''
         folder = QHBoxLayout()
         folder.setSpacing(SPACING)
         folder.addWidget(self.root, 1)
         folder.addWidget(self.browse)
+        folder.addWidget(self.move_button)
         self.free = label('', 'small', wrap=True)
         grid = self.card(general, 'Installation folder',
                          'All clients share this folder. Battle.net must not manage it.')
@@ -899,7 +905,7 @@ class SettingsPage(Page):
         """The page's controls in reading order, for the window's tab order."""
         chain = [self.close_button, *self.sections.group.buttons()]
         if self.section == 'general':
-            chain += [self.browse, self.region, self.locale, self.show_notifications, self.keep_in_tray]
+            chain += [self.browse, self.move_button, self.region, self.locale, self.show_notifications, self.keep_in_tray]
         elif self.section == 'clients':
             for category, _, _ in self.CATEGORIES:
                 if category == catalog.OTHER:
@@ -1059,6 +1065,18 @@ class SettingsPage(Page):
         self.root.style().polish(self.root)
         self.update_free()
 
+    def lock_move(self, reason: str, available: bool) -> None:
+        """Move… needs an installation, and no game, download or other move under way."""
+        self.move_button.setVisible(available)
+        self.move_button.setEnabled(available and not reason)
+        self.move_button.setToolTip(reason or 'Move the installation folder and everything in it to another place.')
+
+    def show_root(self, folder: str) -> None:
+        """Show a folder that is already saved, such as where a move put the installation."""
+        self.root.setText(folder)
+        self.root.setCursorPosition(0)
+        self.update_free()
+
     def update_free(self, *_):
         text = self.root.text().strip()
         root = Path(text) if text else None
@@ -1075,14 +1093,16 @@ class SettingsPage(Page):
     def set_root(self, folder: str):
         self.root.setText(folder)
         self.root.setCursorPosition(0)
+        if self.settings is not None and not self._loading:
+            self.settings.root = folder
         self.apply()
 
     def apply(self, *_):
         if self._loading or self.settings is None:
             return
         values, s = self.values(), self.settings
-        # Without a folder yet, the other choices still save. The folder comes from Choose….
-        s.root = values['root'] or s.root
+        # The folder changes only through set_root. Taking it from the field here could put back
+        # the old folder over the one a move just saved on the download worker.
         s.region, s.locale = values['region'], values['locale']
         s.bandwidth_limit = int(values['limit']) * MEGABYTE
         s.workers = self.workers.value()
@@ -1286,8 +1306,12 @@ class FolderPage(Page):
         self.fixed_top(page)
         outer.setSpacing(10)
         self._target = ''
-        outer.addWidget(label(title, 'pagetitle'))
-        outer.addWidget(label(note, 'muted', wrap=True))
+        self.purpose = 'choose'           # or 'move', for the place a move takes the installation to
+        self.choose_texts = (title, note)       # what start() shows when not moving
+        self.title_label = label(title, 'pagetitle')
+        self.note = label(note, 'muted', wrap=True)
+        outer.addWidget(self.title_label)
+        outer.addWidget(self.note)
         self.path = fixed(QLineEdit())
         self.path.setPlaceholderText('Type a path and press Enter, or pick a folder below')
         self.path.returnPressed.connect(self.go_to_typed)
@@ -1330,7 +1354,7 @@ class FolderPage(Page):
         cancel = QPushButton('Cancel')
         cancel.setFixedSize(96, PRIMARY_HEIGHT)          # level with Use this folder
         cancel.clicked.connect(self.cancelled.emit)
-        choose = QPushButton('Use this folder')
+        self.choose_button = choose = QPushButton('Use this folder')
         choose.setObjectName('primary')
         choose.clicked.connect(self.choose)
         buttons.addWidget(create)
@@ -1339,7 +1363,14 @@ class FolderPage(Page):
         buttons.addWidget(choose)
         outer.addLayout(buttons)
 
-    def start(self, folder: str):
+    def start(self, folder: str, purpose: str = 'choose'):
+        self.purpose = purpose
+        moving = purpose == 'move'
+        title, note = self.choose_texts
+        self.title_label.setText('Choose where to move the installation' if moving else title)
+        self.note.setText('Pick an empty folder, or create one with New folder. Everything in the installation '
+                          'folder moves there.' if moving else note)
+        self.choose_button.setText('Move here' if moving else 'Use this folder')
         self.say('')
         self.show_path(Path(folder).expanduser())
 
@@ -1408,6 +1439,10 @@ class FolderPage(Page):
             self.chosen.emit(str(path))
         elif path.exists() and not path.is_dir():
             self.say('This is a file, not a folder.')
+        elif self.purpose == 'move' and path.is_dir() and any(path.iterdir()):
+            self.say('This folder is not empty. Choose an empty folder, or create one with New folder.')
+        elif self.purpose == 'move' and not path.exists() and not path.parent.is_dir():
+            self.say('Choose a folder in a place that exists, or create one with New folder.')
         elif path.is_dir() and any(path.iterdir()) and not (path / '.waystone').is_dir():
             self.say('This folder is not empty. Choose an empty folder, '
                                  'create one with New folder, or pick the folder Waystone already uses.')
@@ -1423,7 +1458,6 @@ class ImportPage(Page):
     confirmed = Signal()
     cancelled = Signal()
     choose_folder = Signal()
-
     def __init__(self):
         super().__init__()
         self.on_escape(self.cancelled.emit)
@@ -1597,6 +1631,103 @@ class ImportPage(Page):
 
     def focus_chain(self) -> list[QWidget]:
         return [*self.group.buttons(), self.choose, *self.boxes.values(), self.copy, self.cancel, self.confirm]
+
+
+class MovePage(Page):
+    """Confirms moving the installation folder, with what the move takes."""
+
+    confirmed = Signal()
+    cancelled = Signal()
+
+    def __init__(self):
+        super().__init__()
+        self.on_escape(self.cancelled.emit)
+        self.source = self.destination = ''
+        outer = scrolling(self)
+        self.balance(outer)
+        content = self.centre(column(outer))
+        content.addWidget(label('Move the installation folder?', 'pagetitle'))
+        content.addSpacing(6)
+        content.addWidget(label('Every client, the shared content and Waystone\'s records move together. '
+                                'Games and downloads wait until the move is done.', 'muted', wrap=True))
+        content.addSpacing(18)
+        card = QFrame()
+        card.setObjectName('card')
+        grid = QGridLayout(card)
+        grid.setContentsMargins(18, 14, 18, 14)
+        grid.setHorizontalSpacing(16)
+        grid.setVerticalSpacing(8)
+        # Long paths keep both ends, where the drive and the folder's own name are.
+        self.from_path, self.to_path = ElidedLabel('', mode=Qt.ElideMiddle), ElidedLabel('', mode=Qt.ElideMiddle)
+        for row, (name, value) in enumerate([('From', self.from_path), ('To', self.to_path)]):
+            key = label(name, 'key')
+            key.setFixedWidth(48)
+            grid.addWidget(key, row, 0)
+            grid.addWidget(value, row, 1)
+        grid.setColumnStretch(1, 1)
+        content.addWidget(card)
+        content.addSpacing(14)
+        self.details = label('', wrap=True)
+        content.addWidget(self.details)
+        content.addSpacing(4)
+        self.space = label('', 'small', wrap=True)
+        content.addWidget(self.space)
+        self.problem = label('', 'caution', wrap=True)
+        self.problem.hide()
+        content.addSpacing(6)
+        content.addWidget(self.problem)
+        content.addSpacing(20)
+        buttons = QHBoxLayout()
+        buttons.setSpacing(SPACING)
+        buttons.addStretch()
+        self.cancel = QPushButton('Cancel')
+        self.cancel.setFixedSize(96, PRIMARY_HEIGHT)          # level with Move
+        self.cancel.clicked.connect(self.cancelled.emit)
+        self.confirm = QPushButton('Move')
+        self.confirm.setObjectName('primary')
+        self.confirm.setFixedSize(132, PRIMARY_HEIGHT)
+        self.confirm.clicked.connect(self.confirmed.emit)
+        buttons.addWidget(self.cancel)
+        buttons.addWidget(self.confirm)
+        content.addLayout(buttons)
+        outer.addStretch(1)
+
+    def load(self, source: str, destination: str) -> None:
+        self.source, self.destination = source, destination
+        self.from_path.setText(source)
+        self.to_path.setText(destination)
+        self.details.setText('Checking the new folder…')
+        self.space.hide()
+        self.set_reason('')
+        self.confirm.setEnabled(False)          # until the check below has answered
+        self.cancel.setFocus()
+
+    def show_preview(self, preview: dict) -> None:
+        """What move.preview found: the drive, the size and the free space, or a refusal."""
+        if preview.get('problem') and 'size' not in preview:
+            self.details.setText('Waystone cannot move the installation folder there.')
+            self.set_reason(preview['problem'])
+            return
+        self.to_path.setText(preview['destination'])
+        if preview['same_drive']:
+            self.details.setText('Both folders are on the same drive, so the folder moves at once.')
+            self.space.hide()
+        else:
+            self.details.setText(f'The new folder is on another drive. Waystone copies {size_text(preview["size"])}, '
+                                 'checks the copy and then deletes the old folder. This can take a while. '
+                                 'Until the copy is checked, Cancel leaves everything as it was.')
+            self.space.setText(f'{size_text(preview["free"])} free on the new drive.')
+            self.space.show()
+        self.set_reason(preview['problem'])
+
+    def set_reason(self, reason: str) -> None:
+        self.problem.setText(reason)
+        self.problem.setVisible(bool(reason))
+        self.confirm.setEnabled(not reason)
+        self.confirm.setToolTip(reason)
+
+    def focus_chain(self):
+        return [self.cancel, self.confirm]
 
 
 class QueuePage(Page):

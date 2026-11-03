@@ -303,6 +303,9 @@ def test_switching_during_a_launch_waits_for_it_and_never_changes_its_account(va
         def state(self, code):
             return {'version': f'12.1.5.{VERSION}'}
 
+        def moving(self):
+            return False
+
         def pending(self, code):
             return None
 

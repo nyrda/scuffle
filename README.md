@@ -79,6 +79,29 @@ nix run . -- --help  # the command line
 On first start, choose an installation folder in the settings. Waystone owns
 that folder. Do not let Battle.net manage it at the same time.
 
+To put the installation somewhere else, use **Move…** next to the folder in
+**Settings › General** and pick an empty or new folder. Everything moves along:
+every client, the shared content and Waystone's own records. **Choose…** only
+points Waystone at another folder and moves nothing.
+
+- On the same drive the folder moves at once.
+- To another drive, Waystone copies everything, checks the copy and switches to
+  it, and only then deletes the old folder. The copy needs as much free space as
+  the installation takes, plus 1 GB. The progress shows at the bottom of the
+  window. Until the copy is checked, **Cancel** removes the copy and leaves the
+  old folder as it was.
+- Close every game and finish or remove every download first, including paused
+  and failed ones. Games and downloads cannot start until the move is done.
+- Waystone refuses a folder inside the installation, a folder that is not
+  empty, and an installation that holds links or another mounted drive.
+- If Waystone or the computer stops halfway, the next start finishes the move
+  once the copy was checked, and undoes it otherwise. One complete installation
+  always remains.
+
+Don't move the folder by hand while Waystone uses it. On Linux the Wine prefix
+stays in `~/.local/share/waystone/prefix`. The game writes its own folder into
+the prefix again each time it starts, so nothing there needs changing.
+
 While a game runs, its button reads **Close game**, which closes it as its
 window's close button does. Hold Shift and the button reads **Force quit**,
 which ends the game at once, for a game that hangs.
@@ -293,6 +316,8 @@ PYTHONPATH=src python -m waystone
 To check the uninstall tests against deliberate failures, run
 `nix develop -c python3 tools/check_uninstall_mutations.py`. The script restores
 each source file and writes its report under `.pytest_cache/uninstall-mutations`.
+`tools/check_move_mutations.py` does the same for moving the installation folder,
+with its report under `.pytest_cache/move-mutations`.
 
 ## Linux AppImage
 

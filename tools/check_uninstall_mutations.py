@@ -106,15 +106,19 @@ MUTATIONS = [
 ]
 
 
-def main():
-    OUTPUT.mkdir(parents=True, exist_ok=True)
+def run(mutations, output, expected) -> None:
+    """Apply each mutation, run its tests, and require every expected test case to catch one.
+
+    expected tells from a collected test id whether it belongs to the checked tests.
+    """
+    output.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
     for name in ('XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'APPDATA', 'LOCALAPPDATA'):
-        env[name] = str(OUTPUT / 'private-home' / name)
+        env[name] = str(output / 'private-home' / name)
     env['QT_QPA_PLATFORM'] = 'offscreen'
     env['PYTHONDONTWRITEBYTECODE'] = '1'
     results, covered = [], set()
-    for name, tests, changes in MUTATIONS:
+    for name, tests, changes in mutations:
         originals = {path: (ROOT / path).read_text() for path, _, _ in changes}
         try:
             for path, old, new in changes:
@@ -124,10 +128,10 @@ def main():
                     raise RuntimeError(f'{name}: mutation anchor missing in {path}')
                 file.write_text(source.replace(old, new))
                 Path(importlib.util.cache_from_source(str(file))).unlink(missing_ok=True)
-            report = OUTPUT / f'{name}.xml'
+            report = output / f'{name}.xml'
             run = subprocess.run([sys.executable, '-m', 'pytest', '-q', *tests, f'--junitxml={report}'],
-                                 cwd=ROOT, env=env, capture_output=True, text=True, timeout=90)
-            (OUTPUT / f'{name}.log').write_text(run.stdout + run.stderr)
+                                 cwd=ROOT, env=env, capture_output=True, text=True, timeout=300)
+            (output / f'{name}.log').write_text(run.stdout + run.stderr)
             cases = list(ET.parse(report).getroot().iter('testcase'))
             killed = [c.attrib['name'] for c in cases if c.find('failure') is not None]
             passed = [c.attrib['name'] for c in cases if c.find('failure') is None]
@@ -139,15 +143,19 @@ def main():
             for path, source in originals.items():
                 (ROOT / path).write_text(source)
                 Path(importlib.util.cache_from_source(str(ROOT / path))).unlink(missing_ok=True)
-    collection = subprocess.run([sys.executable, '-m', 'pytest', '--collect-only', '-q', '-k', 'uninstall'],
+    collection = subprocess.run([sys.executable, '-m', 'pytest', '--collect-only', '-q'],
                                 cwd=ROOT, env=env, capture_output=True, text=True, check=True)
-    expected = {line.split('::')[-1] for line in collection.stdout.splitlines() if '::test_uninstall_' in line}
-    missing = sorted(expected - covered)
+    wanted = {line.split('::')[-1] for line in collection.stdout.splitlines() if '::' in line and expected(line)}
+    missing = sorted(wanted - covered)
     summary = {'mutations': results, 'covered_test_cases': len(covered), 'missing': missing}
-    (OUTPUT / 'summary.json').write_text(json.dumps(summary, indent=2) + '\n')
-    print(f'Covered {len(covered)}/{len(expected)} new test cases; report: {OUTPUT / "summary.json"}')
+    (output / 'summary.json').write_text(json.dumps(summary, indent=2) + '\n')
+    print(f'Covered {len(covered)}/{len(wanted)} new test cases; report: {output / "summary.json"}')
     if missing or not all(row['ok'] for row in results):
         raise SystemExit(1)
+
+
+def main():
+    run(MUTATIONS, OUTPUT, lambda test_id: '::test_uninstall_' in test_id)
 
 
 if __name__ == '__main__':

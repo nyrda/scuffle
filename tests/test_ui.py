@@ -2085,3 +2085,99 @@ def test_the_tray_starts_a_client_as_its_main_button_does(qt, window, tmp_path, 
     wait_until(qt, lambda: window.downloads.job('wow') is not None)
     assert window.downloads.job('wow').kind == 'update' and 'wow' not in window.phases
     assert actions['wow'].text() == 'World of Warcraft · Queued' and not actions['wow'].isEnabled()
+
+
+def wait_for(qt, condition, seconds=10):
+    deadline = time.monotonic() + seconds
+    while not condition() and time.monotonic() < deadline:
+        qt.processEvents()
+        time.sleep(0.01)
+    return condition()
+
+
+def test_move_takes_the_installation_to_the_chosen_folder_and_the_window_follows(qt, window, tmp_path):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from waystone.library import Library
+    from waystone.settings import Settings
+    source, target = tmp_path / 'games' / 'Waystone', tmp_path / 'other' / 'Waystone'
+    Library(source).create()
+    (source / '_retail_').mkdir()
+    (source / '_retail_' / 'Wow.exe').write_bytes(b'inert')
+    target.parent.mkdir()
+    window.settings.root = str(source)
+    window.open_library()
+    window.open_settings()
+    page = window.settings_page
+    assert page.move_button.isVisible() and page.move_button.isEnabled()
+    chain = page.focus_chain()
+    assert chain[chain.index(page.browse) + 1] is page.move_button
+    QTest.mouseClick(page.move_button, Qt.LeftButton)
+    assert window.stack.currentWidget() is window.folder_page
+    assert window.folder_page.choose_button.text() == 'Move here'
+    window.folder_page.path.setText(str(target))
+    QTest.mouseClick(window.folder_page.choose_button, Qt.LeftButton)
+    confirm = window.move_page.confirm
+    assert window.stack.currentWidget() is window.move_page and not confirm.isEnabled()
+    assert wait_for(qt, confirm.isEnabled)
+    assert 'same drive' in window.move_page.details.text()
+    QTest.mouseClick(confirm, Qt.LeftButton)
+    assert wait_for(qt, lambda: window.library.root == target and window.moving() is None)
+    assert not source.exists() and (target / '_retail_' / 'Wow.exe').read_bytes() == b'inert'
+    assert Settings.load().root == str(target) and page.root.text() == str(target)
+    assert str(target) in window.client_page.banner.text.text()
+
+
+@pytest.mark.parametrize('busy', ['job', 'game'])
+def test_move_is_offered_only_without_a_download_or_a_game(qt, window, tmp_path, busy):
+    from waystone.downloads import PAUSED, Job
+    from waystone.library import Library
+    Library(tmp_path / 'games').create()
+    window.settings.root = str(tmp_path / 'games')
+    window.open_library()
+    if busy == 'job':
+        window.downloads.jobs.append(Job('wow', 'install', status=PAUSED))
+    else:
+        window.phases['wow'] = 'Running'
+    window.open_settings()
+    button = window.settings_page.move_button
+    assert button.isVisible() and not button.isEnabled()
+    assert ('download' if busy == 'job' else 'Close the game') in button.toolTip()
+    window.downloads.jobs.clear()
+    window.phases.clear()
+    window.refresh()
+    assert button.isEnabled()
+
+
+@pytest.fixture
+def crashed_move(tmp_path, monkeypatch):
+    """A real move of a real installation, killed in the middle of its copy to another drive.
+
+    Arranged before the window fixture builds the window, with the same private folders."""
+    from waystone import move, settings as settings_module
+    from waystone.settings import Settings
+    from test_library import FixtureCDN, SyntheticBuild, run_build
+    from test_move import crash
+    for name in ['config_dir', 'data_dir', 'cache_dir']:
+        monkeypatch.setattr(settings_module, name, lambda name=name: tmp_path / name)
+    monkeypatch.setattr(move.system, 'running_executables', lambda *names: [])
+    source, target = tmp_path / 'drive-a' / 'Waystone', tmp_path / 'drive-b' / 'Games'
+    run_build(source, FixtureCDN(SyntheticBuild(), tmp_path / 'cdn-cache'))
+    Settings(root=str(source)).save()
+    target.parent.mkdir()
+    assert not crash(40, 'other', source, target)
+    assert (source / move.MARKER).is_file() and (target / move.MARKER).is_file()
+    return source, target
+
+
+def test_the_window_undoes_a_move_a_crash_cut_short_before_it_opens_the_folder(qt, crashed_move, window):
+    from waystone import move
+    from waystone.library import Library
+    source, target = crashed_move
+    assert window.library.root == source and not window.library.moving()
+    assert 'undone' in window.client_page.banner.text.text()
+    # The worker removes the unfinished copy, and only then does the queue take jobs again.
+    assert wait_for(qt, lambda: window.moving() is None and not target.exists())
+    assert not move.journal_path().exists()
+    with Library(source).locked():
+        pass
