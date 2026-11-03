@@ -122,6 +122,27 @@ needs anymore.
 Waystone checks for updates on start, every 30 minutes and before each launch.
 If a client is behind, **Play** starts its update instead.
 
+## Bug reports
+
+**Settings › Diagnostics** helps with a bug report. **Copy diagnostics** puts
+a short plain-text report on the clipboard, ready to paste into an issue. It
+lists Waystone's version and how it was installed, the system, Python and Qt,
+the Proton build, `umu-run`, GameMode and MangoHud, the region, language and
+download settings, the installed clients with their update state, the
+downloads with the error of a failed one, and the last lines of the Proton log.
+
+The report leaves out your Battle.net sign-in, WoW account names, account ids,
+your user name and your home folder, which it writes as `~`. It never reads
+the saved session. Errors and log lines are cleaned of addresses, tickets and
+account names before they go in. Read the report before you share it all the
+same.
+
+On Linux, **Open Proton log** opens `steam-battlenet.log` once a game has
+written one, and **Open logs folder** opens `~/.local/share/waystone/logs`.
+Turn on **Proton log** under **Settings › Launch** first.
+
+`waystone diagnostics` prints the same report in a terminal.
+
 ## Command line
 
 ```sh
@@ -131,6 +152,7 @@ waystone --root /games/Waystone install wow --seed-from "/games/World of Warcraf
 waystone --root /games/Waystone update wow
 waystone --root /games/Waystone verify wow
 waystone --root /games/Waystone play wow_classic_era --mode hardcore
+waystone diagnostics
 ```
 
 `--seed-from` copies verified content from an existing installation, such as a

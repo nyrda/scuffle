@@ -51,6 +51,7 @@ def main(argv=None):
     commands.add_parser('clients', help='List the clients and their installed versions')
     commands.add_parser('sign-in', help='Sign in to Battle.net through the browser')
     commands.add_parser('sign-out', help='Forget the saved Battle.net session')
+    commands.add_parser('diagnostics', help='Print a report for bug reports, without sign-in data or account names')
     play = commands.add_parser('play', help='Renew the session and start a client')
     play.add_argument('client', type=client_code)
     play.add_argument('--mode', help='Game mode, such as hardcore for Classic Era')
@@ -71,6 +72,11 @@ def main(argv=None):
     if args.command is None:
         from .ui.app import main as interface
         return interface()
+    if args.command == 'diagnostics':
+        # Before the settings load, so a broken settings file still gets a report.
+        from .diagnostics import command_line_report
+        print(command_line_report(args.root), end='', flush=True)
+        return
     settings = Settings.load()
     root = args.root or (Path(settings.root) if settings.root else None)
     if root is None:

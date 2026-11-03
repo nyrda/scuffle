@@ -6,15 +6,16 @@ from pathlib import Path
 import shutil
 import sys
 
-from PySide6.QtCore import QDir, QEvent, QPointF, QRectF, QTimer, Qt, Signal
-from PySide6.QtGui import (QBrush, QColor, QKeySequence, QLinearGradient, QPainter, QPen, QRadialGradient, QShortcut,
-                           QTransform)
+from PySide6.QtCore import QDir, QEvent, QPointF, QRectF, QTimer, QUrl, Qt, Signal
+from PySide6.QtGui import (QBrush, QColor, QDesktopServices, QKeySequence, QLinearGradient, QPainter, QPen,
+                           QRadialGradient, QShortcut, QTransform)
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QFileSystemModel, QFrame, QGridLayout,
                                QHBoxLayout, QLabel, QLineEdit, QMenu, QProgressBar, QPushButton,
                                QScrollArea, QSizePolicy, QSpacerItem, QSpinBox, QToolButton, QTreeView, QVBoxLayout, QWidget)
 
 from .. import catalog
-from ..launch import looks_like_redirect, open_browser, parse_ticket
+from ..diagnostics import LOG_NAME
+from ..launch import log_dir, looks_like_redirect, open_browser, parse_ticket
 from ..settings import LOCALE_NAMES, MEGABYTE, REGIONS, Settings
 from .launch_options import LaunchSettings
 from .style import (BACKGROUND, FAMILY_NAMES, SPACING, accent_shade, client_color, glyph_name, glyph_path, mix,
@@ -569,7 +570,8 @@ class ClientPage(Page):
 class SettingsPage(Page):
     """The settings, in sections chosen at the top. Every choice saves at once."""
 
-    SECTIONS = [('general', 'General'), ('clients', 'Clients'), ('downloads', 'Downloads'), ('launch', 'Launch')]
+    SECTIONS = [('general', 'General'), ('clients', 'Clients'), ('downloads', 'Downloads'), ('launch', 'Launch'),
+                ('diagnostics', 'Diagnostics')]
     CATEGORIES = [(catalog.LIVE, 'Live clients', 'Untick a client to leave it out of the list. '
                    'Hiding a client keeps it installed.'),
                   (catalog.TEST, 'Test clients', 'PTRs and betas. Showing one does not install it. '
@@ -585,6 +587,7 @@ class SettingsPage(Page):
     recheck_catalog = Signal()
     closed = Signal()
     choose_folder = Signal(str)
+    copy_diagnostics = Signal()
 
     def __init__(self):
         super().__init__()
@@ -747,6 +750,37 @@ class SettingsPage(Page):
         self.launch_empty.setVisible(self.launch is None)
         launch.addWidget(self.launch_empty)
 
+        # Diagnostics
+        grid = self.card(self.section_layouts['diagnostics'], 'Diagnostics',
+                         'For a bug report: versions, the system, Proton and umu-run, these settings, the installed '
+                         'clients, the downloads and the end of the Proton log. Your sign-in, account names and '
+                         'ids, home folder and user name are left out.')
+        self.copy_button = fixed(QPushButton('Copy diagnostics'))
+        self.copy_button.setToolTip('Copies the report to the clipboard, ready to paste into an issue')
+        self.copy_button.clicked.connect(self.request_diagnostics)
+        self.collecting = False
+        copy_row = QHBoxLayout()
+        copy_row.addWidget(self.copy_button)
+        copy_row.addStretch()
+        self.row(grid, 'Report', copy_row)
+        # Proton writes the only log, so Windows has none to open.
+        self.log_buttons: list[QPushButton] = []
+        if sys.platform != 'win32':
+            self.open_log = fixed(QPushButton('Open Proton log'))
+            self.open_log.clicked.connect(lambda: self.reveal(log_dir() / LOG_NAME))
+            self.open_logs = fixed(QPushButton('Open logs folder'))
+            self.open_logs.clicked.connect(lambda: self.reveal(log_dir()))
+            self.log_buttons = [self.open_log, self.open_logs]
+            logs = QHBoxLayout()
+            logs.setSpacing(SPACING)
+            for button in self.log_buttons:
+                logs.addWidget(button)
+            logs.addStretch()
+            self.row(grid, 'Logs', logs)
+            # A disabled button takes no focus, so its reason is written out and not only a tooltip.
+            self.log_note = label('', 'small', wrap=True)
+            grid.addWidget(self.log_note, grid.rowCount(), 1)
+
         for layout in self.section_layouts.values():
             layout.addStretch()
         body_layout.addStretch()
@@ -772,6 +806,8 @@ class SettingsPage(Page):
         for key, widget in self.section_widgets.items():
             widget.setVisible(key == name)
         self.scroll.verticalScrollBar().setValue(0)
+        if name == 'diagnostics':
+            self.update_logs()          # a game may have written the log since
         window = self.window()
         if hasattr(window, 'update_tab_order'):
             window.update_tab_order()
@@ -850,6 +886,8 @@ class SettingsPage(Page):
                 chain += [c['box'] for c in self.choices.values() if c['category'] == category]
         elif self.section == 'downloads':
             chain += [self.limit, *self.download_fields]
+        elif self.section == 'diagnostics':
+            chain += [self.copy_button, *self.log_buttons]
         else:
             chain += self.launch.focus_chain() if self.launch else []
             for widget in self.launch_widgets:
@@ -973,6 +1011,7 @@ class SettingsPage(Page):
         self._loading = False
         self.update_free()
         self.update_other()
+        self.update_logs()
 
     def lock_folder(self, reason: str) -> None:
         """Downloads write into the current folder, so it stays until they are done."""
@@ -1026,8 +1065,44 @@ class SettingsPage(Page):
                 (s.listed if wanted else s.unlisted)(code)
         s.save()
         self.saved_note.setText('Saved.')
-        self._note_timer.start()            # restarted by each save, so the note never flips mid-typing
+        self._note_timer.start(1600)        # restarted by each save, so the note never flips mid-typing
         self.saved.emit()
+
+    # Diagnostics
+
+    def update_logs(self) -> None:
+        """Each log button works only once there is something to open."""
+        if not self.log_buttons:
+            return
+        folder = log_dir()
+        try:
+            has_log, has_folder = (folder / LOG_NAME).is_file(), folder.is_dir()
+        except OSError:         # an unreadable folder before Python 3.13 raises instead of saying no
+            has_log = has_folder = False
+        reason = '' if has_log else 'No Proton log yet. Turn on Proton log under Launch, then start a game.'
+        self.open_log.setEnabled(not reason)
+        self.open_log.setToolTip(reason or f'Opens {LOG_NAME}')
+        self.open_logs.setEnabled(has_folder)
+        self.open_logs.setToolTip('' if has_folder else 'Waystone has written no logs yet.')
+        self.log_note.setText(reason)
+        self.log_note.setVisible(bool(reason))
+
+    def reveal(self, path: Path) -> None:
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+    def request_diagnostics(self) -> None:
+        # The button stays enabled while the report is collected, so keyboard focus stays on it.
+        if not self.collecting:
+            self.collecting = True
+            self.copy_button.setText('Collecting…')
+            self.copy_diagnostics.emit()
+
+    def diagnostics_copied(self, copied: bool) -> None:
+        self.collecting = False
+        self.copy_button.setText('Copy diagnostics')
+        self.saved_note.setText('Diagnostics copied. Paste them into your bug report.' if copied
+                                else 'The diagnostics could not be collected.')
+        self._note_timer.start(5000)
 
     def update_saved_note(self, *_) -> None:
         unsaved = self.launch is not None and self.launch.unsaved()
