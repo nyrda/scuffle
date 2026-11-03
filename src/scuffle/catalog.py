@@ -70,10 +70,10 @@ ERA_MODES = (
 
 BLURBS = {
     'wow': 'The current expansion of World of Warcraft.',
-    'wow_classic': 'Classic progression, now in Mists of Pandaria.',
+    'wow_classic': 'Classic progression realms, a step behind the current expansion.',
     'wow_anniversary': 'The Burning Crusade on fresh anniversary realms.',
     'wow_classic_era': 'The original game, with Hardcore and Season of Discovery realms.',
-    'wowf': 'World of Warcraft: Forever. This is its stress test until the release.',
+    'wowf': 'World of Warcraft: Forever.',
     'wowt': 'Test realm for the next retail patch.',
     'wowxptr': 'A second retail test realm, used for larger changes.',
     'wow_beta': 'Beta of the next retail expansion.',
@@ -91,7 +91,6 @@ CLIENTS = (
     Client('wow_classic', 'Mists of Pandaria Classic', 'wow_classic', 'classic'),
     Client('wow_anniversary', 'Burning Crusade Anniversary', 'wow_classic_anniversary', 'classic'),
     Client('wow_classic_era', 'Classic Era', 'wow_classic_era', 'classic', modes=ERA_MODES),
-    # Forever's release channel is not published yet. Its stress test is.
     Client('wowf', 'Forever', 'wowf', 'forever'),
     Client('wowt', 'Retail PTR', 'wow_ptr', 'retail', parent='wow', category=TEST),
     Client('wowxptr', 'Retail PTR 2', 'wow_ptr_x', 'retail', parent='wow', category=TEST),

@@ -141,7 +141,7 @@ Clients come in three categories.
 | Live | Mists of Pandaria Classic | `wow_classic` | `wow_classic` | unless hidden |
 | Live | Burning Crusade Anniversary | `wow_anniversary` | `wow_classic_anniversary` | unless hidden |
 | Live | Classic Era, with Era, Hardcore and Season of Discovery modes | `wow_classic_era` | `wow_classic_era` | unless hidden |
-| Live | Forever, until the release channel exists | `wowf` | `wowf` | unless hidden |
+| Live | Forever | `wowf` | `wowf` | unless hidden |
 | Test | Retail PTR, Retail PTR 2, MoP Classic PTR, Classic Era PTR | `wowt`, `wowxptr`, `wow_classic_ptr`, `wow_classic_era_ptr` | install UID | when chosen or installed |
 | Test | Retail Beta, Forever Beta | `wow_beta`, `wow_classic_beta` | install UID | when chosen or installed |
 | Other | Dark Realm Test, Retail Event, Classic Submission, Forever China Beta | `wowlivetest`, `wowe1`, `wowz`, `wow_cn_beta`, found by discovery | install UID | when shown, and chosen or installed |
