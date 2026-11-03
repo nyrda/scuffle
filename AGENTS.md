@@ -58,6 +58,4 @@ packaging/windows/remote-build.sh <ssh host>   # Scuffle.exe, built on Windows
 
 - Prose in docs has no semicolons. README is for users, DESIGN for the design.
 - A commit message is one plain sentence about the change, as in
-  `git log --oneline`. No co-authored-by lines.
-- Feature work goes on a branch named for the feature, merged into `main` with
-  `--no-ff`. Do not push or open a pull request unless asked.
+  `git log --oneline`.
