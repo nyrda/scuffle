@@ -300,6 +300,8 @@ class ClientPage(Page):
     uninstall_clicked = Signal()
     show_clients_clicked = Signal()
     launch_options_clicked = Signal()
+    launcher_clicked = Signal()
+    steam_clicked = Signal()
     mode_changed = Signal(str)
 
     def __init__(self):
@@ -378,6 +380,9 @@ class ClientPage(Page):
         self.verify_action = menu.addAction('Verify files', self.verify_clicked.emit)
         self.folder_action = menu.addAction('Open folder', self.open_folder_clicked.emit)
         self.launch_action = menu.addAction('Launch options…', self.launch_options_clicked.emit)
+        # Their text says whether the entry exists, which the window checks as the menu opens.
+        self.launcher_action = menu.addAction('Add to app launcher', self.launcher_clicked.emit)
+        self.steam_action = menu.addAction('Add to Steam', self.steam_clicked.emit)
         self.uninstall_action = menu.addAction('Uninstall…', self.uninstall_clicked.emit)
         menu.setToolTipsVisible(True)
         self.menu_separator = menu.addSeparator()

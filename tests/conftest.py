@@ -4,15 +4,23 @@ from pathlib import Path
 
 import pytest
 
-FOLDERS = ['XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'APPDATA', 'LOCALAPPDATA']
+FOLDERS = ['XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'APPDATA', 'LOCALAPPDATA', 'HOME']
 # The user's own folders, found before any test changes the environment.
 REAL = [Path(os.environ.get(name, Path.home() / default)) / 'waystone' for name, default in
         [('XDG_CONFIG_HOME', '.config'), ('XDG_DATA_HOME', '.local/share'), ('XDG_CACHE_HOME', '.cache')]]
+DATA = Path(os.environ.get('XDG_DATA_HOME', Path.home() / '.local/share'))
+# The app launcher entries, icons and Steam shortcuts Waystone can write for the user.
+SHORTCUTS = [(DATA / 'applications', 'waystone-*'), (DATA / 'icons/hicolor', '*/apps/waystone-*'),
+             *[(Path.home() / root / 'userdata', '*/config/shortcuts.vdf')
+               for root in ['.steam/steam', '.steam/root', '.local/share/Steam']]]
 
 
 def snapshot() -> dict:
-    return {path: path.stat().st_mtime_ns for folder in REAL if folder.is_dir()
-            for path in [folder, *folder.iterdir()]}
+    found = {path: path.stat().st_mtime_ns for folder in REAL if folder.is_dir()
+             for path in [folder, *folder.iterdir()]}
+    found |= {path: path.stat().st_mtime_ns for folder, pattern in SHORTCUTS if folder.is_dir()
+              for path in folder.glob(pattern)}
+    return found
 
 
 BEFORE = snapshot()
@@ -39,6 +47,6 @@ def private_session_folders(tmp_path_factory):
 
 @pytest.fixture(autouse=True)
 def private_folders(tmp_path, monkeypatch):
-    # The user's real settings, sign-in and caches are never read or written by a test.
+    # The user's real settings, sign-in, caches, app launcher and Steam are never read or written by a test.
     for name in FOLDERS:
         monkeypatch.setenv(name, str(tmp_path / 'home' / name.lower()))

@@ -1569,3 +1569,173 @@ def test_a_running_game_closes_and_shift_turns_the_button_into_force_quit(qt, wi
     monkeypatch.setattr(ui, 'CLOSE_GRACE', 0)
     window.close_overdue('wow', window.closing['wow'])
     assert 'wow' not in window.closing and 'Force quit' in page.banner.text.text()
+
+
+@pytest.fixture
+def unseen(qt, tmp_path, monkeypatch):
+    """A window as a shortcut starts it: not shown, with an installation folder and Retail installed."""
+    from waystone import discovery, settings as settings_module
+    from waystone.settings import Settings
+    from waystone.ui import app as ui
+
+    def offline(url, *args, **kwargs):
+        raise OSError('Tests never reach the version service')
+    monkeypatch.setattr(discovery, 'fetch', offline)
+    for name in ['config_dir', 'data_dir', 'cache_dir']:
+        monkeypatch.setattr(settings_module, name, lambda name=name: tmp_path / name)
+        monkeypatch.setattr(ui, name, lambda name=name: tmp_path / name, raising=False)
+    Settings(root=str(tmp_path / 'games')).save()
+    quits = []
+    monkeypatch.setattr(ui.QApplication, 'quit', lambda: quits.append(True))
+    window = ui.MainWindow(unseen=True)
+    installed(window, monkeypatch, ['wow', 'wow_classic_era'])
+    window.populate()
+    window.quits = quits
+    started = []
+    # Play's own work, the update check and the session, is the launcher's. The window decides when to call it.
+    monkeypatch.setattr(window, 'play', lambda code, mode=None: (started.append((code, mode)),
+                                                                 window.on_phase(code, 'Connecting')))
+    window.started = started
+    yield window
+    window.close()
+
+
+def settle(qt):
+    for _ in range(3):
+        qt.processEvents()
+
+
+@pytest.mark.parametrize('wait', [False, True])
+def test_a_shortcut_starts_a_ready_client_without_showing_the_window(qt, unseen, wait):
+    unseen.start_shortcut({'play': 'wow_classic_era', 'mode': 'hardcore', 'wait': wait})
+    settle(qt)
+    assert unseen.started == [('wow_classic_era', 'hardcore')]
+    assert not unseen.quits                 # still starting
+    unseen.on_phase('wow_classic_era', 'Running')
+    settle(qt)
+    # Steam counts the game as running while the process lives, so with wait it stays.
+    assert bool(unseen.quits) is not wait
+    unseen.on_task_finished('wow_classic_era', '')
+    settle(qt)
+    assert unseen.quits and not unseen.isVisible()
+
+
+@pytest.mark.parametrize('need', ['update', 'unfinished', 'downloading', 'not-installed', 'hidden-and-behind',
+                                  'did-not-start'])
+def test_a_shortcut_opens_the_window_on_a_client_that_needs_something_first(qt, unseen, monkeypatch, need):
+    from waystone.downloads import QUEUED, Job
+    from waystone.library import atomic_json
+    code = 'wowf' if need == 'not-installed' else 'wow'
+    queued = []
+    monkeypatch.setattr(unseen.downloads, 'enqueue', lambda client, kind, **kwargs: (
+        queued.append((client, kind)), Job(client, kind, status=QUEUED))[1])
+    if need in ('update', 'hidden-and-behind'):
+        unseen.updates['wow'] = '12.1.7.71000'
+    if need == 'hidden-and-behind':
+        unseen.settings.unlisted('wow')
+        unseen.populate()
+    if need == 'unfinished':
+        atomic_json(unseen.library.client_dir('wow') / 'pending.json', {'phase': 'downloading'})
+    if need == 'downloading':
+        unseen.downloads.jobs.append(Job('wow', 'update', status=QUEUED))
+    unseen.start_shortcut({'play': code, 'mode': None, 'wait': True})
+    if need == 'did-not-start':
+        assert unseen.started and not unseen.isVisible()
+        unseen.on_task_finished('wow', 'World of Warcraft did not start. Check its runtime and try again.')
+    settle(qt)
+    assert unseen.isVisible() and unseen.selected() == code
+    assert unseen.client_page.banner.isVisible() and unseen.client_page.banner.text.text()
+    assert bool(unseen.started) is (need == 'did-not-start')
+    assert queued == ([('wow', 'update')] if need in ('update', 'hidden-and-behind') else [])
+    # Shown once, the window is the user's, and stays after the shortcut is done.
+    assert not unseen.waiters and not unseen.quits
+
+
+def test_a_shortcut_that_needs_a_sign_in_shows_the_sign_in_page(qt, unseen, monkeypatch):
+    monkeypatch.setattr(pages, 'open_browser', lambda url: None)
+    unseen.start_shortcut({'play': 'wow', 'wait': False})
+    assert unseen.started == [('wow', None)] and not unseen.isVisible()
+    unseen.on_sign_in_requested('https://example.invalid/login')
+    assert unseen.isVisible() and unseen.stack.currentWidget() is unseen.sign_in_page
+    unseen.on_sign_in_finished(None)
+
+
+class Reply:
+    def __init__(self):
+        self.sent, self.closed = [], False
+
+    def send(self, **message):
+        self.sent.append(message)
+
+    def close(self):
+        self.closed = True
+
+
+def test_a_running_window_takes_over_a_shortcut_and_says_when_the_game_has_exited(qt, window, tmp_path,
+                                                                                 monkeypatch):
+    window.settings.root = str(tmp_path / 'games')
+    window.open_library()
+    installed(window, monkeypatch, ['wow_classic_era'])
+    started = []
+    monkeypatch.setattr(window, 'play', lambda code, mode=None: (started.append((code, mode)),
+                                                                 window.on_phase(code, 'Connecting')))
+    refused = Reply()
+    window.on_request({'play': 'wow_classic_era', 'mode': 'arena', 'wait': True}, refused)
+    assert refused.sent == [{'error': 'Classic Era has no game mode \'arena\'.'}] and refused.closed
+    reply = Reply()
+    window.on_request({'play': 'wow_classic_era', 'mode': 'sod', 'wait': True}, reply)
+    assert started == [('wow_classic_era', 'sod')]
+    assert reply.sent == [{'ok': True}] and not reply.closed
+    window.on_phase('wow_classic_era', 'Running')
+    assert not reply.closed
+    window.on_task_finished('wow_classic_era', '')
+    assert reply.sent == [{'ok': True}, {'finished': True}] and reply.closed
+
+
+def test_the_menu_adds_a_client_to_the_app_launcher_and_uninstalling_removes_it(qt, window, tmp_path, monkeypatch):
+    from waystone import shortcuts
+    from waystone.downloads import DONE, Job
+    window.settings.root = str(tmp_path / 'games')
+    window.open_library()
+    installed(window, monkeypatch, ['wow'])
+    window.populate()
+    window.client_list.select('wow')
+    window.refresh()
+    page = window.client_page
+    page.more.menu().aboutToShow.emit()
+    assert page.launcher_action.isVisible() and page.launcher_action.text() == 'Add to app launcher'
+    assert not page.steam_action.isVisible()          # no Steam in this home
+    page.launcher_action.trigger()
+    assert shortcuts.in_launcher('wow') and 'app launcher' in page.banner.text.text()
+    page.more.menu().aboutToShow.emit()
+    assert page.launcher_action.text() == 'Remove from app launcher'
+    job = Job('wow', 'uninstall', status=DONE, result={'uninstalled': 'wow'})
+    window.downloads.jobs.append(job)
+    window.on_job(job)
+    assert not shortcuts.in_launcher('wow')
+
+
+def test_the_menu_adds_a_client_to_steam_once_steam_is_closed(qt, window, tmp_path, monkeypatch):
+    from pathlib import Path
+    from waystone import steam
+    config = Path.home() / '.local/share/Steam/userdata/5/config'
+    config.mkdir(parents=True)
+    window.settings.root = str(tmp_path / 'games')
+    window.open_library()
+    installed(window, monkeypatch, ['wow'])
+    window.populate()
+    window.client_list.select('wow')
+    window.refresh()
+    page = window.client_page
+    page.more.menu().aboutToShow.emit()
+    assert page.steam_action.isVisible() and page.steam_action.text() == 'Add to Steam'
+    monkeypatch.setattr(steam.Steam, 'running', lambda self: True)
+    page.steam_action.trigger()
+    assert 'Quit Steam' in page.banner.text.text() and not (config / 'shortcuts.vdf').exists()
+    monkeypatch.setattr(steam.Steam, 'running', lambda self: False)
+    page.banner.action.click()                      # Try again
+    entry = steam.shortcut_list(steam.parse((config / 'shortcuts.vdf').read_bytes()))[0][2]
+    assert steam.field(entry, 'LaunchOptions').endswith(b'play wow --shortcut --wait')
+    assert (config / 'grid' / f'{steam.entry_app_id(entry)}p.png').stat().st_size > 1000
+    page.more.menu().aboutToShow.emit()
+    assert page.steam_action.text() == 'Remove from Steam'

@@ -18,6 +18,7 @@ import time
 _home = tempfile.mkdtemp(prefix='waystone-screens-')
 for _name in ['XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'APPDATA', 'LOCALAPPDATA']:
     os.environ[_name] = os.path.join(_home, _name.lower())
+os.environ['HOME'] = _home          # so the Steam the menu finds is a stand-in, never the user's
 
 from PySide6.QtWidgets import QApplication, QScrollArea
 
@@ -85,6 +86,7 @@ def main(output: Path) -> None:
     menu.close()
     window.settings.game_accounts = {}
     window.signed_in, window.game_accounts = signed_in, game_accounts
+    shortcut_states(window, shot, output, application)
     window.storage['clients']['wow'] = 92_400_000_000
     window.open_uninstall()
     shot('01b-uninstall-confirmation')
@@ -228,6 +230,40 @@ def main(output: Path) -> None:
     window.on_sign_in_requested('https://eu.account.battle.net/login/?externalChallenge=login&app=wow')
     shot('11-sign-in')
     print(f'Wrote {len(list(output.glob("*.png")))} screenshots to {output}')
+
+
+def shortcut_states(window, shot, output: Path, application) -> None:
+    """The client menu with the app launcher and Steam entries, the notices they give, and their images."""
+    from waystone import steam
+    from waystone.ui import style
+    (Path(_home) / '.local/share/Steam/userdata/5/config').mkdir(parents=True, exist_ok=True)
+    menu = window.client_page.more.menu()
+    window.client_page.more.setFocus()
+    menu.aboutToShow.emit()
+    menu.popup(window.client_page.more.mapToGlobal(window.client_page.more.rect().bottomLeft()))
+    application.processEvents()
+    menu.grab().save(str(output / '01g-client-menu.png'))
+    menu.close()
+    window.toggle_launcher()
+    shot('01h-added-to-launcher')
+    menu.aboutToShow.emit()
+    menu.popup(window.client_page.more.mapToGlobal(window.client_page.more.rect().bottomLeft()))
+    application.processEvents()
+    menu.grab().save(str(output / '01i-client-menu-in-launcher.png'))
+    menu.close()
+    running = steam.Steam.running
+    steam.Steam.running = lambda self: True
+    window.toggle_steam()
+    shot('01j-steam-running')
+    steam.Steam.running = running
+    window.toggle_launcher()
+    window.clear_notice('wow')
+    for code in ['wow', 'wow_classic', 'wow_anniversary', 'wow_classic_era', 'wowf', 'wowt', 'wowlivetest']:
+        client = ui.catalog.get(code)
+        for size in (48, 256):
+            style.tile_image(client, size).save(str(output / f'30-icon-{code}-{size}.png'))
+        style.capsule_image(client, 600, 900).save(str(output / f'31-steam-portrait-{code}.png'))
+        style.capsule_image(client, 920, 430).save(str(output / f'32-steam-wide-{code}.png'))
 
 
 def launch_states(window, shot) -> None:

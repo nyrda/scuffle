@@ -9,6 +9,7 @@ from pathlib import Path
 import sys
 
 from . import catalog, system
+from .instance import InstanceError
 from .library import Library, LibraryError, Updater
 from .ngdp.cdn import CDNClient
 from .settings import Settings, cache_dir
@@ -55,6 +56,9 @@ def main(argv=None):
     play.add_argument('client', type=client_code)
     play.add_argument('--mode', help='Game mode, such as hardcore for Classic Era')
     play.add_argument('--wait', action='store_true', help='Wait until the game exits')
+    play.add_argument('--shortcut', action='store_true',
+                      help='Start as a shortcut does: through the Waystone window if it runs, and with the '
+                           'window when the client needs a sign-in or an update')
     adopt = commands.add_parser('adopt-wowupdater', help='Adopt a wowupdater installation in place')
     adopt.add_argument('source', type=Path)
     for name in ['install', 'update', 'verify']:
@@ -71,6 +75,10 @@ def main(argv=None):
     if args.command is None:
         from .ui.app import main as interface
         return interface()
+    if args.command == 'play' and args.shortcut:
+        # The window's own Play, which handles sign-in and updates and keeps one Waystone per user.
+        from .ui.app import main as interface
+        return interface({'play': args.client, 'mode': args.mode, 'wait': args.wait})
     settings = Settings.load()
     root = args.root or (Path(settings.root) if settings.root else None)
     if root is None:
@@ -141,7 +149,7 @@ def entrypoint():
     system.attach_console()
     try:
         main()
-    except (LibraryError, OSError, ValueError) as error:
+    except (LibraryError, OSError, ValueError, InstanceError) as error:
         raise SystemExit(str(error))
 
 

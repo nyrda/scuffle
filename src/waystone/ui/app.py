@@ -15,7 +15,7 @@ from PySide6.QtGui import QDesktopServices, QIcon
 from PySide6.QtWidgets import (QApplication, QFrame, QGraphicsOpacityEffect, QHBoxLayout, QMainWindow, QPushButton, QStackedWidget,
                                QMenu, QStyleFactory, QVBoxLayout, QWidget)
 
-from .. import catalog, discovery, system
+from .. import catalog, discovery, instance, shortcuts, steam, system
 from ..downloads import DONE, FAILED, PAUSED, QUEUED, RUNNING, DownloadManager, Job
 from ..launch import Launcher, LaunchError
 from ..library import Library, LibraryError, update_available
@@ -23,7 +23,7 @@ from ..ngdp.cdn import CDNClient
 from ..settings import LOCALE_NAMES, MEGABYTE, REGIONS, Settings, cache_dir, data_dir
 from .client_options import ClientOptionsPage, summary as options_summary
 from .pages import ClientPage, FolderPage, QueuePage, SettingsPage, SignInPage, UninstallPage
-from .style import SPACING, dark_palette, make_images, size_text, stylesheet
+from .style import SPACING, capsule_image, dark_palette, make_images, png, size_text, stylesheet, tile_image
 from .widgets import ClientList, DownloadBar, fixed, label, progress_variants
 
 
@@ -42,12 +42,19 @@ class Bus(QObject):
     catalog_checked = Signal(str, object)   # region, what discovery found or None
     game_closed = Signal(str, str, bool)    # client, what closing did or an error, forced
     running_scanned = Signal(object, object)   # library, clients whose game runs
+    request_received = Signal(object, object)  # a later start's request, the way to answer it
 
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, *, unseen: bool = False):
         super().__init__()
         self.settings = Settings.load()
+        # Started by a shortcut, and not shown yet. The window shows once it has something to say.
+        self.unseen = unseen
+        self.leaving = False        # the shortcut that started this process is done with it
+        self._closing = False
+        self.waiters: list[tuple] = []          # (client, wait for its exit, called when done)
+        self.from_shortcut: set[str] = set()   # clients a shortcut is starting
         self.bus = Bus()
         self.updates: dict[str, bool] = {}
         self.phases: dict[str, str] = {}      # client -> Checking for updates, Signing in, Starting, Running
@@ -69,6 +76,7 @@ class MainWindow(QMainWindow):
         self.bus.catalog_checked.connect(self.on_catalog)
         self.bus.game_closed.connect(self.on_game_closed)
         self.bus.running_scanned.connect(self.on_running_scanned)
+        self.bus.request_received.connect(self.on_request)
         # Shift turns Close game into Force quit while it is held.
         QApplication.instance().installEventFilter(self)
         self.storage: dict = {}
@@ -101,6 +109,9 @@ class MainWindow(QMainWindow):
         self.client_page.mode_changed.connect(self.remember_mode)
         self.client_page.hide_clicked.connect(self.hide_client)
         self.client_page.uninstall_clicked.connect(self.open_uninstall)
+        self.client_page.launcher_clicked.connect(self.toggle_launcher)
+        self.client_page.steam_clicked.connect(self.toggle_steam)
+        self.client_page.more.menu().aboutToShow.connect(self.update_shortcut_actions)
         self.uninstall_page = UninstallPage()
         self.uninstall_page.cancelled.connect(self.show_client_page)
         self.uninstall_page.confirmed.connect(self.confirm_uninstall)
@@ -437,6 +448,7 @@ class MainWindow(QMainWindow):
         return version + [('Region', region), ('Language', language), ('Download size', size)]
 
     def refresh(self):
+        self.settle_waiters()
         for code, row in self.client_list.rows.items():
             text, _ = self.status(code)
             state = self.library.state(code) if self.library else None
@@ -650,6 +662,8 @@ class MainWindow(QMainWindow):
         """Show a message on one client's page, or on every page when client is ''."""
         code = self.selected() if client is None else client
         self.messages[code or ''] = (text, kind, action, callback)
+        if (self.unseen or code in self.from_shortcut) and not self._closing:
+            self.present(code)
         self.show_notice()
 
     def next_startup_notice(self):
@@ -919,9 +933,9 @@ class MainWindow(QMainWindow):
         if self.downloads:
             self.downloads.set_bandwidth_limit(self.settings.bandwidth_limit)
 
-    def play(self, code: str):
+    def play(self, code: str, mode: str | None = None):
         client = catalog.get(code)
-        mode = self.settings.modes.get(code) or (client.modes[0].id if client.modes else None)
+        mode = mode or self.settings.modes.get(code) or (client.modes[0].id if client.modes else None)
         self.clear_notice()
         self.launch_failed.discard(code)
         self.phases[code] = 'Checking for updates'
@@ -935,8 +949,9 @@ class MainWindow(QMainWindow):
                     return
                 process = self.launcher().play(code, self.request_sign_in, mode=mode,
                                                status=lambda text: self.bus.launch_phase.emit(code, text))
-                self.bus.launch_phase.emit(code, 'Running')
+                # Before Running, which can end a shortcut's process and save the settings.
                 self.settings.last_played[code] = int(time.time())
+                self.bus.launch_phase.emit(code, 'Running')
                 process.wait()
                 self.bus.task_finished.emit(code, '')
             except Exception as error:  # shown in the banner
@@ -954,6 +969,7 @@ class MainWindow(QMainWindow):
         return self._sign_in_result[0]
 
     def on_sign_in_requested(self, url: str):
+        self.present()          # also when a shortcut started the launch
         self.sign_in_page.start(url)
         self.settings_button.setChecked(False)
         self.stack.setCurrentWidget(self.sign_in_page)
@@ -1006,6 +1022,8 @@ class MainWindow(QMainWindow):
 
     def on_phase(self, code: str, text: str):
         self.phases[code] = text
+        if text == 'Running':
+            self.from_shortcut.discard(code)
         self.sync_game_downloads()
         self.refresh()
 
@@ -1023,6 +1041,7 @@ class MainWindow(QMainWindow):
             self._signing_in = False
         self.refresh()
         if not message or 'cancelled' in message.lower():
+            self.from_shortcut.discard(code)
             return
         if code:
             # Seen in the list too, since another client may be selected by now.
@@ -1034,6 +1053,7 @@ class MainWindow(QMainWindow):
             self.notify(message, 'error', client=code)       # the main button below is the retry
         else:
             self.notify(message, client=code)
+        self.from_shortcut.discard(code)
         self.refresh()
 
     def on_update_needed(self, code: str):
@@ -1043,7 +1063,175 @@ class MainWindow(QMainWindow):
         where = 'It starts after the current download.' if job.status == QUEUED and self.downloads.busy() \
             else 'The update is running now.'
         self.notify(f'{catalog.get(code).label} needs an update before it can start. {where}', 'info', client=code)
+        self.from_shortcut.discard(code)
         self.refresh()
+
+    # Shortcuts and later starts
+
+    def serve(self, window: instance.Window) -> None:
+        """Answer later starts of Waystone, such as a shortcut's, from this window."""
+        window.serve(lambda request, reply: self.bus.request_received.emit(request, reply))
+
+    def on_request(self, request: dict, reply) -> None:
+        if 'play' not in request:
+            self.present()          # Waystone was started again, so its window comes to the front
+            reply.send(ok=True)
+            reply.close()
+            return
+        code, mode, wait = request['play'], request.get('mode'), request.get('wait') is True
+        problem = self.shortcut_problem(code, mode)
+        if problem:
+            reply.send(error=problem)
+            reply.close()
+            return
+        reply.send(ok=True)
+        if not wait:
+            reply.close()
+        finished = (lambda: (reply.send(finished=True), reply.close())) if wait else None
+        self.play_shortcut(code, mode, wait=wait, finished=finished)
+
+    def start_shortcut(self, request: dict) -> None:
+        """This process was started by a shortcut. It quits when done, unless the window was shown."""
+        code, mode = request['play'], request.get('mode')
+        problem = self.shortcut_problem(code, mode)
+        if problem:
+            self.notify(problem, 'error', client='')
+            return
+        self.play_shortcut(code, mode, wait=request.get('wait') is True, finished=self.leave)
+
+    @staticmethod
+    def shortcut_problem(code, mode) -> str:
+        if not isinstance(code, str) or not catalog.is_product(code):
+            return f'{code!r} is not a World of Warcraft client.'
+        client = catalog.get(code)
+        if mode is not None and mode not in [m.id for m in client.modes]:
+            return f'{client.label} has no game mode {mode!r}.'
+        return ''
+
+    def play_shortcut(self, code: str, mode: str | None, *, wait: bool = False, finished=None) -> None:
+        """Start a client as its Play button does. Anything the client needs first, such as an
+        update or a sign-in, opens the window on it instead of starting the game.
+
+        finished is called once there is nothing left to wait for: when the game has exited,
+        or without wait, once it runs or could not start.
+        """
+        if finished:
+            self.waiters.append((code, wait, finished))
+        label = catalog.get(code).label
+        job = self.downloads.job(code) if self.downloads else None
+        if not self.library:
+            self.present()                  # the notice asks for a folder
+        elif code in self.phases:
+            pass                            # already starting, and its waiter waits for it
+        elif self.library.running(code):
+            self._running = self._running | {code}      # before the scan sees it, so a waiter waits
+        elif not self.library.state(code):
+            self.notify(f'{label} is not installed. Install it to start it from a shortcut.', 'info', client=code)
+        elif job and job.status == FAILED:
+            self.present(code)              # its page shows the failure and the way to retry
+        elif job and job.status != DONE:
+            work = {'install': 'download', 'update': 'update', 'verify': 'file check', 'repair': 'repair'}
+            self.notify(f'{label} can start once its {work.get(job.kind, "current job")} is done.', 'info', client=code)
+        elif self.library.pending(code) is not None:
+            self.notify(f'{label} has an unfinished update. Resume it before playing.', 'info', client=code)
+        elif self.updates.get(code):
+            self.from_shortcut.add(code)
+            self.on_update_needed(code)
+        else:
+            self.from_shortcut.add(code)
+            self.play(code, mode)
+        self.refresh()
+
+    def settle_waiters(self) -> None:
+        for waiter in list(self.waiters):
+            code, wait, finished = waiter
+            started = self.phases.get(code) == 'Running'
+            if (started and not wait) or (code not in self.phases and not self.game_running(code)):
+                self.waiters.remove(waiter)
+                finished()
+        if self.leaving and self.unseen:
+            QTimer.singleShot(0, self.quit_unseen)
+
+    def leave(self) -> None:
+        self.leaving = True
+
+    def quit_unseen(self) -> None:
+        """End a shortcut's process that never showed its window, once nothing else is starting."""
+        launching = any(phase != 'Running' for phase in self.phases.values())
+        if self.unseen and not self._closing and not self.waiters and not launching:
+            self.close()
+            QApplication.quit()
+
+    def present(self, code: str | None = None) -> None:
+        """Bring the window to the front, on code's page when given."""
+        self.unseen = False
+        if code:
+            if code not in self.client_list.rows:
+                self.settings.listed(code)      # its shortcut brings a hidden client back
+                self.settings.save()
+                self.populate()
+            self.open_client(code)
+        if self.isMinimized():
+            self.showNormal()
+        else:
+            self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def launcher_place(self) -> str:
+        return 'Start menu' if system.WINDOWS else 'app launcher'
+
+    def update_shortcut_actions(self) -> None:
+        """Say in the menu whether the client has an entry, as the menu opens."""
+        code = self.selected()
+        page = self.client_page
+        installed = bool(code and self.library and self.library.state(code))
+        listed = installed and shortcuts.in_launcher(code)
+        page.launcher_action.setVisible(installed)
+        page.launcher_action.setText(f'{"Remove from" if listed else "Add to"} {self.launcher_place()}')
+        found = steam.find() if installed else None
+        page.steam_action.setVisible(found is not None)
+        page.steam_action.setText('Remove from Steam' if found and found.has(code) else 'Add to Steam')
+
+    def toggle_launcher(self) -> None:
+        code = self.selected()
+        if not code:
+            return
+        client, place = catalog.get(code), self.launcher_place()
+        try:
+            if shortcuts.in_launcher(code):
+                shortcuts.remove_from_launcher(code)
+                self.notify(f'{client.label} was removed from the {place}.', 'info', client=code)
+            else:
+                shortcuts.add_to_launcher(client, {size: png(tile_image(client, size))
+                                                   for size in shortcuts.ICON_SIZES})
+                self.notify(f'{client.label} is in the {place} now. It opens Waystone only when the game '
+                            'needs a sign-in or an update first.', 'info', client=code)
+        except OSError as error:
+            self.notify(f'The {place} entry could not be changed. {error}', 'error', client=code)
+
+    def toggle_steam(self) -> None:
+        code = self.selected()
+        found = steam.find()
+        if not code or found is None:
+            return
+        client = catalog.get(code)
+        try:
+            if found.has(code):
+                found.remove(code)
+                self.notify(f'{client.label} was removed from Steam.', 'info', client=code)
+            else:
+                images = {'portrait': png(capsule_image(client, 600, 900)),
+                          'wide': png(capsule_image(client, 920, 430)), 'icon': png(tile_image(client, 256))}
+                found.add(code, client.label, shortcuts.shortcut_command(code, wait=True), images)
+                self.notify(f'{client.label} was added to Steam. It appears in your library when Steam starts.',
+                            'info', client=code)
+        except steam.SteamRunning:
+            # Steam writes its own list back while it runs, which would drop the change.
+            self.notify('Steam is running and would undo the change. Quit Steam, then try again.', 'info',
+                        'Try again', self.toggle_steam, client=code)
+        except (OSError, steam.VdfError) as error:
+            self.notify(f'Steam\'s shortcuts were left unchanged. {error}', 'error', client=code)
 
     def measure_storage(self):
         if not self.library:
@@ -1082,6 +1270,11 @@ class MainWindow(QMainWindow):
             self.measure_storage()
         if job.status == DONE and job.kind == 'uninstall':
             message = f'{catalog.get(job.client).label} uninstalled.'
+            try:
+                # Its entry would only open the window now. Steam is left alone, since it may be running.
+                shortcuts.remove_from_launcher(job.client)
+            except OSError as error:
+                message += f' Its app launcher entry could not be removed: {error}'
             if job.result.get('backup'):
                 message += f" Addons and settings saved in {Path(job.result['backup']).name}."
             if job.result.get('cleanup', {}).get('deferred'):
@@ -1185,6 +1378,7 @@ class MainWindow(QMainWindow):
             self.check_updates()
 
     def closeEvent(self, event):
+        self._closing = True
         # Every event in the application passes the filter, so it goes with the window.
         QApplication.instance().removeEventFilter(self)
         if self.downloads:
@@ -1222,17 +1416,30 @@ def close_on_signals(window: QMainWindow) -> None:
     signal.signal(signal.SIGTERM, close)
 
 
-def main():
+def main(request: dict | None = None):
+    """Show the window, or with request run a shortcut's start, which shows it only when needed.
+
+    When Waystone already runs, the request goes to its window and this process ends.
+    """
     # Qt Wayland reports harmless text-input focus mismatches on every focus change.
     os.environ.setdefault('QT_LOGGING_RULES', 'qt.qpa.wayland.textinput=false')
     # Waystone sets its own style. A desktop override such as Breeze only prints a warning.
     os.environ.pop('QT_STYLE_OVERRIDE', None)
+    owner = instance.claim(request or {'show': True})
+    if owner is None:
+        return
     application = QApplication(sys.argv)
     application.setApplicationName('Waystone')
     application.setDesktopFileName('waystone')       # Wayland matches the window to waystone.desktop
     application.setWindowIcon(QIcon(str(Path(__file__).with_name('icon.svg'))))
     prepare(application)
-    window = MainWindow()
+    window = MainWindow(unseen=request is not None)
+    window.serve(owner)
     close_on_signals(window)
-    window.show()
-    sys.exit(application.exec())
+    if request:
+        window.start_shortcut(request)
+    else:
+        window.show()
+    code = application.exec()
+    owner.close()
+    sys.exit(code)

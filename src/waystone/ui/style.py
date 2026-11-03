@@ -3,9 +3,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import (QBrush, QColor, QLinearGradient, QPainter, QPainterPath, QPalette, QPen,
-                           QPixmap, QPolygonF)
+from PySide6.QtCore import QBuffer, QIODevice, QPointF, QRectF, Qt
+from PySide6.QtGui import (QBrush, QColor, QFont, QImage, QLinearGradient, QPainter, QPainterPath, QPalette,
+                           QPen, QPixmap, QPolygonF)
 
 ACCENT = '#2f6fd6'
 FAMILY_COLORS = {'retail': '#2f6fd6', 'classic': '#c4892b', 'forever': '#7d4fd1'}
@@ -300,16 +300,72 @@ def draw_glyph(painter: QPainter, name: str, box: QRectF, color: QColor, width: 
 
 
 def tile(client, size: int = 28) -> QPixmap:
-    """A rounded tile with the client's glyph, so the list needs no artwork.
-
-    Test clients add stripes and other public clients dots, over their live client's glyph.
-    """
-    color = client_color(client)
+    """A rounded tile with the client's glyph, so the list needs no artwork."""
     pixmap = QPixmap(size * 2, size * 2)
     pixmap.setDevicePixelRatio(2)
     pixmap.fill(Qt.transparent)
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.Antialiasing)
+    paint_tile(painter, client, size)
+    painter.end()
+    return pixmap
+
+
+def tile_image(client, pixels: int, size: float = 40) -> QImage:
+    """The tile as an icon outside the window, such as an app launcher's.
+
+    It is drawn as a tile of size points scaled up, so its lines keep their weight, with a
+    small margin as desktop icons have.
+    """
+    image = QImage(pixels, pixels, QImage.Format_ARGB32_Premultiplied)
+    image.fill(Qt.transparent)
+    painter = QPainter(image)
+    painter.setRenderHint(QPainter.Antialiasing)
+    margin = pixels * 0.04
+    painter.translate(margin, margin)
+    painter.scale((pixels - 2 * margin) / size, (pixels - 2 * margin) / size)
+    paint_tile(painter, client, size)
+    painter.end()
+    return image
+
+
+def capsule_image(client, width: int, height: int) -> QImage:
+    """Library artwork for Steam: the tile's gradient and glyph with the client's name."""
+    image = QImage(width, height, QImage.Format_ARGB32_Premultiplied)
+    painter = QPainter(image)
+    painter.setRenderHint(QPainter.Antialiasing)
+    color = client_color(client)
+    gradient = QLinearGradient(0, 0, width * 0.6, height)
+    gradient.setColorAt(0, mix(color, '#ffffff', 0.34))
+    gradient.setColorAt(0.5, QColor(color))
+    gradient.setColorAt(1, mix(color, '#000000', 0.34))
+    painter.fillRect(0, 0, width, height, gradient)
+    side = min(width, height) * 0.42
+    box = QRectF((width - side) / 2, height * 0.42 - side / 2, side, side)
+    name = glyph_name(client)
+    draw_glyph(painter, name, box.translated(0, side * 0.03), QColor(0, 0, 0, 80))
+    draw_glyph(painter, name, box, QColor('white'))
+    font = QFont()
+    font.setBold(True)
+    font.setPixelSize(round(min(width, height) * 0.075))
+    painter.setFont(font)
+    painter.setPen(QColor('white'))
+    text = QRectF(width * 0.08, height * 0.42 + side * 0.62, width * 0.84, height * 0.5 - side * 0.62)
+    painter.drawText(text, Qt.AlignHCenter | Qt.AlignTop | Qt.TextWordWrap, client.label)
+    painter.end()
+    return image
+
+
+def png(image: QImage) -> bytes:
+    buffer = QBuffer()
+    buffer.open(QIODevice.WriteOnly)
+    image.save(buffer, 'PNG')
+    return bytes(buffer.data())
+
+
+def paint_tile(painter: QPainter, client, size: float) -> None:
+    """Test clients add stripes and other public clients dots, over their live client's glyph."""
+    color = client_color(client)
     shape = QPainterPath()
     radius = size * 0.24
     shape.addRoundedRect(QRectF(0, 0, size, size), radius, radius)
@@ -353,8 +409,6 @@ def tile(client, size: int = 28) -> QPixmap:
     name = glyph_name(client)
     draw_glyph(painter, name, box.translated(0, size * 0.03), QColor(0, 0, 0, 80), width)
     draw_glyph(painter, name, box, QColor('white'), width)
-    painter.end()
-    return pixmap
 
 
 def size_text(value: float) -> str:

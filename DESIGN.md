@@ -213,6 +213,8 @@ locations in all.
 | `runtime` | Wine or native Windows, the bridge, Proton discovery, game processes |
 | `ui` | the PySide6 interface |
 | `cli` | the same operations for scripts and tests |
+| `instance` | one window per user, and handing later starts to it |
+| `shortcuts`, `steam` | app launcher entries, Start menu links and Steam's non-Steam games |
 
 The interface only calls the library, downloads, auth and runtime APIs. All
 long operations report progress as events. Downloads and sign-in can be
@@ -363,6 +365,99 @@ wrappers' output is not kept.
 Invalid launch options in the settings file are dropped and reported in the
 window instead of stopping the start. The report comes before the notice to
 choose an installation folder.
+
+## Shortcuts
+
+### One Waystone per user
+
+The process that shows the window holds `window.lock` in the data folder for
+its whole life and answers on a local socket. That is a Unix socket in
+`$XDG_RUNTIME_DIR`, or a named pipe on Windows, named after a hash of the data
+folder. Every start first tries the lock. A start that finds it taken sends its
+request to the socket and ends. A plain start brings the window to the front.
+A shortcut's start asks the window to play. Both sides prove they know
+`window.key`, a random secret in the data folder with owner-only permissions,
+so another user cannot drive the window. The lock goes with the process, so a
+crashed window never blocks the next start. Its leftover socket is removed by
+the next owner of the lock. A window that holds the lock but does not listen
+yet gets 30 seconds. So the library, the download queue and the session are
+only ever used by one process, and a shortcut never fights a running window
+for the library lock.
+
+### What a shortcut runs
+
+A shortcut runs `waystone play <client> --shortcut`. Classic Era's desktop
+actions add `--mode`, and Steam's entry adds `--wait`. Without a window to hand
+over to, the process becomes the window's process but keeps the window hidden,
+and presses Play itself. The window's own Play then checks for an update,
+renews the session and starts the game, so a shortcut behaves exactly like the
+button. The window shows itself, on the client's page, as soon as it has
+something to say: a sign-in page, an update it queued, an unfinished download
+or update, a client that is not installed, or a start that failed. Once shown,
+it stays open as a normal window. A hidden process quits once the game runs,
+or with `--wait` once it has exited, which keeps Steam showing the game as
+running. A window that took over a shortcut with `--wait` keeps the
+connection open and answers when the game has exited. A shortcut for a game
+that already runs starts nothing and waits for that game.
+
+The command has to survive upgrades.
+
+- Under an AppImage it is `$APPIMAGE`, the image's own file. The program
+  itself runs from a temporary mount.
+- The packaged Windows build uses its own `Waystone.exe`.
+- A Nix store path changes with every upgrade and goes with garbage
+  collection. The Nix wrapper also puts its store folder first on `PATH`. So
+  Waystone walks `PATH` for a `waystone` outside the store (`NIX_STORE_DIR`, by
+  default `/nix/store`) that resolves to the program running, such as
+  `~/.nix-profile/bin/waystone` or `/run/current-system/sw/bin/waystone`.
+  Without one, as with `nix run`, it uses the program's own path.
+- A development run uses `python -m waystone`.
+
+### Entries and markers
+
+On Linux the entry is `waystone-<client>.desktop` in
+`$XDG_DATA_HOME/applications`, with its icon in the hicolor theme under the same
+data folder at 48, 64, 128 and 256 pixels. The icon is the client's tile drawn
+in code. Its `TryExec` hides the entry once the program is gone. On Windows a
+link in the Start menu's `Waystone` folder points at `Waystone.exe` with an
+icon file in the data folder. Windows' own shell object writes it through
+PowerShell, to a temporary name that is then renamed into place.
+
+Waystone removes only files that carry its marker for that client: the
+`X-Waystone-Client` key in a desktop entry, a `tEXt` chunk named `Waystone`
+in every PNG it writes, including Steam artwork, and the `--shortcut` argument
+in a Windows link or a Steam entry. A file with the same name but no marker is
+neither replaced nor removed. Uninstalling a client removes its launcher entry.
+Its Steam entry stays, since Steam may be running. It then opens the window on
+the uninstalled client.
+
+### Steam
+
+Steam keeps non-Steam games in `userdata/<account>/config/shortcuts.vdf`, a
+binary VDF file. Waystone finds Steam at `~/.steam/steam`, `~/.steam/root` or
+`Steam` in the data folder, or through the registry on Windows, and changes the
+file of every account that signed in there. Flatpak's Steam cannot start host
+programs and is not looked for.
+
+- The parser keeps every key and value as raw bytes, so writing a parsed file
+  gives back the same bytes. A field of a type whose length it does not know
+  stops the change before anything is written.
+- Steam holds the list in memory and writes it back while it runs, which would
+  drop the change. Waystone looks for this installation's `steam` process by
+  its path inside the Steam folder and asks the user to quit Steam first. A
+  Steam it misses can only undo the change, since Steam writes its own complete
+  list.
+- Every account's file is read and checked before the first one is written.
+  The new file must keep every other entry byte for byte. The old file is
+  copied to `shortcuts.vdf.waystone-backup` and the new one is written to a
+  temporary file and renamed into place, with the old file's permissions.
+- Waystone's entry is appended with the next free index and the fields Steam
+  writes for a non-Steam game. Its app ID is Steam's own derivation, the CRC32
+  of the quoted program and the name with the high bit set, which also names
+  the portrait, wide and icon artwork in `config/grid`. Artwork the user chose
+  in Steam has no marker and is kept.
+- Removal takes out only Waystone's entries for that client and leaves the
+  other entries' indexes as they are.
 
 ## Settings and state
 
