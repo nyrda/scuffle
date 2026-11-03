@@ -22,8 +22,10 @@ from ..library import Library, LibraryError, update_available
 from ..ngdp.cdn import CDNClient
 from ..settings import LOCALE_NAMES, MEGABYTE, REGIONS, Settings, cache_dir, data_dir
 from .client_options import ClientOptionsPage, summary as options_summary
+from .notifications import Notifier
 from .pages import ClientPage, FolderPage, QueuePage, SettingsPage, SignInPage, UninstallPage
 from .style import SPACING, dark_palette, make_images, size_text, stylesheet
+from .tray import PLAY_LIMIT, Tray
 from .widgets import ClientList, DownloadBar, fixed, label, progress_variants
 
 
@@ -42,6 +44,9 @@ class Bus(QObject):
     catalog_checked = Signal(str, object)   # region, what discovery found or None
     game_closed = Signal(str, str, bool)    # client, what closing did or an error, forced
     running_scanned = Signal(object, object)   # library, clients whose game runs
+    download_finished = Signal(object, str)    # a job that ran to its end, DONE or FAILED
+    # Client, exit code, whether it left a crash report. Windows codes such as 0xC0000005 pass int32.
+    game_exited = Signal(str, object, bool)
 
 
 class MainWindow(QMainWindow):
@@ -59,7 +64,12 @@ class MainWindow(QMainWindow):
         self._sign_in_result: list = []
         self._sign_in_done = threading.Event()
         self._signing_in = False
+        self._runs: dict[str, tuple] = {}     # client -> its job and the status it last reported
+        self.forced: set[str] = set()         # clients force quit since they started
+        self._quitting = self._in_tray = False
         self.bus.job_changed.connect(self.on_job)
+        self.bus.download_finished.connect(self.on_download_finished)
+        self.bus.game_exited.connect(self.on_game_exited)
         self.bus.sign_in_requested.connect(self.on_sign_in_requested)
         self.bus.updates_checked.connect(self.on_updates)
         self.bus.launch_phase.connect(self.on_phase)
@@ -149,6 +159,18 @@ class MainWindow(QMainWindow):
         self.launch_failed: set[str] = set()     # clients whose last start failed, until dismissed
         self.messages: dict[str, tuple] = {}      # client, or '' for everything, -> banner arguments
         self.client_page.banner.dismissed.connect(self.dismiss_notice)
+        self.tray = Tray(self)
+        self.tray.show_window.connect(self.show_window)
+        self.tray.pause_all.connect(lambda: self.downloads and self.downloads.pause_all())
+        self.tray.resume_all.connect(lambda: self.downloads and self.downloads.resume_all())
+        self.tray.play.connect(self.play_from_tray)
+        self.tray.quit.connect(self.quit)
+        self.notifier = Notifier(self.tray.icon)
+        self.notifier.clicked.connect(self.reveal_client)
+        # While the window is hidden, a tray that went away, such as a panel that quit, brings it back.
+        self.tray_check = QTimer(self)
+        self.tray_check.timeout.connect(self.check_tray)
+        self.tray_check.setInterval(5000)
 
         self.populate()
         self.refresh()
@@ -185,6 +207,7 @@ class MainWindow(QMainWindow):
         self.library = Library(self.settings.root)
         self.downloads = DownloadManager(self.settings, self.library)
         self.downloads.listeners.append(self.bus.job_changed.emit)
+        self.downloads.listeners.append(self.watch_run)
 
     # Layout
 
@@ -457,6 +480,7 @@ class MainWindow(QMainWindow):
                                        else 'Available once the game has started' if launching_any
                                        else 'Available after the sign-in' if signing_in or self._signing_in else '')
         self.refresh_downloads()
+        self.refresh_tray()
         code = self.selected()
         if code is None:
             self.client_page.show_empty()
@@ -712,6 +736,7 @@ class MainWindow(QMainWindow):
             return
         self.settings_page.set_clients(self.offered())
         self.settings_page.show_catalog_state(self.catalog_state, self.catalog_checked_at())
+        self.settings_page.set_tray_available(self.tray.available())
         self.settings_page.load(self.settings, *self.kept_split())
         if section:
             self.settings_page.show_section(section)
@@ -786,15 +811,22 @@ class MainWindow(QMainWindow):
             self.downloads.enqueue(code, job.kind)
         elif not self.library.state(code):
             self.downloads.enqueue(code, 'install')
-        elif self.updates.get(code):
+        else:
+            self.start(code)
+        self.refresh()
+
+    def start(self, code: str) -> None:
+        """What the main button of an installed, idle client does: update it first, or play."""
+        if self.updates.get(code):
             self.downloads.enqueue(code, 'update')
         else:
             self.play(code)
-        self.refresh()
 
     def close_game(self, code: str, *, force: bool = False) -> None:
         executable, processes = self.library.executable(code), self.library.game_processes(code)
-        if not force:
+        if force:
+            self.forced.add(code)       # its exit is not a crash
+        else:
             # The grace time counts from the click, however long the request itself takes.
             asked = self.closing[code] = time.monotonic()
             QTimer.singleShot(CLOSE_GRACE * 1000, self, lambda: self.close_overdue(code, asked))
@@ -924,6 +956,7 @@ class MainWindow(QMainWindow):
         mode = self.settings.modes.get(code) or (client.modes[0].id if client.modes else None)
         self.clear_notice()
         self.launch_failed.discard(code)
+        self.forced.discard(code)       # a Force quit of an earlier game says nothing about this one
         self.phases[code] = 'Checking for updates'
         self.refresh()
 
@@ -936,8 +969,10 @@ class MainWindow(QMainWindow):
                 process = self.launcher().play(code, self.request_sign_in, mode=mode,
                                                status=lambda text: self.bus.launch_phase.emit(code, text))
                 self.bus.launch_phase.emit(code, 'Running')
-                self.settings.last_played[code] = int(time.time())
+                started = time.time()
+                self.settings.last_played[code] = int(started)
                 process.wait()
+                self.bus.game_exited.emit(code, process.returncode or 0, self.crash_report(code, started))
                 self.bus.task_finished.emit(code, '')
             except Exception as error:  # shown in the banner
                 self.bus.task_finished.emit(code, str(error))
@@ -954,6 +989,7 @@ class MainWindow(QMainWindow):
         return self._sign_in_result[0]
 
     def on_sign_in_requested(self, url: str):
+        self.show_window()          # a start from the tray signs in here too
         self.sign_in_page.start(url)
         self.settings_button.setChecked(False)
         self.stack.setCurrentWidget(self.sign_in_page)
@@ -1017,6 +1053,7 @@ class MainWindow(QMainWindow):
     def on_task_finished(self, code: str, message: str):
         self.phases.pop(code, None)
         self.closing.pop(code, None)
+        self.forced.discard(code)
         self._running_at = float('-inf')        # the game is gone, so the list should not wait to say so
         self.sync_game_downloads()
         if not code:
@@ -1027,6 +1064,7 @@ class MainWindow(QMainWindow):
         if code:
             # Seen in the list too, since another client may be selected by now.
             self.launch_failed.add(code)
+            self.tell(code, f'{catalog.get(code).label} did not start', message)
         if code and not self.signed_in() and ('sign-in' in message.lower() or 'battle.net' in message.lower()):
             # The primary button now reads "Sign in and play", which is the way back.
             self.notify(message, 'error', client=code)
@@ -1043,6 +1081,8 @@ class MainWindow(QMainWindow):
         where = 'It starts after the current download.' if job.status == QUEUED and self.downloads.busy() \
             else 'The update is running now.'
         self.notify(f'{catalog.get(code).label} needs an update before it can start. {where}', 'info', client=code)
+        # A start from the tray has no window to show this in.
+        self.tell(code, f'{catalog.get(code).label} needs an update', f'{where} Play again once it is done.')
         self.refresh()
 
     def measure_storage(self):
@@ -1116,6 +1156,7 @@ class MainWindow(QMainWindow):
 
     def on_updates(self, found: dict):
         self.updates.update(found)
+        self.announce_updates(found)
         self.refresh()
 
     def discover(self, force: bool = False):
@@ -1185,6 +1226,11 @@ class MainWindow(QMainWindow):
             self.check_updates()
 
     def closeEvent(self, event):
+        if not self._quitting and self.settings.keep_in_tray and self.tray.available():
+            # Downloads and games carry on. The tray icon brings the window back, or quits.
+            event.ignore()
+            self.hide_to_tray()
+            return
         # Every event in the application passes the filter, so it goes with the window.
         QApplication.instance().removeEventFilter(self)
         if self.downloads:
@@ -1199,7 +1245,160 @@ class MainWindow(QMainWindow):
                 QApplication.processEvents()
                 time.sleep(0.05)
         self.settings.save()
+        self.tray_check.stop()
+        self.tray.hide()
+        self.notifier.close()
         event.accept()
+
+    def quit(self):
+        """Quit for good, as closing the window does without the tray. Also from a hidden window."""
+        self._quitting = True
+        if self.close():
+            QApplication.quit()     # the window may have been hidden already, so no last window closes
+
+    def hide_to_tray(self):
+        self.settings.save()
+        # The hidden window is no last window to close, and a menu closing must not quit either.
+        QApplication.setQuitOnLastWindowClosed(False)
+        self._in_tray = True
+        self.hide()
+        self.tray_check.start()
+
+    def show_window(self):
+        QApplication.setQuitOnLastWindowClosed(True)
+        self._in_tray = False
+        self.tray_check.stop()
+        self.showNormal() if self.isMinimized() else self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def check_tray(self):
+        if self._in_tray and not self.tray.available():
+            self.show_window()      # never a process the user cannot reach
+
+    # The tray and desktop notifications
+
+    def refresh_tray(self):
+        jobs = self.downloads.jobs if self.downloads else []
+        self.tray.show_state(self.downloads_line(),
+                             can_pause=any(j.status in {QUEUED, RUNNING} for j in jobs),
+                             can_resume=any(j.status == PAUSED for j in jobs),
+                             clients=self.tray_clients())
+
+    def downloads_line(self) -> str:
+        """The state of the downloads in a few words, for the tray."""
+        current = self.downloads.current() if self.downloads else None
+        jobs = self.downloads.jobs if self.downloads else []
+        if current:
+            verb = {'install': 'Installing', 'update': 'Updating', 'verify': 'Verifying',
+                    'repair': 'Repairing', 'uninstall': 'Uninstalling'}[current.kind]
+            line = f'{verb} {catalog.get(current.client).label}'
+            return f'{line} · {current.fraction:.0%}' if current.total_bytes else line
+        counts = [(sum(1 for j in jobs if j.status == status), word) for status, word in
+                  [(QUEUED, 'waiting'), (PAUSED, 'paused'), (FAILED, 'failed')]]
+        parts = [f'{count} {word}' for count, word in counts if count]
+        total = sum(count for count, _ in counts)
+        return f'Downloads: {", ".join(parts)}' if total else 'No downloads'
+
+    def start_label(self, code: str) -> str:
+        """What the main button starts for an installed client that is idle, or '' when it starts nothing."""
+        job = self.downloads.job(code) if self.downloads else None
+        if not self.library or not self.library.state(code) or (job and job.status != DONE) \
+                or code in self.phases or self.game_running(code):
+            return ''
+        if self.stack.currentWidget() is self.sign_in_page:
+            return ''           # the window locks every other client during a sign-in too
+        return 'Update' if self.updates.get(code) else 'Play' if self.signed_in() else 'Sign in and play'
+
+    def tray_clients(self) -> list[tuple[str, str, bool]]:
+        installed = set(self.library.installed()) if self.library else set()
+        codes = [c.code for c in self.listed() if c.code in installed]
+        codes.sort(key=lambda code: -self.settings.last_played.get(code, 0))
+        clients = []
+        for code in codes[:PLAY_LIMIT]:
+            label, action = catalog.get(code).label, self.start_label(code)
+            clients.append((code, f'{action} {label}' if action else f'{label} · {self.status(code)[0]}',
+                            bool(action)))
+        return clients
+
+    def play_from_tray(self, code: str):
+        """The same as the main button, checked again since the menu was filled."""
+        if self.start_label(code):
+            self.start(code)
+        self.refresh()
+
+    def looking_at(self, code: str, *, downloads: bool = False) -> bool:
+        """Whether the window shows this client to the user right now, so a notification would repeat it."""
+        if not self.isVisible() or self.isMinimized() or not self.isActiveWindow():
+            return False
+        page = self.stack.currentWidget()
+        return (page is self.client_page and self.selected() == code) or (downloads and page is self.queue_page)
+
+    def tell(self, code: str, title: str, body: str, *, downloads: bool = False, category: str = ''):
+        """A desktop notification about a client, unless they are off or the window shows it already."""
+        if self.settings.show_notifications and not self.looking_at(code, downloads=downloads):
+            self.notifier.show(title, body, code, category)
+
+    def reveal_client(self, code: str):
+        """A click on a notification opens the window on its client."""
+        self.show_window()
+        if code in self.client_list.rows:
+            self.open_client(code)
+
+    def watch_run(self, job: Job):
+        """Runs on the thread that changed the job. Only a run's end counts, not a failure removed later."""
+        before = self._runs.get(job.client)
+        status = job.status
+        self._runs[job.client] = (job, status)
+        if status in (DONE, FAILED) and before and before[0] is job and before[1] == RUNNING:
+            self.bus.download_finished.emit(job, status)
+
+    def on_download_finished(self, job: Job, status: str):
+        if job.kind not in {'install', 'update', 'repair'}:
+            return
+        label = catalog.get(job.client).label
+        if status == DONE:
+            state = self.library.state(job.client) if self.library else None
+            title = {'install': f'{label} is installed', 'update': f'{label} is up to date',
+                     'repair': f'{label} is repaired'}[job.kind]
+            body = f"Version {state['version']} is ready to play." if state else 'Ready to play.'
+            self.tell(job.client, title, body, downloads=True, category='transfer.complete')
+        else:
+            title = {'install': f'{label} did not install', 'update': f'{label} did not update',
+                     'repair': f'{label} was not repaired'}[job.kind]
+            self.tell(job.client, title, job.error or 'Try again in Waystone.', downloads=True,
+                      category='transfer.error')
+
+    def announce_updates(self, found: dict):
+        """One notification per new version of a client, also across restarts."""
+        announced = self.settings.announced_updates
+        new = {code: version for code, version in found.items()
+               if isinstance(version, str) and announced.get(code) != version}
+        for code, version in new.items():
+            job = self.downloads.job(code) if self.downloads else None
+            if not (job and job.status != DONE):        # an update on its way says it already
+                self.tell(code, f'Update for {catalog.get(code).label}', f'Version {version} is available.')
+            announced[code] = version
+        if new:
+            self.settings.save()
+
+    def crash_report(self, code: str, started: float) -> bool:
+        """Whether the game wrote a crash report since it started. It runs on the play thread."""
+        folder = self.library.game_dir(code)
+        try:
+            # File times can lag the clock by a tick, so a report written at once still counts.
+            return any(entry.is_file() and entry.stat().st_mtime >= started - 2
+                       for entry in (folder / 'Errors').iterdir()) if folder else False
+        except OSError:
+            return False
+
+    def on_game_exited(self, code: str, exit_code: int, crash_report: bool):
+        if code in self.forced or not (exit_code or crash_report):
+            return              # a force quit is not a crash, and code 0 is a game that quit itself
+        detail = ('Its crash report is in the Errors folder of its game folder.' if crash_report else
+                  f'It ended with signal {-exit_code}.' if exit_code < 0 else
+                  f'It exited with code {exit_code:#x}.' if exit_code > 255 else f'It exited with code {exit_code}.')
+        self.tell(code, f'{catalog.get(code).label} quit unexpectedly', detail)
 
 
 def prepare(application: QApplication) -> None:
@@ -1209,15 +1408,17 @@ def prepare(application: QApplication) -> None:
     application.setStyleSheet(stylesheet(make_images(cache_dir() / 'ui')))
 
 
-def close_on_signals(window: QMainWindow) -> None:
-    """Ctrl+C or a terminate request closes the window as its close button would.
+def close_on_signals(window: MainWindow) -> None:
+    """Ctrl+C or a terminate request closes the window as its close button would without the tray.
 
     Qt swallows the KeyboardInterrupt Python raises inside its callbacks, so without this
     the terminal cannot stop the launcher. A second Ctrl+C quits at once.
     """
     def close(number, frame):
         signal.signal(number, signal.SIG_DFL)
-        QTimer.singleShot(0, window.close)      # outside whatever callback the signal interrupted
+        # Quits even when closing would keep Waystone in the tray. Outside whatever callback the
+        # signal interrupted.
+        QTimer.singleShot(0, window.quit)
     signal.signal(signal.SIGINT, close)
     signal.signal(signal.SIGTERM, close)
 

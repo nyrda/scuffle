@@ -93,10 +93,11 @@ def test_an_installed_other_client_stays_listed_while_other_clients_are_off():
     assert codes(installed=['wowlivetest'], hidden=['wowlivetest']) == []
 
 
-def test_old_settings_default_to_manual_resume_and_no_game_pause(config):
+def test_old_settings_default_to_manual_resume_no_game_pause_and_notifications_without_the_tray(config):
     config.write_text('{"workers": 8, "bandwidth_limit": 7000000}')
     settings = Settings.load()
     assert not settings.resume_downloads and not settings.pause_while_playing
+    assert settings.show_notifications and not settings.keep_in_tray and settings.announced_updates == {}
     assert settings.workers == 8 and settings.bandwidth_limit == 7_000_000
 
 

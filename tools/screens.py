@@ -18,6 +18,8 @@ import time
 _home = tempfile.mkdtemp(prefix='waystone-screens-')
 for _name in ['XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'APPDATA', 'LOCALAPPDATA']:
     os.environ[_name] = os.path.join(_home, _name.lower())
+# No bus, so no state shows a real notification or puts an icon in the user's tray.
+os.environ['DBUS_SESSION_BUS_ADDRESS'] = 'unix:path=' + os.path.join(_home, 'no-bus')
 
 from PySide6.QtWidgets import QApplication, QScrollArea
 
@@ -192,6 +194,12 @@ def main(output: Path) -> None:
     window.settings_page.show_section('launch')
     shot('10g-settings-launch')
     window.settings_page.show_section('general')
+    # Notifications and the tray, without a system tray and with one.
+    window.settings_page.set_tray_available(False)
+    shot('10h-settings-general-no-tray', reveal=window.settings_page.tray_note)
+    window.settings_page.set_tray_available(True)
+    window.settings_page.keep_in_tray.setChecked(True)
+    shot('10i-settings-general-tray', reveal=window.settings_page.keep_in_tray)
     window.downloads.jobs.clear() if window.downloads else None
     window.settings.extra_clients = ['wow_classic_era_ptr']
     window.populate()
@@ -222,6 +230,7 @@ def main(output: Path) -> None:
     window.populate()
     window.client_list.select('wow')
     launch_states(window, shot)
+    tray_menu(window, application, output)
     from waystone.ui import pages
     pages.open_browser = lambda url: None
     window.signed_in = lambda: False             # the sign-in page only appears without a session
@@ -268,6 +277,34 @@ def launch_states(window, shot) -> None:
     window.show_client_page()
     shot('22-client-with-launch-options')
     window.settings.client_launch.pop(code)
+
+
+def tray_menu(window, application, output: Path) -> None:
+    """The tray icon's menu while a client downloads, with clients to play and one running."""
+    from PySide6.QtCore import QPoint
+    if not window.downloads:
+        return
+    job = Job('wow_classic_era', 'install', status=RUNNING, stage='downloading',
+              done_bytes=12_400_000_000, total_bytes=31_800_000_000, speed=48_000_000)
+    window.downloads.jobs[:] = [job, Job('wowf', 'install', status=PAUSED)]
+    window.downloads._current = job
+    installed = window.library.installed
+    window.library.installed = lambda: ['wow', 'wow_classic']
+    state = window.library.state
+    window.library.state = lambda c: ({'version': '5.5.1.63538', 'region': 'eu', 'locale': 'enUS',
+                                       'folder': '_classic_'} if c == 'wow_classic' else state(c))
+    window.phases['wow_classic'] = 'Running'
+    window.refresh()
+    menu = window.tray.menu
+    menu.popup(window.mapToGlobal(QPoint(40, 40)))
+    for _ in range(3):
+        application.processEvents()
+    menu.grab().save(str(output / '23-tray-menu.png'))
+    menu.close()
+    window.phases.clear()
+    window.library.installed, window.library.state = installed, state
+    window.downloads.jobs.clear()
+    window.downloads._current = None
 
 
 def fake_installed(window, code: str) -> None:

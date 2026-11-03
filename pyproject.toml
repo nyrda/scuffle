@@ -10,7 +10,7 @@ requires-python = ">=3.11"
 dependencies = []
 
 [project.optional-dependencies]
-ui = ["PySide6"]
+ui = ["PySide6", "jeepney; sys_platform == 'linux'"]
 
 [project.scripts]
 waystone = "waystone.cli:entrypoint"

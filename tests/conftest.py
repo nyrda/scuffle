@@ -5,6 +5,9 @@ from pathlib import Path
 import pytest
 
 FOLDERS = ['XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'APPDATA', 'LOCALAPPDATA']
+# The user's session bus would show real notifications and a real tray icon. Tests that need a
+# bus start a private one.
+NO_BUS = 'unix:path=/nonexistent/waystone-tests/bus'
 # The user's own folders, found before any test changes the environment.
 REAL = [Path(os.environ.get(name, Path.home() / default)) / 'waystone' for name, default in
         [('XDG_CONFIG_HOME', '.config'), ('XDG_DATA_HOME', '.local/share'), ('XDG_CACHE_HOME', '.cache')]]
@@ -34,6 +37,7 @@ def private_session_folders(tmp_path_factory):
     with pytest.MonkeyPatch.context() as patch:
         for name in FOLDERS:
             patch.setenv(name, str(home / name.lower()))
+        patch.setenv('DBUS_SESSION_BUS_ADDRESS', NO_BUS)
         yield
 
 
@@ -42,3 +46,4 @@ def private_folders(tmp_path, monkeypatch):
     # The user's real settings, sign-in and caches are never read or written by a test.
     for name in FOLDERS:
         monkeypatch.setenv(name, str(tmp_path / 'home' / name.lower()))
+    monkeypatch.setenv('DBUS_SESSION_BUS_ADDRESS', NO_BUS)

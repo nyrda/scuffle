@@ -50,6 +50,10 @@ class Settings:
     workers: int = 16
     pause_while_playing: bool = False
     resume_downloads: bool = False
+    show_notifications: bool = True
+    keep_in_tray: bool = False        # closing the window leaves Waystone in the tray, where there is one
+    # Client -> the new version a notification named, so each version is announced once.
+    announced_updates: dict[str, str] = field(default_factory=dict)
     proton: str = ''                  # Linux only, empty means the newest found
     selected: str = 'wow'
     modes: dict[str, str] = field(default_factory=dict)
@@ -127,6 +131,11 @@ class Settings:
         self.game_accounts = {owner: chosen for owner, chosen in accounts.items()
                               if isinstance(owner, str) and owner.isdigit() and type(chosen) is int}
         self.resume_downloads = self.resume_downloads is True
+        self.show_notifications = self.show_notifications is not False
+        self.keep_in_tray = self.keep_in_tray is True
+        announced = self.announced_updates if isinstance(self.announced_updates, dict) else {}
+        self.announced_updates = {code: version for code, version in announced.items()
+                                  if isinstance(code, str) and isinstance(version, str)}
         from . import catalog
         malformed = [code for code in self.extra_clients + self.hidden_clients if not catalog.is_product(code)]
         if malformed:

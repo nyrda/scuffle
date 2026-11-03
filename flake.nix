@@ -32,7 +32,8 @@
         };
         build-system = [ python.pkgs.setuptools ];
         nativeBuildInputs = [ pkgs.copyDesktopItems ];
-        dependencies = [ python.pkgs.pyside6 ];
+        # jeepney sends desktop notifications over D-Bus. PySide6 cannot marshal the uint32 they need.
+        dependencies = [ python.pkgs.pyside6 python.pkgs.jeepney ];
         # The window sets its Wayland app id to "waystone", which matches this entry.
         desktopItems = [
           (pkgs.makeDesktopItem {
@@ -53,14 +54,15 @@
           # NixOS needs the Nix build of umu-launcher for its FHS container. nsenter closes a game in it.
           "--prefix" "PATH" ":" (pkgs.lib.makeBinPath [ pkgs.umu-launcher pkgs.util-linux ])
         ];
-        nativeCheckInputs = [ python.pkgs.pytestCheckHook ];
+        # A private dbus-daemon carries the notification tests.
+        nativeCheckInputs = [ python.pkgs.pytestCheckHook pkgs.dbus ];
         pythonImportsCheck = [ "waystone.library" "waystone.launch" "waystone.cli" ];
         meta.mainProgram = "waystone";
       };
     in {
       packages.${system} = { default = app; inherit bridge; };
       devShells.${system}.default = pkgs.mkShell {
-        packages = [ (python.withPackages (p: [ p.pytest p.pyside6 ])) pkgs.umu-launcher ];
+        packages = [ (python.withPackages (p: [ p.pytest p.pyside6 p.jeepney ])) pkgs.umu-launcher pkgs.dbus ];
         WAYSTONE_BRIDGE = "${bridge}/libexec/wow_auth_bridge.exe";
       };
       checks.${system}.default = app;

@@ -122,6 +122,34 @@ needs anymore.
 Waystone checks for updates on start, every 30 minutes and before each launch.
 If a client is behind, **Play** starts its update instead.
 
+## Notifications and tray
+
+Waystone shows a desktop notification when a download or update finishes or
+fails, when a client has a new version, when a start fails, and when a game
+quits unexpectedly. A new version is announced once, also across restarts.
+Nothing is shown for the client the window shows right now. Click a
+notification to open Waystone on that client. Notifications go through the
+desktop's own service, so its do-not-disturb mode applies. On Linux that is the
+freedesktop notification service, which works without a tray. Turn them off
+with **Show notifications** in **Settings › General**.
+
+A game counts as quitting unexpectedly when it writes a crash report into the
+`Errors` folder of its game folder, or, on Windows, when it exits with an error
+code. Force quit is not a crash.
+
+Where the desktop has a system tray, Waystone puts its icon there. Its menu
+shows Waystone, the current download with **Pause all** and **Resume all**,
+up to five installed clients to start, the most recently played first, and
+**Quit Waystone**. Starting a client there works as its main button does. It
+updates the client first when needed, and opens the sign-in page when there is
+no session.
+
+Turn on **Keep running in the tray when the window is closed** to let
+downloads carry on after the window closes. **Quit Waystone** in the tray then
+pauses them and keeps the queue, as closing the window does without the tray.
+Without a system tray, as on Wayland compositors without a tray bar, the
+setting is greyed out and closing the window quits.
+
 ## Command line
 
 ```sh
