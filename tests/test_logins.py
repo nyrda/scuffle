@@ -256,8 +256,13 @@ def test_signing_out_of_one_account_keeps_the_others_and_their_numbers(vault, ba
     assert {login.key: saved_ticket(login) for login in vault.logins()} == tickets
     # The next by number is active, and no label moves to another account.
     assert vault.active().key == first.key and first.label == 'Account 1' and third.label == 'Wanderer#7395'
+    # The saved choice names the account that is active now, never the one that is gone.
+    assert vault.active_file.read_text() == first.key
     # A login added later takes the free number.
     assert add(vault, battlenet, ALT).label == 'Account 2'
+    for login in vault.logins():
+        vault.forget(login)
+    assert vault.active() is None and not vault.active_file.exists()
 
 
 def test_each_account_renews_as_itself(vault, battlenet):

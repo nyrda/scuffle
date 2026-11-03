@@ -301,6 +301,17 @@ class Vault:
             # The session goes first, so a folder a failed removal leaves behind is no login.
             current.session.unlink(missing_ok=True)
             shutil.rmtree(current.directory, ignore_errors=True)
+            # The saved choice never names a login that is gone, so one that comes back is not picked by it.
+            try:
+                chosen = self.active_file.read_text().strip()
+            except OSError:
+                chosen = None
+            if chosen == current.key:
+                left = self.logins()
+                if left:
+                    self._write_active(left[0].key)
+                else:
+                    self.active_file.unlink(missing_ok=True)
 
     def forget(self, login: Login | None = None) -> None:
         """Sign out of one login, the active one unless another is named."""
