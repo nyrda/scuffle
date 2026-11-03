@@ -124,6 +124,35 @@ pick.
 When you update from a version with a single sign-in, you stay signed in.
 Waystone moves that session into its new place without signing in again.
 
+## Shortcuts
+
+An installed client's **⋯** menu offers **Add to app launcher**, which is
+**Add to Start menu** on Windows. The entry starts that client directly, and
+Classic Era's entry offers its Era, Hardcore and Season of Discovery modes as
+actions. Without a mode it starts the mode last chosen in Waystone.
+
+**Add to Steam** appears when Steam is installed and adds the client as a
+non-Steam game for every Steam account on the computer, with its tile as icon
+and library artwork. Steam rewrites its list of games while it runs, so quit
+Steam first. Waystone asks you to when it finds Steam running. The client shows
+up in the library when Steam starts again. Waystone keeps a copy of the old
+list as `shortcuts.vdf.waystone-backup` next to it. Steam installed through
+Flatpak cannot start programs outside its sandbox and is not offered.
+
+A shortcut works like **Play**. With a valid sign-in and an up-to-date client,
+the game starts and no Waystone window appears. When the client needs a sign-in
+or an update, is still downloading, or does not start, the Waystone window
+opens on it instead. If Waystone is already open, the shortcut hands over to
+that window. Only one Waystone runs at a time, and starting it again brings its
+window to the front.
+
+The same menu removes the entries again. Uninstalling a client removes its app
+launcher entry. Its Steam entry stays until you remove it, and then opens
+Waystone on the client. Waystone only removes files it made itself.
+
+The entries run the `waystone` your profile installs, an AppImage's own file,
+or `Waystone.exe`, so they keep working after an upgrade.
+
 ## Downloads
 
 Downloads run one at a time. The Downloads page lets you reorder waiting jobs,
@@ -178,7 +207,16 @@ waystone --root /games/Waystone update wow
 waystone --root /games/Waystone verify wow
 waystone --root /games/Waystone play wow_classic_era --mode hardcore
 waystone diagnostics
+waystone play wow_classic_era --mode hardcore --shortcut --wait
 ```
+
+The commands refuse to run while the Waystone window is open, since the window
+may be downloading or starting a game in the same folder. `clients` and
+`diagnostics` only read, so they also run beside the window. `play --shortcut` is
+what the shortcuts run. It uses the window's installation
+folder and opens the window when it needs a sign-in or an update, where a plain
+`play` asks for the sign-in in the terminal. `--wait` keeps the command
+running until the game exits, as Steam needs.
 
 `--seed-from` copies verified content from an existing installation, such as a
 Battle.net one, and opens it read-only. Progress is printed to stderr as JSON
