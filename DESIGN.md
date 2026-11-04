@@ -467,7 +467,12 @@ and run to completion.
    first renewable ticket.
 
 Each launch consumes the saved ticket, reserves its successor and issues a
-separate game ticket. A rejected session starts the sign-in again. The game
+separate game ticket. A rejected session starts the sign-in again. Battle.net
+can also refuse every logon from one build, with status 33
+(`ERROR_SERVER_IS_PRIVATE`), as it did for a Forever build it had just published.
+That says nothing about the session, so Scuffle keeps it, opens no browser and
+asks the user to try later. It always logs on as the build it starts, and never
+sends another build's number to get past the refusal. The game
 reads its ticket only from `HKCU\Software\Blizzard Entertainment\Battle.net\Launch Options\WoW`,
 so Scuffle writes `WEB_TOKEN` and `ACCOUNT_TS` there right before launch.
 Scuffle never reads or uses Battle.net's own saved login.

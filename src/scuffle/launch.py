@@ -14,7 +14,7 @@ import urllib.parse
 import webbrowser
 
 from . import catalog, system
-from .auth.bgs import CredentialRejected, login, renew
+from .auth.bgs import BuildRefused, CredentialRejected, login, renew
 from .auth.vault import Login, Vault
 from .launch_options import ClientOptions, OptionError, linux_environment, wrapper_command
 from .library import Library, LibraryError
@@ -209,7 +209,12 @@ class Launcher:
             # Read once under the lock, so switching accounts meanwhile never changes the session used.
             login = self.vault.active()
             status('Connecting')        # renews the saved session, or signs in if it has none
-            login = self.renew(version, sign_in, login)
+            try:
+                login = self.renew(version, sign_in, login)
+            except BuildRefused as error:
+                raise LaunchError(f'Battle.net is refusing logons from {entry.label} {state["version"]} right '
+                                  'now, which can happen while Blizzard rolls out a patch. '
+                                  'Try again later.') from error
             status('Starting')
             ack = self.vault.directory / f'.launch-{os.getpid()}-{time.time_ns()}.ack'
             account = chosen_account(self.settings, login.accounts())

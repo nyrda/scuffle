@@ -5,7 +5,7 @@ import struct
 
 import pytest
 
-from scuffle.auth.bgs import BGS, CredentialRejected, WOW_TITLE
+from scuffle.auth.bgs import BGS, BuildRefused, CredentialRejected, WOW_TITLE
 from scuffle.auth.protobuf import blob, fields, first, integer
 
 # Bytes sent by the launcher version that authenticated against Battle.net.
@@ -88,6 +88,32 @@ def test_rejected_saved_credential_stops_before_issuing_tokens():
     with pytest.raises(CredentialRejected, match='logon completed with status 3'):
         bgs.logon(b'TICKET', b'{}', 70658)
     assert len(server.sent) == 2
+
+
+def refusal(token, status):
+    return frame(integer(1, 254) + integer(3, token) + integer(6, status))
+
+
+@pytest.mark.parametrize('start', [
+    lambda bgs: bgs.logon(b'TICKET', b'{}', 70790),
+    lambda bgs: bgs.web_challenge(b'{}', 70790),
+])
+def test_a_build_battlenet_does_not_let_in_is_named_and_stops_the_logon(start):
+    server = Server(reply(1, blob(9, b'CID')), refusal(2, 33))
+    bgs = client(server)
+    bgs.connect()
+    with pytest.raises(BuildRefused, match='build 70790'):
+        start(bgs)
+    assert len(server.sent) == 2
+
+
+def test_another_refused_logon_is_not_taken_for_a_refused_build():
+    server = Server(reply(1, blob(9, b'CID')), refusal(2, 3))
+    bgs = client(server)
+    bgs.connect()
+    with pytest.raises(RuntimeError, match='status 3$') as raised:
+        bgs.logon(b'TICKET', b'{}', 70790)
+    assert not isinstance(raised.value, BuildRefused)
 
 
 def test_browser_sign_in_sends_the_verified_wire_bytes():

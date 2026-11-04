@@ -28,6 +28,8 @@ WOW_TITLE = 0x576f57
 PLATFORM = 'Wn64'
 LOCALE = 'enUS'
 CHALLENGES = (b'web_auth_url', b'legal_form', b'authenticator')
+# Battle.net's answer to a logon from a build it does not let in yet, with or without a login.
+ERROR_SERVER_IS_PRIVATE = 33
 # Game account regions as the launch settings name them. Battle.net writes REGION=EU for region 2.
 GAME_REGIONS = {1: 'US', 2: 'EU', 3: 'KR', 4: 'TW', 5: 'CN'}
 
@@ -38,6 +40,20 @@ SDK_INFO = blob(1, 'BGS C++ SDK') + blob(2, _sdk_version) + blob(3, _protocol_ve
 
 class CredentialRejected(RuntimeError):
     """Battle.net refused the presented credential and wants a new sign-in."""
+
+
+class RpcRejected(RuntimeError):
+    def __init__(self, status):
+        super().__init__(f'BGS RPC rejected with status {status}')
+        self.status = status
+
+
+class BuildRefused(RuntimeError):
+    """Battle.net refuses every logon from this build for now. The session is not at fault, so it stays."""
+
+    def __init__(self, version):
+        super().__init__(f'Battle.net is refusing logons from game build {version} right now, which can '
+                         'happen while Blizzard rolls out a patch. Try again later.')
 
 
 def log(*parts):
@@ -102,7 +118,7 @@ class BGS:
             if service == RESPONSE_SERVICE and first(header, 3) == token:
                 status = first(header, 6, 0)
                 if status:
-                    raise RuntimeError(f'BGS RPC rejected with status {status}')
+                    raise RpcRejected(status)
                 return body
             if service != RESPONSE_SERVICE:
                 # AuthenticationListener methods return NO_RESPONSE. Preserve
@@ -123,7 +139,12 @@ class BGS:
         options = (blob(1, credential) if credential else b'') + blob(3, device)
         request = (integer(1, WOW_TITLE) + blob(2, PLATFORM) + blob(3, LOCALE) +
                    integer(4, version) + blob(10, options))
-        self.call(AUTHENTICATION_SERVICE, LOGON, request)
+        try:
+            self.call(AUTHENTICATION_SERVICE, LOGON, request)
+        except RpcRejected as error:
+            if error.status == ERROR_SERVER_IS_PRIVATE:
+                raise BuildRefused(version) from error
+            raise
         log('logon_request_accepted', 'with_credential', bool(credential))
 
     def logon(self, credential, device, version):
