@@ -32,6 +32,8 @@ from .widgets import ClientList, DownloadBar, fixed, label, progress_variants
 
 
 CLOSE_GRACE = 20      # seconds a game gets to quit before Force quit is suggested
+CHECK_INTERVAL = 30 * 60      # seconds between update checks
+TRAY_GRACE = 20       # seconds a start in the tray waits for a tray bar that starts after Scuffle
 
 
 def post(signal, *args) -> None:
@@ -151,7 +153,10 @@ class MainWindow(QMainWindow):
         self.client_page.uninstall_clicked.connect(self.open_uninstall)
         self.client_page.launcher_clicked.connect(self.toggle_launcher)
         self.client_page.steam_clicked.connect(self.toggle_steam)
+        self.client_page.auto_update_clicked.connect(self.toggle_auto_update)
+        self.client_page.always_update_clicked.connect(lambda: self.selected() and self.always_update(self.selected()))
         self.client_page.more.menu().aboutToShow.connect(self.update_shortcut_actions)
+        self.client_page.more.menu().aboutToShow.connect(self.update_auto_action)
         self.uninstall_page = UninstallPage()
         self.uninstall_page.cancelled.connect(self.show_client_page)
         self.uninstall_page.confirmed.connect(self.confirm_uninstall)
@@ -177,6 +182,7 @@ class MainWindow(QMainWindow):
         self.settings_page.choose_folder.connect(self.open_folder_picker)
         self.settings_page.copy_diagnostics.connect(self.collect_diagnostics)
         self.settings_page.move_folder.connect(self.open_move_picker)
+        self.settings_page.start_at_sign_in.connect(self.set_start_at_sign_in)
         self.move_page = MovePage()
         self.move_page.cancelled.connect(lambda: self.stack.setCurrentWidget(self.settings_page))
         self.move_page.confirmed.connect(self.confirm_move)
@@ -221,13 +227,19 @@ class MainWindow(QMainWindow):
         self.tray.pause_all.connect(lambda: self.downloads and self.downloads.pause_all())
         self.tray.resume_all.connect(lambda: self.downloads and self.downloads.resume_all())
         self.tray.play.connect(self.play_from_tray)
+        self.tray.check_now.connect(self.check_now)
         self.tray.quit.connect(self.quit)
         self.notifier = Notifier(self.tray.icon)
         self.notifier.clicked.connect(self.reveal_client)
+        self.notifier.acted.connect(self.on_notification_action)
         # While the window is hidden, a tray that went away, such as a panel that quit, brings it back.
         self.tray_check = QTimer(self)
         self.tray_check.timeout.connect(self.check_tray)
         self.tray_check.setInterval(5000)
+        self._tray_grace = float('-inf')        # until then a start in the tray waits for the tray bar
+        self._checking = False                  # an update check is under way
+        self.update_timer = QTimer(self)
+        self.update_timer.setTimerType(Qt.PreciseTimer)     # a coarse one runs late, and the tray says when
 
         self.populate()
         self.refresh()
@@ -252,10 +264,9 @@ class MainWindow(QMainWindow):
         timer = QTimer(self)
         timer.timeout.connect(self.refresh)
         timer.start(1000)
-        update_timer = QTimer(self)
-        update_timer.timeout.connect(self.check_updates)
-        update_timer.timeout.connect(self.discover)
-        update_timer.start(30 * 60 * 1000)
+        self.update_timer.timeout.connect(self.check_updates)
+        self.update_timer.timeout.connect(self.discover)
+        self.update_timer.start(CHECK_INTERVAL * 1000)
 
 
     def open_library(self):
@@ -509,10 +520,7 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def scan_running(library) -> set[str]:
-        installed = library.installed()
-        names = {path.name.lower() for path in map(library.executable, installed) if path}
-        processes = system.running_executables(names)
-        return {code for code in installed if library.running(code, processes)}
+        return set(library.running_games())
 
     def on_running_scanned(self, library, found) -> None:
         self._scanning = False
@@ -520,6 +528,9 @@ class MainWindow(QMainWindow):
         if library is self.library and found is not None and found != self._running:
             self._running = found
             self.refresh()
+        if library is self.library and found is not None:
+            # Every scan, so an update that found a game itself is released once the scan finds none.
+            self.sync_game_downloads()
 
     def game_running(self, code: str) -> bool:
         """Running and past its start, so it can be closed."""
@@ -541,6 +552,8 @@ class MainWindow(QMainWindow):
         if job and job.status == QUEUED:
             return 'Queued', 'active'
         if job and job.status == PAUSED:
+            if job.held and job.automatic:
+                return 'Waiting for games', 'attention'
             if job.held:
                 return 'Paused while playing', 'attention'
             return (f'Paused at {job.fraction:.0%}' if job.total_bytes else 'Paused'), 'attention'
@@ -595,6 +608,7 @@ class MainWindow(QMainWindow):
 
     def refresh(self):
         self.settle_waiters()
+        self.running_now()          # also with no client listed, since automatic updates wait for any game
         for code, row in self.client_list.rows.items():
             text, _ = self.status(code)
             state = self.library.state(code) if self.library else None
@@ -690,6 +704,7 @@ class MainWindow(QMainWindow):
             primary = 'Play' if signed else 'Sign in and play'
         progress, progress_text = None, ['']
         preparing = bool(downloading and job.status == RUNNING and not job.total_bytes)
+        waiting = bool(job and job.status == PAUSED and job.held and job.automatic)
         if downloading:
             # The same details as the download bar, without the percentage the chip already shows.
             progress_text = [text.split(' · ', 1)[1] if text.startswith(f'{job.fraction:.0%} · ') else text
@@ -730,10 +745,13 @@ class MainWindow(QMainWindow):
             primary_tip=self.primary_tip(code),
             installed=bool(state),
             busy=(launching and self.phases[code] != 'Running') or preparing, progress=progress,
-            busy_launch=launching, queued=bool(job and job.status == QUEUED),
+            # An automatic update that waits for a game says so, as a queued one says what it waits for.
+            busy_launch=launching, queued=bool(job and (job.status == QUEUED or waiting and not job.total_bytes)),
             progress_text=progress_text, cancellable=downloading and not removing, paused=bool(job and job.status == PAUSED),
             modes=[(m.id, m.label) for m in client.modes], mode=self.settings.modes.get(code),
-            facts=self.facts(code), hint=hint, hideable=code not in self.kept_split()[1])
+            facts=self.facts(code), hint=hint, hideable=code not in self.kept_split()[1],
+            # The notification's second choice, for a desktop whose notifications have no buttons.
+            offer_always=primary == 'Update' and self.offers_automatic(code))
         if moving:
             self.client_page.verify_action.setEnabled(False)
         reason = self.uninstall_reason(code)
@@ -769,6 +787,10 @@ class MainWindow(QMainWindow):
         if self.game_running(code):
             return ('Closes the game as its window\'s close button does. Hold Shift to force quit, '
                     'which ends it at once, as when it hangs.')
+        job = self.downloads.job(code) if self.downloads else None
+        if job and job.status == PAUSED and job.held and job.automatic:
+            return ('It starts by itself once every game in this folder has closed. Resume runs it now, '
+                    'while a game runs.')
         options = self.settings.client_launch.get(code)
         if options and options.active() and self.library.state(code):
             return f'Starts with your launch options: {options_summary(options)}'
@@ -897,6 +919,7 @@ class MainWindow(QMainWindow):
         self.settings_page.show_catalog_state(self.catalog_state, self.catalog_checked_at())
         self.settings_page.set_tray_available(self.tray.available())
         self.settings_page.load(self.settings, *self.kept_split())
+        self.settings_page.show_start_at_sign_in(shortcuts.starts_at_sign_in())
         if section:
             self.settings_page.show_section(section)
         self.settings_page.lock_folder(self.folder_lock())
@@ -1452,6 +1475,8 @@ class MainWindow(QMainWindow):
         if self.downloads:
             self.downloads.set_game_running(self.settings.pause_while_playing and
                                             'Running' in self.phases.values())
+            # A game Scuffle starts holds automatic updates from its first phase, before it runs.
+            self.downloads.set_playing(bool(self.phases) or bool(self._running))
 
     def on_task_finished(self, code: str, message: str):
         self.phases.pop(code, None)
@@ -1499,7 +1524,10 @@ class MainWindow(QMainWindow):
 
     def on_request(self, request: dict, reply) -> None:
         if 'play' not in request:
-            self.present()          # Scuffle was started again, so its window comes to the front
+            # Scuffle was started again, so its window comes to the front. A start at sign-in
+            # finds it running already and leaves it where it is.
+            if not request.get('tray'):
+                self.present()
             reply.send(ok=True)
             reply.close()
             return
@@ -1613,6 +1641,45 @@ class MainWindow(QMainWindow):
         found = steam.find() if installed else None
         page.steam_action.setVisible(found is not None)
         page.steam_action.setText('Remove from Steam' if found and found.has(code) else 'Add to Steam')
+
+    def update_auto_action(self) -> None:
+        """The client's own choice about automatic updates, as the menu opens.
+
+        A live client follows the switch in Settings, so it offers only its exception while the
+        switch is on. A test or other client is turned on by itself.
+        """
+        code = self.selected()
+        action = self.client_page.auto_action
+        installed = bool(code and self.library and self.library.state(code))
+        action.setVisible(installed and (catalog.get(code).optional or self.settings.auto_update))
+        if installed:
+            action.setText("Don't update automatically" if self.settings.updates_automatically(code)
+                           else 'Update automatically')
+
+    def toggle_auto_update(self) -> None:
+        code = self.selected()
+        if not code:
+            return
+        on = not self.settings.updates_automatically(code)
+        self.settings.set_updates_automatically(code, on)
+        self.settings.save()
+        label = catalog.get(code).label
+        if on:
+            self.update_automatically()
+            self.notify(f'{label} updates automatically, once every game in the installation folder has closed.',
+                        'info', client=code)
+        else:
+            self.stop_automatic_updates()
+            self.notify(f'{label} no longer updates automatically. Its updates wait for you.', 'info', client=code)
+        self.refresh()
+
+    def set_start_at_sign_in(self, on: bool) -> None:
+        try:
+            shortcuts.start_at_sign_in(on)
+            problem = ''
+        except OSError as error:
+            problem = f'Scuffle could not change how it starts. {error}'
+        self.settings_page.show_start_at_sign_in(shortcuts.starts_at_sign_in(), problem)
 
     def toggle_launcher(self) -> None:
         code = self.selected()
@@ -1731,6 +1798,7 @@ class MainWindow(QMainWindow):
         if not self.library:
             return
         library = self.library
+        self._checking = True
 
         def work():
             found = {}
@@ -1748,9 +1816,73 @@ class MainWindow(QMainWindow):
         threading.Thread(target=work, name='scuffle-updates', daemon=True).start()
 
     def on_updates(self, found: dict):
+        self._checking = False
         self.updates.update(found)
+        # First, so a client that updates by itself is not announced as waiting for the user.
+        self.update_automatically()
         self.announce_updates(found)
         self.refresh()
+
+    def check_now(self):
+        """Check at once, from the tray. The next regular check is a full interval later."""
+        if self._checking:
+            return
+        self.update_timer.start(CHECK_INTERVAL * 1000)
+        self.check_updates()
+        self.discover()
+        self.refresh()
+
+    def update_automatically(self):
+        """Queue an update for each client that is behind. The queue checks the user's consent,
+        any job the client has and a recent failure of the same update."""
+        if not self.downloads:
+            return
+        for code, behind in list(self.updates.items()):
+            if not behind or not self.library.state(code):
+                continue
+            # True is a start's own check, which names no version.
+            version = behind if isinstance(behind, str) else ''
+            previous = self.downloads.job(code)
+            if self.downloads.enqueue_automatic(code, version) and previous and previous.status == FAILED:
+                self.messages.pop(code, None)       # the failure's message, now that it is tried again
+
+    def stop_automatic_updates(self):
+        """Updates queued by consent the user has withdrawn wait for the user, paused."""
+        for job in list(self.downloads.jobs if self.downloads else []):
+            if job.automatic and job.status in {QUEUED, RUNNING, PAUSED} and \
+                    not self.settings.updates_automatically(job.client):
+                self.downloads.pause(job.client)
+
+    def offers_automatic(self, code: str) -> bool:
+        """Whether asking to always update automatically means something new for this client.
+
+        A live client the user excepted while the switch is on is not asked again.
+        """
+        if catalog.get(code).optional:
+            return code not in self.settings.auto_update_extra
+        return not self.settings.auto_update
+
+    def always_update(self, code: str):
+        """Update this client by itself from now on, the live ones all together, and start with this update."""
+        self.settings.set_updates_automatically(code, True)
+        self.settings.save()
+        if self.stack.currentWidget() is self.settings_page:
+            self.settings_page.load(self.settings, *self.kept_split())
+        self.update_automatically()
+        self.refresh()
+
+    def update_now(self, code: str):
+        """Update one client once, as its Update button does."""
+        job = self.downloads.job(code) if self.downloads else None
+        if self.library and self.library.state(code) and not self.moving() and not (job and job.status != DONE):
+            self.downloads.enqueue(code, 'update')
+            self.refresh()
+
+    def on_notification_action(self, code: str, action: str):
+        if action == 'update':
+            self.update_now(code)
+        elif action == 'always':
+            self.always_update(code)
 
     def discover(self, force: bool = False):
         """Ask the version service for the current clients, when the cached answer is old."""
@@ -1798,6 +1930,9 @@ class MainWindow(QMainWindow):
 
     def on_settings_saved(self):
         self.sync_game_downloads()
+        # The switch for automatic updates may have changed either way.
+        self.stop_automatic_updates()
+        self.update_automatically()
         if self.downloads:
             self.downloads.set_bandwidth_limit(self.settings.bandwidth_limit)
         self.download_bar.set_limit(self.settings.bandwidth_limit // MEGABYTE)
@@ -1891,8 +2026,14 @@ class MainWindow(QMainWindow):
         self.activateWindow()
 
     def check_tray(self):
-        if self._in_tray and not self.tray.available():
+        # A start at sign-in can come before the tray bar, which gets a moment to appear.
+        if self._in_tray and not self.tray.available() and time.monotonic() >= self._tray_grace:
             self.show_window()      # never a process the user cannot reach
+
+    def start_in_tray(self):
+        """Started at sign-in: hidden in the tray, or shown once it is clear the desktop has none."""
+        self._tray_grace = time.monotonic() + TRAY_GRACE
+        self.hide_to_tray()
 
     # The tray and desktop notifications
 
@@ -1901,7 +2042,17 @@ class MainWindow(QMainWindow):
         self.tray.show_state(self.downloads_line(),
                              can_pause=any(j.status in {QUEUED, RUNNING} for j in jobs),
                              can_resume=any(j.status == PAUSED for j in jobs),
-                             clients=self.tray_clients())
+                             clients=self.tray_clients(), next_check=self.next_check_line(),
+                             can_check=not self._checking)
+
+    def next_check_line(self) -> str:
+        """When the update check runs next, for the tray. Nothing without an installed client."""
+        if not self.library or not self.library.installed():
+            return ''
+        if self._checking:
+            return 'Checking for updates…'
+        minutes = max(1, -(-self.update_timer.remainingTime() // 60_000))
+        return f'Next check in {minutes} min'
 
     def downloads_line(self) -> str:
         """The state of the downloads in a few words, for the tray."""
@@ -1952,10 +2103,11 @@ class MainWindow(QMainWindow):
         page = self.stack.currentWidget()
         return (page is self.client_page and self.selected() == code) or (downloads and page is self.queue_page)
 
-    def tell(self, code: str, title: str, body: str, *, downloads: bool = False, category: str = ''):
+    def tell(self, code: str, title: str, body: str, *, downloads: bool = False, category: str = '',
+             actions: tuple = ()):
         """A desktop notification about a client, unless they are off or the window shows it already."""
         if self.settings.show_notifications and not self.looking_at(code, downloads=downloads):
-            self.notifier.show(title, body, code, category)
+            self.notifier.show(title, body, code, category, actions)
 
     def reveal_client(self, code: str):
         """A click on a notification opens the window on its client."""
@@ -1975,7 +2127,12 @@ class MainWindow(QMainWindow):
         if job.kind not in {'install', 'update', 'repair'}:
             return
         label = catalog.get(job.client).label
-        if status == DONE:
+        if status == DONE and job.automatic:
+            state = self.library.state(job.client) if self.library else None
+            version = state['version'] if state else job.version
+            self.tell(job.client, f'{label} updated to {version}', 'Updated automatically. Ready to play.',
+                      downloads=True, category='transfer.complete')
+        elif status == DONE:
             state = self.library.state(job.client) if self.library else None
             title = {'install': f'{label} is installed', 'update': f'{label} is up to date',
                      'repair': f'{label} is repaired'}[job.kind]
@@ -1994,8 +2151,13 @@ class MainWindow(QMainWindow):
                if isinstance(version, str) and announced.get(code) != version}
         for code, version in new.items():
             job = self.downloads.job(code) if self.downloads else None
-            if not (job and job.status != DONE):        # an update on its way says it already
-                self.tell(code, f'Update for {catalog.get(code).label}', f'Version {version} is available.')
+            # An update on its way says it already, and so does one the user lets run by itself.
+            if not (job and job.status != DONE) and not self.settings.updates_automatically(code):
+                # The consent asked for where it matters. The body still opens the client.
+                actions = (('update', 'Update now'),) + \
+                    ((('always', 'Always update automatically'),) if self.offers_automatic(code) else ())
+                self.tell(code, f'Update for {catalog.get(code).label}', f'Version {version} is available.',
+                          actions=actions)
             announced[code] = version
         if new:
             self.settings.save()
@@ -2041,8 +2203,9 @@ def close_on_signals(window: MainWindow) -> None:
     signal.signal(signal.SIGTERM, close)
 
 
-def main(request: dict | None = None):
+def main(request: dict | None = None, *, tray: bool = False):
     """Show the window, or with request run a shortcut's start, which shows it only when needed.
+    With tray the window starts hidden in the tray, as at sign-in.
 
     When Scuffle already runs, the request goes to its window and this process ends.
     """
@@ -2050,7 +2213,7 @@ def main(request: dict | None = None):
     os.environ.setdefault('QT_LOGGING_RULES', 'qt.qpa.wayland.textinput=false')
     # Scuffle sets its own style. A desktop override such as Breeze only prints a warning.
     os.environ.pop('QT_STYLE_OVERRIDE', None)
-    owner = instance.claim(request or {'show': True})
+    owner = instance.claim(request or ({'tray': True} if tray else {'show': True}))
     if owner is None:
         return
     application = QApplication(sys.argv)
@@ -2063,6 +2226,8 @@ def main(request: dict | None = None):
     close_on_signals(window)
     if request:
         window.start_shortcut(request)
+    elif tray:
+        window.start_in_tray()
     else:
         window.show()
     code = application.exec()

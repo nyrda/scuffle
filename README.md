@@ -118,6 +118,40 @@ connections. Downloads can also pause while a game runs and resume when it
 exits. Resuming downloads when Scuffle starts is off by default. After each
 install or update, Scuffle removes content no installed client needs.
 
+## Automatic updates
+
+**Install updates automatically** in **Settings › Downloads** lets every
+installed live client update by itself once Blizzard publishes a new version.
+It is off until you turn it on. A live client's **⋯** menu has **Don't update
+automatically** to leave that one out. Test and other clients stay manual
+unless you choose **Update automatically** in their own **⋯** menu.
+
+While it is off, the notification for a new version offers **Update now** and
+**Always update automatically**. Where a notification has no buttons, as on
+Windows, clicking it opens the client, whose page offers the same two choices.
+
+An automatic update uses the download queue like any other, with the same speed
+limit and order. It never writes to the installation folder while a game from
+that folder runs, any client's game, because a running game rearranges the
+content all clients share. It waits, shown as **Waiting for games**, and starts
+by itself when the last game closes. **Resume** runs it at once all the same,
+and pausing or resuming it by hand makes it an ordinary update that waits for
+you.
+
+A failed automatic update is notified once. Scuffle tries that version again by
+itself only after three hours, or sooner when a newer version comes out.
+**Try again** always works at once. When it finishes you get a notification
+that names the new version.
+
+The tray menu says when the next check runs, and **Check now** checks at once.
+
+**Start Scuffle when I sign in, in the tray** in **Settings › General** starts
+Scuffle hidden in the tray when you sign in to your desktop, so it can keep the
+clients up to date. Without a tray its window opens instead. On Linux this is
+`~/.config/autostart/scuffle.desktop`, on Windows a value under
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. Turning it off removes
+only an entry Scuffle made. `scuffle --tray` starts the same way by hand.
+
 ## Importing an installation
 
 For a client installed elsewhere, for example by Battle.net, choose **Import…**
@@ -168,12 +202,13 @@ or HDR, is greyed out, and its choice is kept for one that can.
 ## Tray and notifications
 
 Scuffle notifies you when a download finishes or fails, when a client has a new
-version, when a start fails and when a game crashes. Clicking a notification
-opens that client. Nothing is shown for the client you are looking at. **Show
-notifications** in **Settings › General** turns them off.
+version or has updated by itself, when a start fails and when a game crashes.
+Clicking a notification opens that client. Nothing is shown for the client you
+are looking at. **Show notifications** in **Settings › General** turns them off.
 
 Where the desktop has a tray, its menu shows the current download with **Pause
-all** and **Resume all**, up to five clients to start, and **Quit Scuffle**.
+all** and **Resume all**, when the next update check runs with **Check now**, up
+to five clients to start, and **Quit Scuffle**.
 With **Keep running in the tray when the window is closed**, downloads carry on
 after you close the window. Without a tray that setting is greyed out and
 closing the window quits.

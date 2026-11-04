@@ -66,7 +66,8 @@ def test_the_report_tells_what_a_bug_needs_and_leaves_out_every_private_detail(h
         'trace:reg:RegSetValueExW L"GAME_ACCOUNT" type 1 L"OLDACCOUNT"',
         'wine: process exited normally']))
     settings = Settings(root=str(home / 'Games/Scuffle'), proton=str(proton), workers=12,
-                        game_accounts={'987654321': 123456789},
+                        game_accounts={'987654321': 123456789}, auto_update=True, auto_update_except=['wow_classic'],
+                        auto_update_failures={'wow': {'version': '11.2.5.64999', 'at': 1}},
                         linux_launch=LinuxOptions(gamemode=True, environment={'DXVK_HUD': 'hunter2value'},
                                                   wrapper='gamescope --mode-secretarg --'))
     library = installed_library(home / 'Games/Scuffle')
@@ -88,6 +89,7 @@ def test_the_report_tells_what_a_bug_needs_and_leaves_out_every_private_detail(h
     assert (data / 'session/session.dpapi').is_file() and not (data / 'session/logins').exists()
     assert f'Folder: {Path("~/Games/Scuffle")}, a Scuffle installation' in text
     assert 'Connections: 12, speed limit none' in text
+    assert 'Automatic updates: yes, except wow_classic, failed wow' in text
     assert 'Battle.net: signed in, 2 WoW accounts, one chosen' in text
     assert 'install, failed' in text and 'Error: Download failed at ~/Games/Scuffle for <account>' in text
     assert 'update, queued, 25%' in text

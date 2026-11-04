@@ -12,6 +12,7 @@ from .launch_options import ClientOptions, LinuxOptions
 
 
 MEGABYTE = 1_000_000      # speed limits are in decimal MB/s, like every size and rate shown
+RETRY_AFTER = 3 * 3600    # seconds before an automatic update that failed is tried again for the same version
 
 
 def config_dir() -> Path:
@@ -55,6 +56,13 @@ class Settings:
     keep_in_tray: bool = False        # closing the window leaves Scuffle in the tray, where there is one
     # Client -> the new version a notification named, so each version is announced once.
     announced_updates: dict[str, str] = field(default_factory=dict)
+    # Updates the user consented to in advance. The switch covers the live clients, less the
+    # exceptions. A test or other client updates by itself only when chosen on its own.
+    auto_update: bool = False
+    auto_update_except: list[str] = field(default_factory=list)
+    auto_update_extra: list[str] = field(default_factory=list)
+    # Client -> the version an automatic update failed for and when, as {'version', 'at'}.
+    auto_update_failures: dict[str, dict] = field(default_factory=dict)
     proton: str = ''                  # Linux only, empty means the newest found
     selected: str = 'wow'
     modes: dict[str, str] = field(default_factory=dict)
@@ -137,10 +145,50 @@ class Settings:
         announced = self.announced_updates if isinstance(self.announced_updates, dict) else {}
         self.announced_updates = {code: version for code, version in announced.items()
                                   if isinstance(code, str) and isinstance(version, str)}
+        self.validate_automatic_updates()
         from . import catalog
         malformed = [code for code in self.extra_clients + self.hidden_clients if not catalog.is_product(code)]
         if malformed:
             raise ValueError(f'Not a client code: {", ".join(map(repr, malformed))}')
+
+    def validate_automatic_updates(self) -> None:
+        """Anything unreadable means no consent: the switch is off and a malformed entry is dropped."""
+        from . import catalog
+        self.auto_update = self.auto_update is True
+        for name in ['auto_update_except', 'auto_update_extra']:
+            value = getattr(self, name)
+            # As in the client lists, a code the catalog does not know now is kept for later.
+            setattr(self, name, sorted({code for code in value if catalog.is_product(code)})
+                    if isinstance(value, list) else [])
+        failures = self.auto_update_failures if isinstance(self.auto_update_failures, dict) else {}
+        self.auto_update_failures = {
+            code: {'version': failure['version'], 'at': failure['at']} for code, failure in failures.items()
+            if catalog.is_product(code) and isinstance(failure, dict) and isinstance(failure.get('version'), str)
+            and type(failure.get('at')) is int}
+
+    def updates_automatically(self, code: str) -> bool:
+        """Whether the user lets this client update without asking."""
+        from . import catalog
+        if catalog.get(code).optional:
+            return code in self.auto_update_extra
+        return self.auto_update and code not in self.auto_update_except
+
+    def set_updates_automatically(self, code: str, on: bool) -> None:
+        """One client's own choice. A live client turned on also turns the switch on."""
+        from . import catalog
+        if catalog.get(code).optional:
+            chosen = set(self.auto_update_extra)
+            self.auto_update_extra = sorted(chosen | {code} if on else chosen - {code})
+            return
+        excepted = set(self.auto_update_except)
+        self.auto_update_except = sorted(excepted - {code} if on else excepted | {code})
+        if on:
+            self.auto_update = True
+
+    def failed_recently(self, code: str, version: str, now: float) -> bool:
+        """Whether an automatic update to this version failed too recently to try it again by itself."""
+        failure = self.auto_update_failures.get(code)
+        return bool(failure and failure['version'] == version and now - failure['at'] < RETRY_AFTER)
 
     def listed(self, code: str) -> None:
         """Show a client in the list again."""

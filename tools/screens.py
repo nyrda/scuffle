@@ -155,7 +155,8 @@ def main(output: Path) -> None:
         window.clear_notice('wow_classic_era')
     window.client_list.select('wow')
     window.updates['wow'] = True
-    shot('05-update-available')
+    shot('05-update-available')                 # with automatic updates off, the page asks once more
+    automatic_states(window, shot, output, application)
     window.updates['wow'] = False
     window.phases['wow'] = 'Connecting'
     shot('06-launching')
@@ -205,7 +206,9 @@ def main(output: Path) -> None:
     window.settings_page.workers.setValue(8)
     window.settings_page.pause_while_playing.setChecked(True)
     window.settings_page.resume_downloads.setChecked(True)
+    window.settings_page.auto_update.setChecked(True)
     shot('10f-settings-downloads')
+    window.settings_page.auto_update.setChecked(False)
     window.settings_page.show_section('launch')
     shot('10g-settings-launch')
     diagnostics_states(window, shot, application)
@@ -215,7 +218,12 @@ def main(output: Path) -> None:
     shot('10j-settings-general-no-tray', reveal=window.settings_page.tray_note)
     window.settings_page.set_tray_available(True)
     window.settings_page.keep_in_tray.setChecked(True)
-    shot('10k-settings-general-tray', reveal=window.settings_page.keep_in_tray)
+    shot('10k-settings-general-tray', reveal=window.settings_page.sign_in_start)
+    window.settings_page.show_start_at_sign_in(False, 'Scuffle could not change how it starts. '
+                                               '~/.config/autostart/scuffle.desktop was not made by Scuffle, '
+                                               'so it was left as it is.')
+    shot('10l-settings-sign-in-start-refused', reveal=window.settings_page.sign_in_note)
+    window.settings_page.show_start_at_sign_in(False)
     window.downloads.jobs.clear() if window.downloads else None
     window.settings.extra_clients = ['wow_classic_era_ptr']
     window.populate()
@@ -456,6 +464,28 @@ def import_states(window, shot, application) -> None:
         window.on_job(job)
         shot('30k-imported')
         window.clear_notice('wow_classic_era')
+
+
+def automatic_states(window, shot, output: Path, application) -> None:
+    """Automatic updates: the client menu with them on, and an update waiting for a game to close."""
+    window.settings.auto_update = True
+    window.refresh()
+    menu = window.client_page.more.menu()
+    menu.aboutToShow.emit()
+    menu.popup(window.client_page.more.mapToGlobal(window.client_page.more.rect().bottomLeft()))
+    application.processEvents()
+    menu.grab().save(str(output / '05b-client-menu-automatic.png'))
+    menu.close()
+    if window.downloads:
+        waiting = Job('wow', 'update', status=PAUSED, automatic=True, version='12.0.7.1', held=True)
+        window.downloads.jobs[:] = [waiting]
+        window.phases['wow_classic'] = 'Running'
+        shot('05c-waiting-for-games')
+        waiting.total_bytes, waiting.done_bytes = 2_400_000_000, 900_000_000
+        shot('05d-waiting-for-games-midway')
+        window.phases.clear()
+        window.downloads.jobs.clear()
+    window.settings.auto_update = False
 
 
 def fake_installed(window, code: str) -> None:

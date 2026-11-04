@@ -1935,7 +1935,7 @@ def notifications(window, monkeypatch):
     """What reached the desktop's notification service, as client, title and body."""
     shown = []
     monkeypatch.setattr(window.notifier, 'show',
-                        lambda title, body, client, category='': shown.append((client, title, body)))
+                        lambda title, body, client, category='', actions=(): shown.append((client, title, body)))
     return shown
 
 
@@ -2220,3 +2220,203 @@ def test_the_window_undoes_a_move_a_crash_cut_short_before_it_opens_the_folder(q
     assert not move.journal_path().exists()
     with Library(source).locked():
         pass
+
+
+def offered(window, monkeypatch):
+    """The notifications shown, as client, title and the keys of their buttons."""
+    shown = []
+    monkeypatch.setattr(window.notifier, 'show', lambda title, body, client, category='', actions=():
+                        shown.append((client, title, [key for key, _ in actions])))
+    return shown
+
+
+def automatic(window, code):
+    job = window.downloads.job(code)
+    return (job.kind, job.status, job.automatic) if job else None
+
+
+def test_the_update_check_queues_updates_only_for_clients_the_user_lets_update(qt, window, tmp_path, monkeypatch):
+    from scuffle.downloads import DownloadManager, PAUSED, QUEUED
+    from scuffle.settings import Settings
+    monkeypatch.setattr(DownloadManager, '_run', lambda self: None)
+    window.settings.root = str(tmp_path / 'games')
+    window.open_library()
+    installed(window, monkeypatch, ['wow', 'wowt'])
+    shown = offered(window, monkeypatch)
+    window.settings.extra_clients = ['wowt']
+    window.populate()
+    window.client_list.select('wow_classic')        # neither client is on screen
+    window.on_updates({'wow': '12.0.7.1', 'wowt': '12.0.8.1'})
+    # Without consent nothing downloads, and the notification asks.
+    assert window.downloads.jobs == []
+    assert shown == [('wow', 'Update for World of Warcraft', ['update', 'always']),
+                     ('wowt', f'Update for {ui_label("wowt")}', ['update', 'always'])]
+    window.open_settings('downloads')
+    page = window.settings_page
+    assert page.auto_update in page.focus_chain()
+    page.auto_update.setChecked(True)
+    assert Settings.load().auto_update is True
+    # The switch covers the live client. The test client waits for its own choice.
+    assert automatic(window, 'wow') == ('update', QUEUED, True) and automatic(window, 'wowt') is None
+    window.show_client_page()
+    menu = window.client_page.more.menu()
+    window.client_list.select('wowt')
+    menu.aboutToShow.emit()
+    action = window.client_page.auto_action
+    assert action.isVisible() and action.text() == 'Update automatically'
+    action.trigger()
+    assert automatic(window, 'wowt') == ('update', QUEUED, True) and Settings.load().auto_update_extra == ['wowt']
+    # The live client's exception stops its update, which then waits for the user.
+    window.client_list.select('wow')
+    menu.aboutToShow.emit()
+    assert action.text() == "Don't update automatically"
+    action.trigger()
+    assert automatic(window, 'wow') == ('update', PAUSED, False)
+    assert Settings.load().auto_update_except == ['wow']
+    window.on_updates({'wow': '12.0.7.1'})
+    assert automatic(window, 'wow') == ('update', PAUSED, False)
+
+
+@pytest.mark.parametrize('choice', ['notification', 'page', 'update-now'])
+def test_the_notification_and_the_page_offer_updating_now_or_always(qt, window, tmp_path, monkeypatch, choice):
+    from scuffle.downloads import DownloadManager, QUEUED
+    from scuffle.settings import Settings
+    monkeypatch.setattr(DownloadManager, '_run', lambda self: None)
+    window.settings.root = str(tmp_path / 'games')
+    window.open_library()
+    installed(window, monkeypatch, ['wow'])
+    offered(window, monkeypatch)
+    window.populate()
+    window.client_list.select('wowf' if choice != 'page' else 'wow')
+    window.on_updates({'wow': '12.0.7.1'})
+    window.client_list.select('wow')
+    window.show_client_page()
+    page = window.client_page
+    # Where the notification has no buttons, as the tray's on Windows, the page has the same choice.
+    assert page.primary.text() == 'Update' and page.always.isVisible() and page.always in page.focus_chain()
+    if choice == 'page':
+        page.always.click()
+    else:
+        window.notifier.acted.emit('wow', 'always' if choice == 'notification' else 'update')
+    qt.processEvents()
+    assert automatic(window, 'wow') == ('update', QUEUED, choice != 'update-now')
+    assert Settings.load().auto_update is (choice != 'update-now')
+    assert not page.always.isVisible()
+
+
+def test_an_automatic_update_waits_while_a_game_starts_or_runs_and_says_so(qt, window, tmp_path, monkeypatch):
+    from scuffle.downloads import DownloadManager, PAUSED, QUEUED
+    monkeypatch.setattr(DownloadManager, '_run', lambda self: None)
+    window.settings.root = str(tmp_path / 'games')
+    window.settings.auto_update = True
+    window.open_library()
+    installed(window, monkeypatch, ['wow', 'wowf'])
+    window.populate()
+    window.on_updates({'wowf': '12.0.7.1'})
+    assert automatic(window, 'wowf') == ('update', QUEUED, True)
+    # Retail is only being started, before its game reads anything.
+    window.on_phase('wow', 'Checking for updates')
+    assert automatic(window, 'wowf') == ('update', PAUSED, True)
+    window.client_list.select('wowf')
+    window.refresh()
+    assert window.status('wowf') == ('Waiting for games', 'attention')
+    assert window.client_page.phase.full == 'Starts once every game in this folder has closed'
+    window.on_task_finished('wow', '')
+    window.on_running_scanned(window.library, set())
+    assert automatic(window, 'wowf') == ('update', QUEUED, True)
+    # A game Scuffle did not start, found by the scan of the processes.
+    window.on_running_scanned(window.library, {'wow'})
+    assert automatic(window, 'wowf') == ('update', PAUSED, True)
+    window.on_running_scanned(window.library, set())
+    assert automatic(window, 'wowf') == ('update', QUEUED, True)
+
+
+def test_an_automatic_update_says_its_version_when_done_and_its_failure_once(qt, window, tmp_path, monkeypatch):
+    from scuffle.downloads import DONE, FAILED, DownloadManager
+    from scuffle.library import LibraryError
+
+    def execute(self, job):
+        if job.client == 'wowf':
+            raise LibraryError('Not enough free space: about 80 GB are needed')
+        return {}
+    monkeypatch.setattr(DownloadManager, '_execute', execute)
+    window.settings.root = str(tmp_path / 'games')
+    window.settings.auto_update = True
+    window.open_library()
+    installed(window, monkeypatch, ['wow', 'wowf'])
+    shown = notifications(window, monkeypatch)
+    window.populate()
+    window.client_list.select('wow_classic')        # neither client is on screen
+    window.on_updates({'wow': '12.1.5.70575', 'wowf': '12.0.7.1'})
+    wait_until(qt, lambda: all(window.downloads.job(c).status in {DONE, FAILED} for c in ['wow', 'wowf']))
+    window.on_updates({'wow': False, 'wowf': '12.0.7.1'})         # the next check, half an hour later
+    qt.processEvents()
+    assert shown == [('wow', 'World of Warcraft updated to 12.1.5.70575', 'Updated automatically. Ready to play.'),
+                     ('wowf', 'Forever did not update', 'Not enough free space: about 80 GB are needed')]
+    assert window.downloads.job('wowf').status == FAILED
+
+
+def test_the_tray_says_when_the_next_check_runs_and_checks_now(qt, window, tmp_path, monkeypatch):
+    window.settings.root = str(tmp_path / 'games')
+    window.open_library()
+    installed(window, monkeypatch, ['wow'])
+    checks = []
+    monkeypatch.setattr(window, 'check_updates', lambda: checks.append(True))
+    window.update_timer.start(270_000)        # 4.5 minutes, as the minute starts
+    window.refresh()
+    tray = window.tray
+    assert tray.next_check.text() == 'Next check in 5 min' and not tray.next_check.isEnabled()
+    tray.check_action.trigger()
+    assert checks == [True]
+    window.refresh()
+    assert tray.next_check.text() == 'Next check in 30 min'
+
+
+def test_a_start_at_sign_in_stays_in_the_tray_and_shows_the_window_without_one(qt, window, monkeypatch):
+    from PySide6.QtWidgets import QSystemTrayIcon
+    from scuffle.ui import app as ui
+    available = {'tray': True}
+    monkeypatch.setattr(QSystemTrayIcon, 'isSystemTrayAvailable', staticmethod(lambda: available['tray']))
+    try:
+        window.hide()
+        window.start_in_tray()
+        window.check_tray()
+        assert window.isHidden()
+        # A second start at sign-in, or the entry run again, leaves it there.
+        reply = Reply()
+        window.on_request({'tray': True}, reply)
+        assert window.isHidden() and reply.sent == [{'ok': True}]
+        # A tray bar that starts later gets a moment. One that never comes shows the window.
+        available['tray'] = False
+        window.check_tray()
+        assert window.isHidden()
+        monkeypatch.setattr(ui, 'TRAY_GRACE', 0)
+        window.start_in_tray()
+        window.check_tray()
+        assert window.isVisible()
+    finally:
+        QApplication.setQuitOnLastWindowClosed(True)
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='Windows keeps the entry in the registry')
+def test_starting_at_sign_in_writes_and_removes_only_scuffles_own_entry(qt, window):
+    from pathlib import Path
+    entry = Path(os.environ['XDG_CONFIG_HOME']) / 'autostart' / 'scuffle.desktop'
+    window.open_settings()
+    page = window.settings_page
+    assert page.sign_in_start in page.focus_chain() and not page.sign_in_start.isChecked()
+    page.sign_in_start.setChecked(True)
+    text = entry.read_text()
+    assert 'X-Scuffle-Autostart=true\n' in text
+    assert next(line for line in text.splitlines() if line.startswith('Exec=')).endswith(' --tray')
+    window.open_settings()
+    assert page.sign_in_start.isChecked()
+    page.sign_in_start.setChecked(False)
+    assert not entry.exists()
+    # A file of the same name that Scuffle did not write is neither replaced nor removed.
+    entry.write_text('[Desktop Entry]\nType=Application\nExec=my-own-scuffle\n')
+    page.sign_in_start.setChecked(True)
+    assert entry.read_text() == '[Desktop Entry]\nType=Application\nExec=my-own-scuffle\n'
+    assert not page.sign_in_start.isChecked() and 'not made by Scuffle' in page.sign_in_note.text()
+    window.set_start_at_sign_in(False)
+    assert entry.exists()

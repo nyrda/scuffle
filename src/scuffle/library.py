@@ -442,6 +442,13 @@ class Library:
             return False
         return self._executable_running(path, processes)
 
+    def running_games(self) -> list[str]:
+        """The installed clients whose game runs, from one listing of the processes."""
+        installed = self.installed()
+        names = {path.name.lower() for path in map(self.executable, installed) if path}
+        processes = system.running_executables(names) if names else []
+        return [code for code in installed if self.running(code, processes)]
+
     def game_processes(self, code: str) -> list[int]:
         """The client's game processes, for closing it. Empty when it does not run."""
         path = self.executable(code)
@@ -603,13 +610,16 @@ class Updater:
 
     def __init__(self, library: Library, code: str, client: CDNClient, *, locale='enUS', region='eu',
                  seed_from: Path | None = None, progress: Callable[[dict], None] | None = None,
-                 cancelled: Callable[[], bool] | None = None):
+                 cancelled: Callable[[], bool] | None = None, may_publish: Callable[[], bool] | None = None):
+        """cancelled is asked between objects and files. may_publish is asked once, right before
+        the published indexes change, and False stops the update as a pause does."""
         self.library, self.root = library, library.root
         self.code, self.entry = code, catalog.get(code)
         self.client, self.locale, self.region = client, locale, region
         self.seed_from = seed_from
         self.progress = progress or (lambda event: None)
         self.cancelled = cancelled or (lambda: False)
+        self.may_publish = may_publish or (lambda: True)
         self.client_dir = library.client_dir(code)
         self.client_dir.mkdir(parents=True, exist_ok=True)
         library.metadata.mkdir(parents=True, exist_ok=True)
@@ -840,6 +850,7 @@ class Updater:
 
     def activate(self):
         self.library.reject_symlinks()
+        self.check_cancelled()
         if self.library.running(self.code):
             raise LibraryError(f'Close {self.entry.label} before its files are replaced')
         staging = self.client_dir / 'staging' / self.snapshot['build_config']
@@ -855,6 +866,12 @@ class Updater:
             if relative.lower().endswith(('.exe', '.dll')):
                 destination.chmod(0o755)
             self.emit('materializing', done=i + 1, total=len(files))
+            self.check_cancelled()      # each file is kept in staging for the resume
+        # The last chance to stop before the published indexes change.
+        self.check_cancelled()
+        if not self.may_publish():
+            self.store.checkpoint()
+            raise Cancelled('Paused')
         self.store.publish()
         atomic_json(self.client_dir / 'pending.json', self.snapshot | {'phase': 'activating'})
         game = self.root / self.snapshot['folder']

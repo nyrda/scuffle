@@ -14,8 +14,10 @@ NO_BUS = 'unix:path=/nonexistent/scuffle-tests/bus'
 REAL = [Path(os.environ.get(name, Path.home() / default)) / 'scuffle' for name, default in
         [('XDG_CONFIG_HOME', '.config'), ('XDG_DATA_HOME', '.local/share'), ('XDG_CACHE_HOME', '.cache')]]
 DATA = Path(os.environ.get('XDG_DATA_HOME', Path.home() / '.local/share'))
-# The app launcher entries, icons and Steam shortcuts Scuffle can write for the user.
+CONFIG = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config'))
+# The app launcher entries, icons, sign-in entry and Steam shortcuts Scuffle can write for the user.
 SHORTCUTS = [(DATA / 'applications', 'scuffle-*'), (DATA / 'icons/hicolor', '*/apps/scuffle-*'),
+             (CONFIG / 'autostart', 'scuffle*'),
              *[(Path.home() / root / 'userdata', '*/config/shortcuts.vdf')
                for root in ['.steam/steam', '.steam/root', '.local/share/Steam']]]
 

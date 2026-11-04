@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import sqlite3
 import threading
+import time
 from typing import Callable
 
 from . import catalog, imports, move
@@ -20,6 +21,7 @@ from .settings import Settings, cache_dir, data_dir
 from .rates import RateSmoother
 
 QUEUED, RUNNING, PAUSED, FAILED, DONE = 'queued', 'running', 'paused', 'failed', 'done'
+GAME_CHECK = 1.0      # seconds between the process checks of a running automatic update
 
 
 @dataclass
@@ -39,6 +41,10 @@ class Job:
     keep_settings: bool = True
     seed_from: str = ''           # an installation an install imports from. It is only read
     copy_settings: bool = False   # copy its WTF and Interface once the install succeeded
+    # An update the user consented to in advance. It never writes while a game of the folder
+    # runs. Pausing or resuming it by hand makes it an ordinary update.
+    automatic: bool = False
+    version: str = ''             # the version an automatic update was queued for
 
     @property
     def fraction(self) -> float:
@@ -87,10 +93,12 @@ class DownloadManager:
         self._pause = threading.Event()
         self._current: Job | None = None
         self._path = data_dir() / 'downloads.json'
-        self._game_running = False
+        self._game_running = False            # pause_while_playing holds every download
+        self._playing = False                 # a game of the folder runs, which holds automatic updates
         self._game_paused: set[str] = set()
         self._overrides: set[str] = set()     # resumed by the user while a game runs
-        self._resume_requested: set[str] = set()
+        # Resumes asked for while the job was stopping, and whether each was the user's own.
+        self._resume_requested: dict[str, bool] = {}
         self._stopping = False
         library.has_download_job = self._has_download_job
         self._restore()
@@ -141,9 +149,15 @@ class DownloadManager:
             if job.kind == 'install' and isinstance(seed, str) and Path(seed).is_absolute():
                 job.seed_from = seed
                 job.copy_settings = row.get('copy_settings') is True
+            if job.kind == 'update' and row.get('automatic') is True:
+                job.automatic = True
+                job.version = row['version'] if isinstance(row.get('version'), str) else ''
             if job.kind != 'verify':
                 job.done_bytes, job.total_bytes = self.library.download_progress(job.client)
-            if status == PAUSED and self.settings.resume_downloads and present:
+            # An automatic update carries on by itself, as long as the user still consents to it.
+            carries_on = self.settings.resume_downloads or \
+                (job.automatic and self.settings.updates_automatically(job.client))
+            if status == PAUSED and carries_on and present:
                 job.status = QUEUED
             self.jobs.append(job)
 
@@ -155,6 +169,7 @@ class DownloadManager:
             atomic_json(self._path, {'root': str(self.library.root), 'jobs': [
                 {'client': j.client, 'kind': j.kind, 'status': j.status, 'error': j.error}
                 | ({'seed_from': j.seed_from, 'copy_settings': j.copy_settings} if j.seed_from else {})
+                | ({'automatic': True, 'version': j.version} if j.automatic else {})
                 for j in self.jobs if j.status != DONE and not j.cancel_requested]})
         except OSError:
             # A full or read-only data folder only loses the queue for the next start.
@@ -166,18 +181,28 @@ class DownloadManager:
     def set_bandwidth_limit(self, limit: int) -> None:
         self.throttle.limit = max(0, limit)
 
+    def _held(self, job: Job) -> bool:
+        """Whether a running game keeps this job waiting. Called with the queue lock."""
+        if job.client in self._overrides:
+            return False
+        return self._game_running or (job.automatic and self._playing)
+
     def _resume(self, job: Job, *, override: bool = False) -> None:
+        """override is the user's own resume, which a running game does not hold."""
         if self._stopping:
             return
-        if self._game_running and not override:
+        if override:
+            # Resuming a held download by hand runs it now, game or not. An automatic update
+            # resumed by hand is the user's own from now on.
+            job.automatic = False
+            self._game_paused.discard(job.client)
+            if self._game_running:
+                self._overrides.add(job.client)
+        elif self._held(job):
             self._game_paused.add(job.client)       # held until the game closes
             return
-        if self._game_running:
-            # Resuming a held download by hand runs it now, game or not.
-            self._game_paused.discard(job.client)
-            self._overrides.add(job.client)
         if job is self._current:
-            self._resume_requested.add(job.client)
+            self._resume_requested[job.client] = override
         else:
             job.status, job.speed = QUEUED, 0.0
 
@@ -237,15 +262,43 @@ class DownloadManager:
         self._notify(job)
         return job
 
+    def enqueue_automatic(self, client: str, version: str) -> Job | None:
+        """Queue an update to version that the user consented to in advance, or return None.
+
+        Nothing is queued without the consent, while the client has a job, or while an
+        automatic update to this version failed too recently. Only a failed automatic update
+        gives way to a new one, once that wait is over.
+        """
+        catalog.get(client)
+        with self._lock:
+            if self._stopping or (self.moving and self.moving.active):
+                return None
+            if not self.settings.updates_automatically(client) or \
+                    self.settings.failed_recently(client, version, time.time()):
+                return None
+            existing = self.job(client)
+            if existing and existing.status != DONE and not (existing.status == FAILED and existing.automatic):
+                return None
+            if existing:
+                self.jobs.remove(existing)
+            job = Job(client, 'update', status=PAUSED, automatic=True, version=version)
+            self.jobs.append(job)
+            self._resume(job)
+            self._save()
+            self._lock.notify_all()
+        self._notify(job)
+        return job
+
     def pause(self, client: str) -> None:
         with self._lock:
             self._game_paused.discard(client)
-            self._resume_requested.discard(client)
+            self._resume_requested.pop(client, None)
             job = self.job(client)
             if job is None:
                 return
             if job is self._current and job.kind == 'uninstall':
                 return
+            job.automatic = False         # paused by hand, so it waits for the user
             if job.status == QUEUED:
                 job.status = PAUSED
             elif job is self._current:
@@ -256,9 +309,14 @@ class DownloadManager:
     def pause_all(self) -> None:
         """Pause waiting jobs before stopping the current one."""
         with self._lock:
+            changed = [j for j in self.jobs if j.status in {QUEUED, RUNNING}]
+            if not self._stopping:
+                # Paused by hand, an automatic update waits for the user. Closing Scuffle is no such pause.
+                for job in self.jobs:
+                    if job in changed or job.client in self._game_paused:
+                        job.automatic = False
             self._game_paused.clear()
             self._resume_requested.clear()
-            changed = [j for j in self.jobs if j.status in {QUEUED, RUNNING}]
             for job in changed:
                 if job is self._current:
                     self._pause.set()
@@ -286,25 +344,44 @@ class DownloadManager:
                 return
             self._game_running = running
             self._overrides.clear()
-            if running:
-                changed = [j for j in self.jobs if j.status == QUEUED or
-                           (j is self._current and not self._pause.is_set())]
-                self._game_paused.update(j.client for j in changed)
-                for job in changed:
-                    if job is self._current:
+            changed = self._apply_holds()
+        for job in changed:
+            self._notify(job)
+
+    def set_playing(self, playing: bool) -> None:
+        """Whether a game of the installation folder runs or starts. Automatic updates wait for the last one."""
+        with self._lock:
+            if playing == self._playing:
+                return
+            self._playing = playing
+            changed = self._apply_holds()
+        for job in changed:
+            self._notify(job)
+
+    def _apply_holds(self) -> list[Job]:
+        """Hold the jobs a game holds now and resume the ones it held before. Called with the queue lock.
+
+        Only a waiting or running job is held, so the user's own pauses stay as they are.
+        """
+        changed = []
+        for job in self.jobs:
+            current = job is self._current
+            if self._held(job):
+                if job.status == QUEUED or (current and not self._pause.is_set()):
+                    self._game_paused.add(job.client)
+                    if current:
                         self._pause.set()
                     else:
                         job.status = PAUSED
-            else:
-                changed = [j for j in self.jobs if j.client in self._game_paused]
-                self._game_paused.clear()
-                for job in changed:
-                    if job.status == PAUSED or (job is self._current and self._pause.is_set()):
-                        self._resume(job)
-            self._save()
-            self._lock.notify_all()
-        for job in changed:
-            self._notify(job)
+                    changed.append(job)
+            elif job.client in self._game_paused:
+                self._game_paused.discard(job.client)
+                if job.status == PAUSED or (current and self._pause.is_set()):
+                    self._resume(job)
+                changed.append(job)
+        self._save()
+        self._lock.notify_all()
+        return changed
 
     def move(self, client: str, offset: int) -> None:
         """Move a waiting job by an offset among waiting jobs only."""
@@ -337,7 +414,7 @@ class DownloadManager:
             if job.kind == 'uninstall' and (job is self._current or self.library.uninstalling() == client):
                 return
             self._game_paused.discard(client)
-            self._resume_requested.discard(client)
+            self._resume_requested.pop(client, None)
             if job is self._current:
                 job.cancel_requested = True
                 self._pause.set()
@@ -413,8 +490,8 @@ class DownloadManager:
                 if self.moving and self.moving.status == QUEUED:
                     self.moving.status = RUNNING
                     return self.moving
-                job = next((j for j in self.jobs if j.status == QUEUED), None)
-                if job and (not self._game_running or job.client in self._overrides):
+                job = next((j for j in self.jobs if j.status == QUEUED and not self._held(j)), None)
+                if job:
                     job.status, job.error = RUNNING, ''
                     self._current = job
                     self._pause.clear()
@@ -439,13 +516,29 @@ class DownloadManager:
             with self._lock:
                 job.status, job.error, job.speed = status, error, 0.0
                 self._current = None
+                if job.automatic and status in {DONE, FAILED}:
+                    self._remember(job, status)
                 if job.cancel_requested:
                     self.jobs.remove(job)
                 elif status == PAUSED and job.client in self._resume_requested:
-                    self._resume(job, override=True)      # asked for while it was stopping
-                self._resume_requested.discard(job.client)
+                    # Asked for while it was stopping, as the user's or as a game's exit.
+                    self._resume(job, override=self._resume_requested[job.client])
+                self._resume_requested.pop(job.client, None)
                 self._save()
+            if job.automatic and status in {DONE, FAILED}:
+                try:
+                    self.settings.save()
+                except OSError:
+                    pass            # it then waits only for this run, as the failure in memory says
             self._notify(job)
+
+    def _remember(self, job: Job, status: str) -> None:
+        """Note when an automatic update failed, before anything can queue it again. Called with the queue lock."""
+        failures = self.settings.auto_update_failures
+        if status == FAILED:
+            failures[job.client] = {'version': job.version, 'at': int(time.time())}
+        else:
+            failures.pop(job.client, None)
 
     def _run_move(self, task: MoveTask) -> None:
         self._notify_move(task)
@@ -527,10 +620,13 @@ class DownloadManager:
             self.library.create()
         elif not state:
             raise LibraryError(f'{catalog.get(job.client).label} is not installed')
+        cancelled = self._stops(job)
         with self.library.locked():
+            if self._game_holds(job):
+                raise Cancelled('A game is running')
             updater = Updater(self.library, job.client, self.client_factory(job.client, region),
                               region=region, locale=locale, seed_from=seed, progress=progress,
-                              cancelled=self._pause.is_set)
+                              cancelled=cancelled, may_publish=lambda: not self._game_holds(job))
             try:
                 if job.kind == 'verify':
                     result = updater.verify()
@@ -557,10 +653,33 @@ class DownloadManager:
             try:
                 job.stage = 'cleaning_up'
                 self._notify(job)
-                result['cleanup'] = self.library.cleanup(cancelled=self._pause.is_set)
+                result['cleanup'] = self.library.cleanup(cancelled=cancelled)
             except LibraryError as error:
                 result['cleanup'] = {'deferred': str(error)}
             return result
+
+    def _stops(self, job: Job) -> Callable[[], bool]:
+        """What the job checks between objects: a pause, and for an automatic update a game that started.
+
+        The window sees a game within seconds, and earlier when Scuffle starts it. The job looks
+        itself as well, so it never depends on the window to stop writing the shared store.
+        """
+        checked = float('-inf')
+
+        def cancelled() -> bool:
+            nonlocal checked
+            if time.monotonic() - checked >= GAME_CHECK:
+                checked = time.monotonic()
+                self._game_holds(job)
+            return self._pause.is_set()
+        return cancelled
+
+    def _game_holds(self, job: Job) -> bool:
+        """Look for a game of the folder now. One holds an automatic update, as if the window had seen it."""
+        if job.automatic and self.library.running_games():
+            self.set_playing(True)
+            return True
+        return False
 
     def _copy_settings(self, seed: Path, state: dict) -> dict:
         """Copy WTF and Interface after a successful import. A failure leaves the install as it is."""

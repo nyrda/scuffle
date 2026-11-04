@@ -126,3 +126,21 @@ def test_closing_finds_the_game_by_its_file_and_force_quit_ends_only_that():
         assert sleeper.wait(timeout=30) == 1
     finally:
         sleeper.kill()
+
+
+def test_starting_at_sign_in_writes_and_removes_only_scuffles_own_run_value(keys, monkeypatch):
+    from scuffle import shortcuts
+    run = keys + '\\Run'
+    monkeypatch.setattr(shortcuts, 'RUN_KEY', run)
+    shortcuts.start_at_sign_in(True)
+    value, kind = values(run)['Scuffle']
+    assert kind == winreg.REG_SZ and value.endswith(' --tray') and shortcuts.starts_at_sign_in()
+    shortcuts.start_at_sign_in(False)
+    assert 'Scuffle' not in values(run) and not shortcuts.starts_at_sign_in()
+    # A value of that name that Scuffle did not write is neither replaced nor removed.
+    with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, run, 0, winreg.KEY_SET_VALUE) as key:
+        winreg.SetValueEx(key, 'Scuffle', 0, winreg.REG_SZ, r'C:\Tools\scuffle-helper.exe')
+    with pytest.raises(shortcuts.ShortcutError):
+        shortcuts.start_at_sign_in(True)
+    shortcuts.start_at_sign_in(False)
+    assert values(run)['Scuffle'] == (r'C:\Tools\scuffle-helper.exe', winreg.REG_SZ)

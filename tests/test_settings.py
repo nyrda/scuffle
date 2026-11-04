@@ -117,3 +117,43 @@ def test_invalid_download_settings_load_safely(config, workers, limit, expected)
     assert settings.pause_while_playing is False and settings.resume_downloads is False
     settings.save()
     assert Settings.load().workers == expected[0]
+
+
+@pytest.mark.parametrize('switch', ['yes', 1, None, [True]])
+def test_automatic_updates_need_a_true_switch_and_bad_entries_are_dropped(config, switch):
+    config.write_text(json.dumps({
+        'auto_update': switch, 'auto_update_except': ['wow_classic', '../wow', 7, {}],
+        'auto_update_extra': 'wowt',
+        'auto_update_failures': {'wow': {'version': '12.0.7.1', 'at': 100}, 'wowf': {'version': 3, 'at': 1},
+                                 'wowt': {'version': '1', 'at': '1'}, '../x': {'version': '1', 'at': 1}, 'wowz': []}}))
+    loaded = Settings.load()
+    # Anything but true is no consent, and nothing updates by itself.
+    assert loaded.auto_update is False
+    assert not any(loaded.updates_automatically(c.code) for c in catalog.clients())
+    assert loaded.auto_update_except == ['wow_classic'] and loaded.auto_update_extra == []
+    assert loaded.auto_update_failures == {'wow': {'version': '12.0.7.1', 'at': 100}}
+    loaded.save()
+    assert json.loads(config.read_text())['auto_update'] is False
+
+
+def test_the_switch_covers_live_clients_less_their_exceptions_and_test_clients_choose_alone(config):
+    settings = Settings()
+    assert not settings.updates_automatically('wow')             # off by default
+    settings.set_updates_automatically('wow', True)               # a live client turns the switch on
+    settings.set_updates_automatically('wow_classic', False)
+    settings.set_updates_automatically('wowt', True)
+    settings.save()
+    loaded = Settings.load()
+    assert loaded.auto_update and loaded.auto_update_except == ['wow_classic'] and loaded.auto_update_extra == ['wowt']
+    assert [loaded.updates_automatically(code) for code in ['wow', 'wowf', 'wow_classic', 'wowt', 'wow_beta']] == \
+        [True, True, False, True, False]
+    loaded.auto_update = False
+    assert not loaded.updates_automatically('wowf') and loaded.updates_automatically('wowt')
+
+
+def test_a_failed_automatic_update_waits_three_hours_unless_a_newer_version_is_out():
+    settings = Settings(auto_update_failures={'wow': {'version': '12.0.7.1', 'at': 1000}})
+    assert settings.failed_recently('wow', '12.0.7.1', 1000 + 3 * 3600 - 1)
+    assert not settings.failed_recently('wow', '12.0.7.1', 1000 + 3 * 3600)
+    assert not settings.failed_recently('wow', '12.0.8.2', 1001)
+    assert not settings.failed_recently('wowf', '12.0.7.1', 1001)

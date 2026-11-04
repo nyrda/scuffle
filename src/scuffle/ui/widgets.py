@@ -70,8 +70,11 @@ def progress_variants(job) -> list[str]:
         return [text]
     if job.status == QUEUED:
         return ['Starts when the current download is done', 'Waiting']
+    # An automatic update waits for every game of the folder, and starts by itself after the last.
+    waits = 'Starts once every game in this folder has closed' if getattr(job, 'automatic', False) \
+        and getattr(job, 'held', False) else ''
     if not job.total_bytes:
-        return ['Progress will be checked on resume']
+        return [waits, 'Waiting for games'] if waits else ['Progress will be checked on resume']
     percent = f'{job.fraction:.0%}'
     sizes = f'{size_text(job.done_bytes)} of {size_text(job.total_bytes)}'
     if running and job.speed <= 0:
@@ -83,6 +86,8 @@ def progress_variants(job) -> list[str]:
         # Narrow windows drop the sizes first, then the speed.
         return [f'{percent} · {time_left(job)} · {speed} · {sizes}', f'{percent} · {time_left(job)} · {speed}',
                 f'{percent} · {time_left(job)}']
+    if waits:
+        return [f'{percent} · {waits} · {sizes}', f'{percent} · Waiting for games', percent]
     if getattr(job, 'held', False):
         return [f'{percent} · Paused while a game runs · {sizes}', f'{percent} · Paused while a game runs', percent]
     return [f'{percent} · {sizes}', percent]

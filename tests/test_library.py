@@ -1267,3 +1267,124 @@ def test_trash_that_cannot_be_removed_never_blocks_the_library(uninstall_pair):
             held.close()
         else:
             locked_away.chmod(0o700)
+
+
+def published(root):
+    """The shared store's files as the game reads them: every segment and published index."""
+    return {path.name: path.read_bytes() for path in sorted((root / "Data/data").iterdir()) if path.is_file()}
+
+
+def wait_until(check, seconds=20):
+    import time
+    deadline = time.monotonic() + seconds
+    while not check():
+        assert time.monotonic() < deadline
+        time.sleep(0.02)
+
+
+@pytest.fixture
+def two_clients(tmp_path, monkeypatch):
+    """Forever and Retail in one folder, and the process list, where Retail's game can run."""
+    from scuffle import system
+    root = tmp_path / "install"
+    run_build(root, FixtureCDN(SyntheticBuild(), tmp_path / "forever"))
+    retail = SyntheticBuild(product="wow", folder="_retail_", changed=b"retail")
+    with updater_for(root, FixtureCDN(retail, tmp_path / "retail"), product="wow") as updater:
+        updater.run()
+    games = []
+    game = Library(root).executable("wow")
+    monkeypatch.setattr(system, "running_executables",
+                        lambda *names: [(4242, str(game), str(game.parent))] if games else [])
+    return root, games
+
+
+@pytest.mark.parametrize("starts", ["before", "during", "last"])
+def test_an_automatic_update_keeps_off_the_store_while_any_game_of_the_folder_runs(tmp_path, two_clients, starts):
+    from scuffle.downloads import DONE, PAUSED, DownloadManager
+    from scuffle.settings import Settings
+    root, games = two_clients
+    update = SyntheticBuild("0.0.1.2", changed=b"version two")
+    before = {}
+
+    class GameStartsMidway(FixtureCDN):
+        def fetch_many(self, entries, *, as_bytes=False, **kwargs):
+            for number, item in enumerate(super().fetch_many(entries, as_bytes=as_bytes, **kwargs)):
+                if number == 0 and starts == "during" and not before:
+                    before.update(published(root))
+                    games.append("wow")         # Retail starts, not the client being updated
+                    import time
+                    time.sleep(1.2)             # longer than the update waits between its checks
+                yield item
+            if starts == "last" and not before:
+                # Right after the last object, well within the time between two checks.
+                before.update(published(root))
+                games.append("wow")
+
+    cdn = GameStartsMidway(update, tmp_path / "update")
+    manager = DownloadManager(Settings(root=str(root), auto_update=True), Library(root),
+                              client_factory=lambda code, region: cdn)
+    try:
+        if starts == "before":
+            games.append("wow")
+            before.update(published(root))
+        job = manager.enqueue_automatic("wowf", "0.0.1.2")
+        wait_until(lambda: job.status == PAUSED and job.held)
+        # Waiting, without a window to tell it: nothing activated and no index published.
+        assert installed_state(root)["version"] == "0.0.1.1"
+        held = published(root)
+        assert {name: data for name, data in held.items() if name.endswith(".idx")} == \
+            {name: data for name, data in before.items() if name.endswith(".idx")}
+        if starts == "before":
+            assert held == before and not cdn.fetched_keys
+        if starts == "during":
+            # The transfer itself stops within a check: the object in flight is the last one stored.
+            assert len(cdn.fetched_keys) == 1
+        games.clear()
+        manager.set_playing(False)              # what the window says once its scan finds no game
+        wait_until(lambda: job.status == DONE)
+        assert installed_state(root)["version"] == "0.0.1.2"
+        # Each of the two objects the update changes, once.
+        assert len(cdn.fetched_keys) == len(set(cdn.fetched_keys)) == 2
+    finally:
+        manager.shutdown()
+
+
+def test_a_failed_automatic_update_is_told_once_and_waits_while_trying_again_by_hand_works(tmp_path, monkeypatch):
+    import shutil
+    from scuffle.downloads import DONE, FAILED, RUNNING, DownloadManager
+    from scuffle.settings import Settings
+    root = tmp_path / "install"
+    run_build(root, FixtureCDN(SyntheticBuild(), tmp_path / "first"))
+    real = shutil.disk_usage
+    full = [True]
+    monkeypatch.setattr(shutil, "disk_usage", lambda path: real(path)._replace(free=0) if full[0] else real(path))
+    builds = {"0.0.1.2": SyntheticBuild("0.0.1.2", changed=b"two"), "0.0.1.3": SyntheticBuild("0.0.1.3", changed=b"three")}
+    wanted = ["0.0.1.2"]
+    manager = DownloadManager(Settings(root=str(root), auto_update=True), Library(root),
+                              client_factory=lambda code, region: FixtureCDN(builds[wanted[0]], tmp_path / wanted[0]))
+    runs = []
+    manager.listeners.append(lambda job: job.status == RUNNING and (not runs or runs[-1] is not job)
+                             and runs.append(job))
+    try:
+        job = manager.enqueue_automatic("wowf", "0.0.1.2")
+        wait_until(lambda: job.status == FAILED)
+        # The library's own message, which names the space needed.
+        assert job.error.startswith("Not enough free space: about ") and job.error.endswith("GB are needed")
+        wait_until(lambda: "wowf" in Settings.load().auto_update_failures)       # saved right after
+        assert Settings.load().auto_update_failures["wowf"]["version"] == "0.0.1.2"
+        # The next checks find the same version and leave it: one failure, no loop.
+        assert manager.enqueue_automatic("wowf", "0.0.1.2") is None
+        assert manager.job("wowf") is job and len(runs) == 1
+        # Three hours later, or with a newer version, it is tried again by itself.
+        manager.settings.auto_update_failures["wowf"]["at"] -= 3 * 3600
+        wanted[0] = "0.0.1.3"
+        again = manager.enqueue_automatic("wowf", "0.0.1.3")
+        wait_until(lambda: again.status == FAILED)
+        assert len(runs) == 2 and manager.enqueue_automatic("wowf", "0.0.1.3") is None
+        # Try again works at once.
+        full[0] = False
+        manual = manager.enqueue("wowf", "update")
+        wait_until(lambda: manual.status == DONE)
+        assert installed_state(root)["version"] == "0.0.1.3" and not manual.automatic
+    finally:
+        manager.shutdown()

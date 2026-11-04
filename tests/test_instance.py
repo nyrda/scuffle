@@ -99,3 +99,15 @@ def test_a_command_never_runs_beside_the_window(tmp_path):
     # Without a window the command runs, and fails only because nothing is installed.
     with pytest.raises(LibraryError, match='not installed'):
         cli.main(['--root', str(tmp_path / 'games'), 'verify', 'wow'])
+
+
+def test_a_start_at_sign_in_hands_over_to_a_running_window_and_asks_only_for_the_tray():
+    pytest.importorskip('PySide6.QtWidgets')
+    window = instance.claim({'show': True})
+    received = []
+    window.serve(lambda request, reply: (received.append(request), reply.send(ok=True), reply.close()))
+    try:
+        assert cli.main(['--tray']) is None         # handed over, so this process opens no window
+        assert received == [{'tray': True}]
+    finally:
+        window.close()

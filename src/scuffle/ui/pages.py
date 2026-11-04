@@ -304,6 +304,8 @@ class ClientPage(Page):
     launch_options_clicked = Signal()
     launcher_clicked = Signal()
     steam_clicked = Signal()
+    auto_update_clicked = Signal()       # the client's own choice in the ⋯ menu
+    always_update_clicked = Signal()     # the button beside Update, while updates wait for the user
     mode_changed = Signal(str)
 
     def __init__(self):
@@ -372,6 +374,13 @@ class ClientPage(Page):
         self.cancel.setFixedSize(96, PRIMARY_HEIGHT)      # level with the main button
         self.cancel.setToolTip('Stop this download. What is already stored stays for later.')
         self.cancel.clicked.connect(self.cancel_clicked.emit)
+        # The consent a desktop notification asks for, where the tray's message has no buttons.
+        self.always = fixed(QPushButton('Always update automatically'))
+        self.always.setFixedHeight(PRIMARY_HEIGHT)
+        self.always.setToolTip('Install updates by themselves from now on, once every game in this folder has '
+                               'closed. Settings › Downloads turns it off again.')
+        self.always.clicked.connect(self.always_update_clicked.emit)
+        self.always.hide()
         self.more = QToolButton()
         self.more.setObjectName('more')
         self.more.setText('⋯')
@@ -384,6 +393,8 @@ class ClientPage(Page):
         self.import_action = menu.addAction('Import…', self.import_clicked.emit)
         self.import_action.setToolTip('Copy this client from an installation you already have, such as Battle.net\'s')
         self.launch_action = menu.addAction('Launch options…', self.launch_options_clicked.emit)
+        # Its text says what choosing it does, which the window sets as the menu opens.
+        self.auto_action = menu.addAction('Update automatically', self.auto_update_clicked.emit)
         # Their text says whether the entry exists, which the window checks as the menu opens.
         self.launcher_action = menu.addAction('Add to app launcher', self.launcher_clicked.emit)
         self.steam_action = menu.addAction('Add to Steam', self.steam_clicked.emit)
@@ -394,6 +405,7 @@ class ClientPage(Page):
         self.more.setMenu(menu)
         actions.addWidget(self.primary)
         actions.addWidget(self.cancel)
+        actions.addWidget(self.always)
         actions.addWidget(self.more)
         # Progress sits beside the buttons that control it, instead of in a row of its own.
         progress = QVBoxLayout()
@@ -489,7 +501,7 @@ class ClientPage(Page):
         if not self.empty.isHidden():
             return [self.empty_button]
         widgets = [self.banner.action, self.banner.close_button, *self.modes.group.buttons(),
-                   self.primary, self.cancel, self.more]
+                   self.primary, self.cancel, self.always, self.more]
         return widgets
 
     def accent(self, color: str) -> None:
@@ -519,7 +531,7 @@ class ClientPage(Page):
                     primary_enabled: bool, installed: bool, busy: bool, progress: float | None,
                     primary_tip: str = '', busy_launch: bool = False, paused: bool = False, queued: bool = False,
                     progress_text, cancellable: bool, modes: list, mode: str | None,
-                    facts: list, hint: str, hideable: bool = True) -> None:
+                    facts: list, hint: str, hideable: bool = True, offer_always: bool = False) -> None:
         self.main.show()
         self.empty.hide()
         self._client = client
@@ -551,6 +563,7 @@ class ClientPage(Page):
         self.cancel.setVisible(cancellable)
         self.cancel.setToolTip('Take it out of the queue' if queued else
                                'Stop this download. What is already stored stays for later.')
+        self.always.setVisible(offer_always)
         for action in (self.verify_action, self.folder_action, self.uninstall_action, self.menu_separator):
             action.setVisible(installed)
         self.import_action.setVisible(not installed)
@@ -598,6 +611,7 @@ class SettingsPage(Page):
     choose_folder = Signal(str)
     copy_diagnostics = Signal()
     move_folder = Signal()
+    start_at_sign_in = Signal(bool)      # an entry outside the settings file, which the window writes
 
     def __init__(self):
         super().__init__()
@@ -700,6 +714,15 @@ class SettingsPage(Page):
             grid.addWidget(box, grid.rowCount(), 0, 1, 3)
             box.toggled.connect(self.apply)
         grid.addWidget(self.tray_note, grid.rowCount(), 0, 1, 3)
+        self.sign_in_start = QCheckBox('Start Scuffle when I sign in, in the tray')
+        self.sign_in_start.setToolTip('Scuffle then checks for updates in the background. Without a tray '
+                                      'its window opens instead.')
+        self.sign_in_start.toggled.connect(lambda on: self._loading or self.start_at_sign_in.emit(on))
+        grid.addWidget(self.sign_in_start, grid.rowCount(), 0, 1, 3)
+        # Why the entry could not be changed, such as a file of the same name that Scuffle did not make.
+        self.sign_in_note = label('', 'caution', wrap=True)
+        self.sign_in_note.hide()
+        grid.addWidget(self.sign_in_note, grid.rowCount(), 0, 1, 3)
 
         # Clients
         clients = self.section_layouts['clients']
@@ -750,10 +773,15 @@ class SettingsPage(Page):
                                       self.downloads_grid.rowCount(), 1, 1, 2)
         self.pause_while_playing = QCheckBox('Pause downloads while a game is running')
         self.resume_downloads = QCheckBox('Resume unfinished downloads when Scuffle starts')
-        for box in [self.pause_while_playing, self.resume_downloads]:
+        self.auto_update = QCheckBox('Install updates automatically')
+        for box in [self.pause_while_playing, self.resume_downloads, self.auto_update]:
             self.downloads_grid.addWidget(box, self.downloads_grid.rowCount(), 0, 1, 3)
             self.download_fields.append(box)
             box.toggled.connect(self.apply)
+        self.downloads_grid.addWidget(label(
+            'Live clients update by themselves once every game in the installation folder has closed. '
+            'A test client\'s own ⋯ menu turns it on for that client.', 'small', wrap=True),
+            self.downloads_grid.rowCount(), 0, 1, 3)
         self.limit.valueChanged.connect(self.apply)
         self.workers.valueChanged.connect(self.apply)
         for box in (self.limit, self.workers):
@@ -905,7 +933,8 @@ class SettingsPage(Page):
         """The page's controls in reading order, for the window's tab order."""
         chain = [self.close_button, *self.sections.group.buttons()]
         if self.section == 'general':
-            chain += [self.browse, self.move_button, self.region, self.locale, self.show_notifications, self.keep_in_tray]
+            chain += [self.browse, self.move_button, self.region, self.locale, self.show_notifications, self.keep_in_tray,
+                      self.sign_in_start]
         elif self.section == 'clients':
             for category, _, _ in self.CATEGORIES:
                 if category == catalog.OTHER:
@@ -1035,6 +1064,7 @@ class SettingsPage(Page):
         self.workers.setValue(settings.workers)
         self.pause_while_playing.setChecked(settings.pause_while_playing)
         self.resume_downloads.setChecked(settings.resume_downloads)
+        self.auto_update.setChecked(settings.auto_update)
         self.show_notifications.setChecked(settings.show_notifications)
         self.keep_in_tray.setChecked(settings.keep_in_tray and self.keep_in_tray.isEnabled())
         if self.launch is not None:
@@ -1052,6 +1082,14 @@ class SettingsPage(Page):
             self._loading, was_loading = True, self._loading
             self.keep_in_tray.setChecked(available and self.settings.keep_in_tray)
             self._loading = was_loading
+
+    def show_start_at_sign_in(self, on: bool, problem: str = '') -> None:
+        """Whether Scuffle's own entry starts it at sign-in, and why a change did not apply."""
+        self._loading, was_loading = True, self._loading
+        self.sign_in_start.setChecked(on)
+        self._loading = was_loading
+        self.sign_in_note.setText(problem)
+        self.sign_in_note.setVisible(bool(problem))
 
     def lock_folder(self, reason: str) -> None:
         """Downloads write into the current folder, so it stays until they are done."""
@@ -1108,6 +1146,7 @@ class SettingsPage(Page):
         s.workers = self.workers.value()
         s.pause_while_playing = self.pause_while_playing.isChecked()
         s.resume_downloads = self.resume_downloads.isChecked()
+        s.auto_update = self.auto_update.isChecked()
         s.show_notifications = self.show_notifications.isChecked()
         if self.keep_in_tray.isEnabled():
             s.keep_in_tray = self.keep_in_tray.isChecked()
