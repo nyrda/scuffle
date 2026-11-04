@@ -19,19 +19,25 @@ content they share is stored once.
 - Linux through Proton and `umu-run`, and Windows natively.
 
 Scuffle is not affiliated with or endorsed by Blizzard Entertainment. Downloads
-come from Blizzard's public CDN. See [DESIGN.md](DESIGN.md) for how it works.
+come from Blizzard's public CDN. Scuffle is a third-party launcher, and you use
+it at your own risk. See [DESIGN.md](DESIGN.md) for how it works.
 
 ## Install
 
-**Nix**
+Scuffle is experimental. Back up your WTF and Interface folders before you
+point it at clients you care about, and expect rough edges. Download the
+current version from
+[Releases](https://github.com/nyrda/scuffle/releases). Each release lists the
+SHA-256 sums of its files in `SHA256SUMS`.
 
-```sh
-nix profile install .      # or nix run . to try it
-```
+**Windows**: `Scuffle.exe` is a single file with everything inside. Put it in a
+folder of its own and start it. It is not signed yet, so Smart App Control,
+which Windows 11 turns on for many new installations, can block it, sometimes
+only on its first start.
 
-**Linux without Nix**: the AppImage runs on Ubuntu 22.04 and newer, Fedora,
-Arch and SteamOS. Python, Qt, `umu-launcher` and the bridge are inside. Proton
-still comes from Steam, ProtonUp or another launcher.
+**Linux**: the AppImage runs on Ubuntu 22.04 and newer, Fedora, Arch and
+SteamOS. Python, Qt, `umu-launcher` and the bridge are inside. Proton still
+comes from Steam, ProtonUp or another launcher.
 
 ```sh
 chmod +x Scuffle-0.1.0-x86_64.AppImage
@@ -42,9 +48,11 @@ It needs FUSE, which desktops install as `fuse3`. Without it,
 `--appimage-extract-and-run` unpacks it to a temporary folder first, which goes
 when Scuffle exits, so close the game before Scuffle.
 
-**Windows**: `Scuffle.exe` is a single file with everything inside. It is not
-signed yet, so Smart App Control, which Windows 11 turns on for many new
-installations, can block it, sometimes only on its first start.
+**Nix**: the flake builds Scuffle from source.
+
+```sh
+nix profile install github:nyrda/scuffle   # or nix run github:nyrda/scuffle
+```
 
 ## First start
 
@@ -233,7 +241,8 @@ clipboard: Scuffle's version, the system, Proton and `umu-run`, the settings
 that matter, the clients and downloads, and the last lines of the Proton log.
 It leaves out your sign-in, account names and ids, your user name and your
 home folder. Read it before you share it all the same. `scuffle diagnostics`
-prints the same report.
+prints the same report. Report a bug as an
+[issue](https://github.com/nyrda/scuffle/issues) and paste the report there.
 
 ## Command line
 
@@ -260,3 +269,9 @@ for it. Use `start /wait "" Scuffle.exe ...` in cmd or
 ## Development
 
 Building, testing and packaging are in [DEVELOPMENT.md](DEVELOPMENT.md).
+
+## License
+
+Scuffle is under the [MIT License](LICENSE). `Scuffle.exe` and the AppImage
+also contain Python, Qt for Python (PySide6) under the LGPL 3 and the other
+programs listed in [DEVELOPMENT.md](DEVELOPMENT.md), each under its own license.
