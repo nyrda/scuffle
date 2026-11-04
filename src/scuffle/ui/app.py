@@ -694,7 +694,7 @@ class MainWindow(QMainWindow):
         elif launching:
             # The button names the same phase as the chip and the list.
             phase = self.phases[code]
-            primary = 'Running' if phase == 'Running' else phase.split(' for ')[0] + '…'
+            primary = 'Running' if phase == 'Running' else phase.split(' for ')[0].split(' · ')[0] + '…'
         elif not state:
             primary = 'Install'
         elif self.updates.get(code):

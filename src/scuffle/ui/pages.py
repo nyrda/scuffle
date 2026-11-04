@@ -290,7 +290,7 @@ def column(parent_layout, *, width: int = COLUMN_WIDTH) -> QVBoxLayout:
 
 class ClientPage(Page):
     PRIMARY_LABELS = ['Play', 'Sign in and play', 'Install', 'Update', 'Repair', 'Try again', 'Pause',
-                      'Resume', 'Queued', 'Checking…', 'Connecting…', 'Starting…', 'Running']
+                      'Resume', 'Queued', 'Checking…', 'Connecting…', 'In login queue…', 'Starting…', 'Running']
     SIDE_BY_SIDE = 1400      # page width from which the folder card sits beside the client
 
     primary_clicked = Signal()

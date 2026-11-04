@@ -20,6 +20,8 @@ AUTHENTICATION_SERVICE = 0xc02f8216
 ACCOUNT_SERVICE = 0x22dc2464         # bnet.protocol.account.v2.client.AccountService
 RESPONSE_SERVICE = 254
 CONNECT = LOGON = LOGON_COMPLETE = 1
+QUEUE_UPDATE = 2
+QUEUE_END = 3
 VERIFY_AUTH_TOKEN = 2
 GENERATE_AUTH_TOKEN = 3
 EXTERNAL_CHALLENGE = 4
@@ -30,6 +32,12 @@ LOCALE = 'enUS'
 CHALLENGES = (b'web_auth_url', b'legal_form', b'authenticator')
 # Battle.net's answer to a logon from a build it does not let in yet, with or without a login.
 ERROR_SERVER_IS_PRIVATE = 33
+LOGON_WAIT = 30
+# Battle.net sends a queue update about every 25 seconds, a queue end now and then and more updates after it.
+QUEUE_SILENCE = 120
+# It also closes a queued connection after a minute or two, and the logon starts over on a new one.
+QUEUE_RETRY = 3
+QUEUE_LIMIT = 30 * 60
 # Game account regions as the launch settings name them. Battle.net writes REGION=EU for region 2.
 GAME_REGIONS = {1: 'US', 2: 'EU', 3: 'KR', 4: 'TW', 5: 'CN'}
 
@@ -46,6 +54,10 @@ class RpcRejected(RuntimeError):
     def __init__(self, status):
         super().__init__(f'BGS RPC rejected with status {status}')
         self.status = status
+
+
+class QueueDropped(RuntimeError):
+    """The connection ended while Battle.net's login queue held this logon."""
 
 
 class BuildRefused(RuntimeError):
@@ -67,6 +79,9 @@ def launch_name(name) -> bool:
 
 
 class BGS:
+    on_queue = staticmethod(lambda position, exit_time: None)
+    queued = False
+
     def __init__(self, host):
         context = ssl.create_default_context()
         connection = socket.create_connection((host, PORT), timeout=10)
@@ -147,6 +162,29 @@ class BGS:
             raise
         log('logon_request_accepted', 'with_credential', bool(credential))
 
+    def notifications(self):
+        """The logon's notifications. Battle.net's login queue is waited out here and has no time limit of its own."""
+        deadline = time.monotonic() + LOGON_WAIT
+        while time.monotonic() < deadline:
+            try:
+                header, body = self.receive()
+            except (RuntimeError, OSError) as error:
+                if self.queued:
+                    raise QueueDropped(str(error)) from error
+                raise
+            method = first(header, 2, 0)
+            if method not in (QUEUE_UPDATE, QUEUE_END):
+                yield header, body
+                continue
+            if not self.queued:
+                self.queued = True
+                self.socket.settimeout(QUEUE_SILENCE)
+            deadline = time.monotonic() + QUEUE_SILENCE
+            if method == QUEUE_UPDATE:
+                state = fields(first(body, 1, b''))
+                log('login_queue', 'position', first(state, 1, 0))
+                self.on_queue(first(state, 1, 0), first(state, 2, 0))
+
     def logon(self, credential, device, version):
         self.request_logon(device, version, credential)
         return self.await_logon(credential)
@@ -154,9 +192,7 @@ class BGS:
     def web_challenge(self, device, version):
         """Start a logon without a credential and return the browser sign-in URL."""
         self.request_logon(device, version)
-        deadline = time.monotonic() + 30
-        while time.monotonic() < deadline:
-            header, body = self.receive()
+        for header, body in self.notifications():
             method = first(header, 2, 0)
             if method == EXTERNAL_CHALLENGE and first(body, 2) == b'web_auth_url':
                 url = first(body, 3, b'').decode(errors='replace')
@@ -182,9 +218,7 @@ class BGS:
                                'Sign in again, since each ticket works only once') from None
 
     def await_logon(self, credential):
-        deadline = time.monotonic() + 30
-        while time.monotonic() < deadline:
-            header, body = self.receive()
+        for header, body in self.notifications():
             method = first(header, 2, 0)
             if method == LOGON_COMPLETE and isinstance(first(body, 1, 0), int) and first(body, 2):
                 status = first(body, 1, 0)
@@ -268,24 +302,42 @@ def logon_battle_tag(record):
     return None
 
 
-def login(vault, host, version, sign_in):
+def queued_logon(host, queue, start):
+    """Connect and run start(bgs), again on a new connection whenever the login queue drops it.
+
+    Returns the open connection and start's result. A failure closes the connection.
+    """
+    give_up = time.monotonic() + QUEUE_LIMIT
+    while True:
+        bgs = BGS(host)
+        if queue:
+            bgs.on_queue = queue
+        try:
+            bgs.connect()
+            return bgs, start(bgs)
+        except QueueDropped as error:
+            bgs.socket.close()
+            if time.monotonic() >= give_up:
+                raise RuntimeError("Battle.net's login queue did not finish in 30 minutes. Try again later.") from error
+            log('login_queue_dropped')
+            time.sleep(QUEUE_RETRY)
+        except BaseException:
+            bgs.socket.close()
+            raise
+
+
+def login(vault, host, version, sign_in, queue=None):
     """Sign in through the browser and save a fresh broker credential for the account signed in to.
 
     sign_in receives the battle.net URL and returns the ticket from its redirect.
     No connection stays open while the user signs in. Returns the login the session was saved to.
     """
     device = vault.device_id()
-    bgs = BGS(host)
-    try:
-        bgs.connect()
-        url = bgs.web_challenge(device, version)
-    finally:
-        bgs.socket.close()
+    bgs, url = queued_logon(host, queue, lambda bgs: bgs.web_challenge(device, version))
+    bgs.socket.close()
     ticket = sign_in(url)
-    bgs = BGS(host)
+    bgs, _ = queued_logon(host, queue, lambda bgs: bgs.web_challenge(device, version))
     try:
-        bgs.connect()
-        bgs.web_challenge(device, version)
         record = bgs.verify_web_ticket(ticket)
         # Keyed by the account id the logon names, so the session is saved as that account only.
         with vault.adding(first(record, 1)) as added:
@@ -299,16 +351,14 @@ def login(vault, host, version, sign_in):
         bgs.socket.close()
 
 
-def renew(login, host, version):
+def renew(login, host, version, queue=None):
     """Consume a login's broker credential, then save its successor and a game credential."""
     credential = login.load_session()
     log('credential_loaded', 'bytes', len(credential))
-    bgs = BGS(host)
+    device = login.device_id()
+    log('logon_device_id', 'bytes', len(device))
+    bgs, record = queued_logon(host, queue, lambda bgs: bgs.logon(credential, device, version))
     try:
-        bgs.connect()
-        device = login.device_id()
-        log('logon_device_id', 'bytes', len(device))
-        record = bgs.logon(credential, device, version)
         # Before anything is saved, so one account's session is never renewed as another's.
         if not login.claim(first(record, 1)):
             raise CredentialRejected('The saved session signed in to another Battle.net account')
