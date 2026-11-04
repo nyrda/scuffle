@@ -1,15 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
-  <!-- The same club for 16 to 24 px: no grain, wrapping or shadow, a thicker nail. -->
+  <!-- The same letter for 16 to 24 px: upright and square, on the 16 px grid, where a tilt and
+       tapers turn into blurred pixels. -->
   <rect x="8" y="8" width="240" height="240" rx="56" fill="#1b2232"/>
-  <g transform="translate(122 130) rotate(-40) scale(1.12)">
-    <path d="M 48 -30 L 68 -30 L 59 104 Z" fill="#9aa3b4"/>
-    <path d="M 58 -30 L 68 -30 L 59 104 Z" fill="#6c7487"/>
-    <path d="M -58 -11 L 44 -30 L 94 -42 L 100 -37 L 100 32 L 48 24 L -58 11 Z" fill="#9a6a3a"/>
-    <path d="M -58 -11 L 44 -30 L 94 -42 L 100 -37 L 100 -14 L 48 -8 L -58 -1 Z" fill="#c9935a"/>
-    <path d="M 45 24 L 58 37 L 71 25 Z" fill="#5b3a1f"/>
-    <rect x="39" y="-43" width="38" height="11" rx="2.5" fill="#c3cad8"/>
-    <rect x="39" y="-36" width="38" height="4" rx="1.5" fill="#8d96a8"/>
-    <rect x="-96" y="-13" width="40" height="26" rx="4" fill="#d9cdb3"/>
-    <path d="M -96 -13 L -110 -22 L -112 20 L -96 13 Z" fill="#87592f"/>
+  <g fill="#c9935a">
+    <path d="M 112 32 L 144 32 L 136 224 L 120 224 Z"/>
+    <rect x="64" y="64" width="128" height="32"/>
+    <rect x="48" y="112" width="160" height="32"/>
+    <rect x="64" y="160" width="128" height="32"/>
   </g>
 </svg>
