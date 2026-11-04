@@ -469,7 +469,7 @@ and run to completion.
 Each launch consumes the saved ticket, reserves its successor and issues a
 separate game ticket. A rejected session starts the sign-in again. Battle.net
 can also refuse every logon from one build, with status 33
-(`ERROR_SERVER_IS_PRIVATE`), as it did for about two hours after publishing
+(`ERROR_SERVER_IS_PRIVATE`), as it did for a while after publishing
 Forever 1.60.1.70790, before accepting that build again with no change on our
 side. That says nothing about the session, so Scuffle keeps it, opens no browser
 and asks the user to try later. It always logs on as the build it starts, as the
