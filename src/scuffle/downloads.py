@@ -154,9 +154,10 @@ class DownloadManager:
                 job.version = row['version'] if isinstance(row.get('version'), str) else ''
             if job.kind != 'verify':
                 job.done_bytes, job.total_bytes = self.library.download_progress(job.client)
-            # An automatic update carries on by itself, as long as the user still consents to it.
-            carries_on = self.settings.resume_downloads or \
-                (job.automatic and self.settings.updates_automatically(job.client))
+            # An automatic update carries on by itself only while the user still consents to it,
+            # whatever the choice for other downloads.
+            carries_on = self.settings.updates_automatically(job.client) if job.automatic \
+                else self.settings.resume_downloads
             if status == PAUSED and carries_on and present:
                 job.status = QUEUED
             self.jobs.append(job)

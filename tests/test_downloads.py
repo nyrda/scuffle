@@ -275,7 +275,8 @@ def test_an_interrupted_automatic_update_carries_on_after_a_restart_while_consen
     manager.library.create()
     manager.enqueue_automatic('wow', '12.0.7.1')
     manager.shutdown()                                 # closing Scuffle pauses it, which is no user's pause
-    restored = managers(auto_update=consent)
+    # Resuming other downloads on start is no consent to this one.
+    restored = managers(auto_update=consent, resume_downloads=True)
     job = restored.job('wow')
     assert (job.status, job.automatic, job.version) == (QUEUED if consent else PAUSED, True, '12.0.7.1')
 
