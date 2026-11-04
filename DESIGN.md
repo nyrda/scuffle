@@ -968,8 +968,8 @@ Three checks keep it off the store:
   finds games Scuffle did not start.
 - The job looks itself, so it never depends on the window. Under the library
   lock and before anything is planned it lists the processes with
-  `Library.running_games`. Between objects and between the files it stages it
-  looks again at most every second. Right before it publishes the indexes it
+  `Library.running_games`. Before each manifest, object and staged file it
+  stores, it looks again at most every second. Right before it publishes the indexes it
   looks once more without that limit, through the updater's `may_publish`. A
   game found any of these ways holds it as `set_playing` would, and it stops as
   a pause does. Everything it stored stays for the resume.

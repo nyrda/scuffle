@@ -666,11 +666,14 @@ class Updater:
         if self.source:
             try:
                 self.source.extract_to(key, path)
+                self.check_cancelled()
                 self.store.put(key, path)
                 return path
             except (KeyError, StoreError, OSError):
                 path.unlink(missing_ok=True)
         path = self.client.get_object(key, size)
+        # A manifest takes a while to arrive. A pause or a game that started meanwhile comes first.
+        self.check_cancelled()
         self.store.put(key, path)
         return path
 
@@ -771,6 +774,7 @@ class Updater:
         if self.locale not in config.get('supported_locales', []):
             raise LibraryError(f'{self.entry.label} does not support the locale {self.locale}')
         self.snapshot.update(folder=folder)
+        self.check_cancelled()          # before the first write into the installation
         for key, path in [(version['BuildConfig'], build_path), (version['CDNConfig'], cdn_path)]:
             atomic_bytes(self.root / 'Data/config' / key[:2] / key[2:4] / key, path.read_bytes())
         key = self.client.runtime_keyring()

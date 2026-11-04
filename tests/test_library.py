@@ -1298,7 +1298,7 @@ def two_clients(tmp_path, monkeypatch):
     return root, games
 
 
-@pytest.mark.parametrize("starts", ["before", "during", "last"])
+@pytest.mark.parametrize("starts", ["before", "planning", "during", "last"])
 def test_an_automatic_update_keeps_off_the_store_while_any_game_of_the_folder_runs(tmp_path, two_clients, starts):
     from scuffle.downloads import DONE, PAUSED, DownloadManager
     from scuffle.settings import Settings
@@ -1307,6 +1307,16 @@ def test_an_automatic_update_keeps_off_the_store_while_any_game_of_the_folder_ru
     before = {}
 
     class GameStartsMidway(FixtureCDN):
+        def get_object(self, key, size=None):
+            result = super().get_object(key, size)
+            if starts == "planning" and not before:
+                # While a manifest arrives, before the update stored anything.
+                before.update(published(root))
+                games.append("wow")
+                import time
+                time.sleep(1.2)
+            return result
+
         def fetch_many(self, entries, *, as_bytes=False, **kwargs):
             for number, item in enumerate(super().fetch_many(entries, as_bytes=as_bytes, **kwargs)):
                 if number == 0 and starts == "during" and not before:
@@ -1334,7 +1344,7 @@ def test_an_automatic_update_keeps_off_the_store_while_any_game_of_the_folder_ru
         held = published(root)
         assert {name: data for name, data in held.items() if name.endswith(".idx")} == \
             {name: data for name, data in before.items() if name.endswith(".idx")}
-        if starts == "before":
+        if starts in ("before", "planning"):
             assert held == before and not cdn.fetched_keys
         if starts == "during":
             # The transfer itself stops within a check: the object in flight is the last one stored.
