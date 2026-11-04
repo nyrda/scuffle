@@ -169,5 +169,6 @@ stdenvNoCC.mkDerivation {
   meta = {
     description = "Scuffle as an AppImage for Linux distributions without Nix";
     platforms = [ "x86_64-linux" ];
+    license = lib.licenses.mit;
   };
 }

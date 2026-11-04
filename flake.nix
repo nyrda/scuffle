@@ -61,7 +61,10 @@
         # A private dbus-daemon carries the notification tests.
         nativeCheckInputs = [ python.pkgs.pytestCheckHook pkgs.dbus ];
         pythonImportsCheck = [ "scuffle.library" "scuffle.launch" "scuffle.cli" ];
-        meta.mainProgram = "scuffle";
+        meta = {
+          mainProgram = "scuffle";
+          license = pkgs.lib.licenses.mit;
+        };
       };
       # A Linux package for distributions without Nix. See packaging/appimage.
       appimage = pkgs.callPackage ./packaging/appimage { inherit version bridge app; source = ./src/scuffle; };

@@ -76,3 +76,33 @@ python.org with the `py` launcher. On a Windows checkout,
 
 The build tools are pinned with hashes in `packaging/windows/requirements.txt`.
 After changing `requirements.in`, regenerate it with the command at its top.
+
+## What the packages contain
+
+Both packages bundle other programs, unchanged and each under its own license:
+
+| Program | License | In |
+| --- | --- | --- |
+| CPython, from python-build-standalone on Linux | PSF License | both |
+| Qt for Python (PySide6, Shiboken6) and the Qt libraries it ships | LGPL 3 | both |
+| PyInstaller's bootloader | GPL 2 with an exception for bundled programs | `Scuffle.exe` |
+| umu-launcher | GPL 3 | AppImage |
+| jeepney | MIT | AppImage |
+| The xcb utility libraries from Debian 12 | MIT and X11 | AppImage |
+| The AppImage type 2 runtime, with the libraries it links | MIT, and theirs | AppImage |
+
+The exact versions and download addresses are in `packaging/appimage/default.nix`
+and `packaging/windows/requirements.txt`. Their sources are at those projects.
+
+## Releases
+
+A tag such as `v0.1.0` that matches the version in `pyproject.toml` makes CI
+build both packages, test them and publish a GitHub release with
+`Scuffle.exe`, `Scuffle-<version>-x86_64.AppImage` and their `SHA256SUMS`.
+Before tagging, refresh the client snapshot and the README picture, and raise
+the version in `pyproject.toml`.
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
