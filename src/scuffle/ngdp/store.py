@@ -203,6 +203,14 @@ def _span_header(ekey: bytes, size: int, offset: int, segment: int = 0) -> bytes
     return header
 
 
+def _owned_header(header: bytes, ekey: bytes, size: int, offset: int, segment: int) -> bool:
+    """Whether header opens this object's span here, as this store or the game wrote it.
+
+    The game indexes by the nine-byte key prefix, and a span it moves gets a header over
+    that prefix with the rest of the key zeroed. The BLTE check still binds the full key.
+    """
+    return header in (_span_header(ekey, size, offset, segment),
+                      _span_header(ekey[:9] + bytes(7), size, offset, segment))
 
 
 def _index_files(data_dir: Path) -> dict[int, Path]:
@@ -336,6 +344,11 @@ class CascStore:
                         id INTEGER PRIMARY KEY CHECK (id = 0), segment INTEGER NOT NULL,
                         tail_end INTEGER NOT NULL
                     );
+                    -- The latest index file of each bucket the catalogue agrees with: this
+                    -- store's own publication, or the game's once its moves were followed.
+                    CREATE TABLE IF NOT EXISTS indexes(
+                        bucket INTEGER PRIMARY KEY, name TEXT NOT NULL
+                    );
                 """)
                 self._recover()
         except BaseException:
@@ -395,7 +408,7 @@ class CascStore:
                         stream.seek(offset)
                         actual = _read_exact(stream, SPAN_HEADER_SIZE)
                         canonical = _span_header(key, size, offset, segment)
-                        if actual == canonical:
+                        if _owned_header(actual, key, size, offset, segment):
                             continue
                         if actual != _legacy_span_header(key, size, offset):
                             raise StoreError(f"unfamiliar or corrupt owned span header: data.{segment:03d} at {offset}")
@@ -522,6 +535,86 @@ class CascStore:
         self._db.execute("INSERT OR REPLACE INTO objects VALUES(?,?,?,?,?,?)",
                          (ekey, ekey[:9], bucket_for_key(ekey), segment, offset, size))
 
+    def _follow_game_moves(self) -> None:
+        """Take on the places the game moved owned objects to.
+
+        The game compacts a segment with free space, such as the space a cleanup
+        leaves when it forgets objects without rewriting their segment. It moves
+        the live spans together, writes new indexes and shortens the file. Only
+        when the latest indexes are not the ones this catalogue agrees with, an
+        owned object they name elsewhere, with its span header and BLTE intact
+        there, moves in the catalogue. Data files are only read. A segment
+        shorter than its durable end is trusted again only when every object in
+        it now ends inside the file, so a real loss still fails below.
+        """
+        indexes = _index_files(self.data_dir)
+        names = {bucket: path.name for bucket, path in indexes.items()}
+        if not names or names == dict(self._db.execute("SELECT bucket,name FROM indexes")):
+            return
+        self._db.execute("CREATE TEMP TABLE IF NOT EXISTS indexed(prefix BLOB PRIMARY KEY, segment INTEGER NOT NULL,"
+                         " offset INTEGER NOT NULL, size INTEGER NOT NULL) WITHOUT ROWID")
+        self._db.execute("DELETE FROM temp.indexed")
+        try:
+            for bucket, path in sorted(indexes.items()):
+                if path.is_symlink() or not path.is_file():
+                    return
+                self._db.executemany("INSERT OR REPLACE INTO temp.indexed VALUES(?,?,?,?)",
+                                     _index_entries(path, bucket))
+        except (OSError, StoreError, struct.error):
+            # Indexes this store cannot read move nothing. Recovery then checks the catalogue as before.
+            self._db.rollback()
+            return
+        moves = self._db.execute(
+            "SELECT o.ekey,i.segment,i.offset,o.size FROM objects o JOIN temp.indexed i ON i.prefix=o.prefix "
+            "WHERE i.size=o.size AND (i.segment!=o.segment OR i.offset!=o.offset) ORDER BY i.segment,i.offset").fetchall()
+        followed, unverified = [], 0
+        for ekey, segment, offset, size in moves:
+            if self._span_intact(ekey, segment, offset, size):
+                followed.append((segment, offset, ekey))
+            else:
+                unverified += 1
+        self._db.execute("DELETE FROM temp.indexed")
+        self._db.commit()
+        self._db.execute("PRAGMA synchronous=FULL")
+        try:
+            self._db.executemany("UPDATE objects SET segment=?,offset=? WHERE ekey=?", followed)
+            for segment, durable in self._db.execute("SELECT segment,durable_end FROM segments").fetchall():
+                path = self._path(segment)
+                if not path.is_file() or path.is_symlink():
+                    continue
+                size = path.stat().st_size
+                if size >= durable:
+                    continue
+                end = self._db.execute("SELECT max(offset+?+size) FROM objects WHERE segment=?",
+                                       (SPAN_HEADER_SIZE, segment)).fetchone()[0] or 0
+                if end <= size:
+                    self._db.execute("UPDATE segments SET durable_end=?,tail_end=? WHERE segment=?", (size, size, segment))
+            if not unverified:
+                self._db.execute("DELETE FROM indexes")
+                self._db.executemany("INSERT INTO indexes VALUES(?,?)", names.items())
+            self._db.commit()
+        except BaseException:
+            self._db.rollback()
+            raise
+        finally:
+            self._db.execute("PRAGMA synchronous=NORMAL")
+
+    def _span_intact(self, ekey: bytes, segment: int, offset: int, size: int) -> bool:
+        path = self._path(segment)
+        if path.is_symlink() or not path.is_file():
+            return False
+        with path.open("rb") as stream:
+            if os.fstat(stream.fileno()).st_size < offset + SPAN_HEADER_SIZE + size:
+                return False
+            stream.seek(offset)
+            if not _owned_header(stream.read(SPAN_HEADER_SIZE), ekey, size, offset, segment):
+                return False
+            try:
+                _verify_blte(stream, size, ekey)
+            except StoreError:
+                return False
+        return True
+
     def _recover(self) -> None:
         """Recover canonical updater spans without truncating unclaimed bytes.
 
@@ -529,6 +622,7 @@ class CascStore:
         Unknown or incomplete tails remain physically intact and unclaimed.
         The append boundary advances to EOF, or seals an oversized segment.
         """
+        self._follow_game_moves()
         known = {row[0]: row[1] for row in self._db.execute("SELECT segment,durable_end FROM segments")}
         for path in sorted(self.data_dir.iterdir()):
             match = _DATA_NAME.fullmatch(path.name)
@@ -560,8 +654,8 @@ class CascStore:
                         if valid:
                             stream.seek(location)
                             header = stream.read(SPAN_HEADER_SIZE)
-                            valid = header in (_span_header(key, size, location, segment),
-                                               _legacy_span_header(key, size, location))
+                            valid = (_owned_header(header, key, size, location, segment)
+                                     or header == _legacy_span_header(key, size, location))
                             if valid:
                                 try:
                                     _verify_blte(stream, size, key)
@@ -705,7 +799,7 @@ class CascStore:
         with self._path(segment).open("rb") as stream:
             stream.seek(offset)
             actual = _read_exact(stream, SPAN_HEADER_SIZE)
-            if actual != _span_header(ekey, size, offset, segment):
+            if not _owned_header(actual, ekey, size, offset, segment):
                 if actual == _legacy_span_header(ekey, size, offset):
                     raise StoreError("legacy span header requires CascStore.upgrade_span_headers")
                 raise StoreError("owned span header checksum or metadata mismatch")
@@ -904,6 +998,8 @@ class CascStore:
             # Appends from here on are not in these indexes yet. A crash before this commit
             # keeps the older end, which only makes verify_indexes stricter.
             self._db.execute("INSERT OR REPLACE INTO published VALUES(0,?,?)", frontier or (0, 0))
+            self._db.execute("DELETE FROM indexes")
+            self._db.executemany("INSERT INTO indexes VALUES(?,?)", ((bucket, path.name) for bucket, path in enumerate(published)))
             self._commit()
             return published
 

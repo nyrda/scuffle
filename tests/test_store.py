@@ -846,3 +846,79 @@ def test_compaction_interrupted_mid_move_keeps_the_object_another_client_needs(t
     monkeypatch.setattr(CascStore, "_record", original)
     with CascStore(tmp_path) as casc:
         assert casc.read(needed) == dict(objects)[needed]
+
+
+def forget_and_publish(root, objects, keep):
+    """Cleanup forgets the objects no client needs and leaves their bytes, as below its threshold."""
+    import sqlite3
+    with CascStore(root) as casc:
+        for key, data in objects:
+            casc.put(key, data)
+        casc.publish()
+    live = root / "live.sqlite"
+    with sqlite3.connect(live) as db:
+        db.execute("CREATE TABLE keys(ekey BLOB PRIMARY KEY) WITHOUT ROWID")
+        db.executemany("INSERT INTO keys VALUES(?)", [(key,) for key, _ in keep])
+    db.close()
+    with CascStore(root) as casc:
+        casc.compact(live, threshold=1.0)
+        casc.publish()
+    live.unlink()
+
+
+def game_compacts(root, keep, *, damage=None):
+    """Do what the game does with a segment's free space: move the live spans together, each
+    under the header the game writes over its nine-byte key, shorten the file and write a new
+    index generation. damage changes a byte of that object's moved span."""
+    data_dir = root / "Data" / "data"
+    segment = data_dir / "data.000"
+    old = segment.read_bytes()
+    with CascStore(root) as casc:
+        places = {key: casc._location(key) for key, _ in keep}
+    packed, entries = bytearray(), []
+    for key, _ in sorted(keep, key=lambda item: places[item[0]][1]):
+        _, offset, size = places[key]
+        body = bytearray(old[offset + 30:offset + 30 + size])
+        if key == damage:
+            body[-1] ^= 0xff
+        entries.append((key[:9], 0, len(packed), size))
+        packed += _span_header(key[:9] + bytes(7), size, len(packed), 0) + body
+    segment.write_bytes(bytes(packed))
+    for path in sorted(data_dir.glob("*.idx")):
+        bucket, generation = int(path.name[:2], 16), int(path.name[2:10], 16)
+        newer = data_dir / f"{bucket:02x}{generation + 1:08x}.idx"
+        if not newer.exists():
+            newer.write_bytes(path.read_bytes())
+            rewrite_index_entries(newer, [entry for entry in entries if bucket_for_key(entry[0]) == bucket])
+    return len(old), len(packed)
+
+
+def test_a_segment_the_game_compacted_keeps_every_object_at_its_new_place(tmp_path):
+    objects = [blte(os.urandom(400) + bytes([i])) for i in range(12)]
+    keep = objects[::3]                         # gaps in front of and between the live objects
+    forget_and_publish(tmp_path, objects, keep)
+    before, after = game_compacts(tmp_path, keep)
+    assert after < before
+    with CascStore(tmp_path) as casc:
+        assert casc.count == len(keep)
+        for key, data in keep:
+            assert casc.read(key) == data
+        # Appends continue at the shorter end, and the next publication names every new place.
+        extra = blte(b"after the game ran")
+        casc.put(*extra)
+        casc.publish()
+        assert casc.verify_indexes()
+    assert (tmp_path / "Data/data/data.000").stat().st_size > after
+    with CascStore(tmp_path) as casc:
+        for key, data in [*keep, extra]:
+            assert casc.read(key) == data
+
+
+def test_an_object_the_game_moved_that_does_not_check_out_still_fails_closed(tmp_path):
+    objects = [blte(os.urandom(400) + bytes([i])) for i in range(12)]
+    keep = objects[::3]
+    forget_and_publish(tmp_path, objects, keep)
+    # The last live object's old place lies beyond the shorter file, so its loss shows.
+    game_compacts(tmp_path, keep, damage=keep[-1][0])
+    with pytest.raises(StoreError, match="durable CASC segment was truncated"):
+        CascStore(tmp_path)

@@ -323,6 +323,13 @@ and committing to SQLite cost more.
   and fetched again.
 - A seed object is read once and checked in memory, from a segment file that
   stays open, since seeding reads in physical order.
+- The game compacts segments with free space, such as the space a cleanup leaves
+  below its threshold. It moves the live spans together, writes each header
+  over the nine-byte key it indexes by, writes new indexes and shortens the
+  file. The store remembers the index files it published. When the latest ones
+  differ, it reads them and takes on every new place where the object's header
+  and BLTE check out. A shortened segment counts as whole again only when all
+  its objects end inside it. Anything else still fails as a loss.
 
 ### Checking files
 
