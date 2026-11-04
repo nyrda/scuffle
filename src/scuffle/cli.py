@@ -48,6 +48,8 @@ def client_code(code: str) -> str:
 def main(argv=None):
     parser = argparse.ArgumentParser(prog='scuffle', description=__doc__)
     parser.add_argument('--root', type=Path, help='Installation folder, by default the saved one')
+    parser.add_argument('--tray', action='store_true',
+                        help='Open the window hidden in the tray, as Scuffle starts at sign-in')
     commands = parser.add_subparsers(dest='command')
     commands.add_parser('clients', help='List the clients and their installed versions')
     commands.add_parser('sign-in', help='Sign in to a Battle.net account through the browser and make it active')
@@ -75,7 +77,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.command is None:
         from .ui.app import main as interface
-        return interface()
+        return interface(tray=args.tray)
     if args.command == 'diagnostics':
         # Before the settings load, so a broken settings file still gets a report.
         from .diagnostics import command_line_report

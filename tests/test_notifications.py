@@ -60,9 +60,9 @@ class NotificationService:
     def serve(self):
         number = 0
         while not self.stop.is_set():
-            for id, sender in iter_queue(self.clicks):
+            for id, sender, *key in iter_queue(self.clicks):
                 signal = new_signal(DBusAddress('/org/freedesktop/Notifications', interface='org.freedesktop.Notifications'),
-                                    'ActionInvoked', 'us', (id, 'default'))
+                                    'ActionInvoked', 'us', (id, key[0] if key else 'default'))
                 signal.header.fields[HeaderFields.destination] = sender
                 self.connection.send(signal)
             try:
@@ -149,6 +149,28 @@ def test_without_a_bus_or_service_a_notification_never_blocks_and_the_next_one_s
         _, _, _, body = service.shown.get(timeout=5)
         assert body[3] == 'Update for Forever'
         assert service.shown.empty()
+    finally:
+        notifier.close()
+        service.close()
+
+
+def test_buttons_reach_the_service_and_each_names_its_client_and_choice(qt, session_bus, monkeypatch):
+    monkeypatch.setenv('DBUS_SESSION_BUS_ADDRESS', session_bus)
+    service = NotificationService()
+    notifier = Notifier()
+    try:
+        clicked, acted = [], []
+        notifier.clicked.connect(clicked.append)
+        notifier.acted.connect(lambda client, key: acted.append((client, key)))
+        notifier.show('Update for World of Warcraft', 'Version 12.0.7.1 is available.', 'wow',
+                      actions=[('update', 'Update now'), ('always', 'Always update automatically')])
+        id, sender, _, body = service.shown.get(timeout=5)
+        assert body[5] == ['default', 'Open Scuffle', 'update', 'Update now', 'always', 'Always update automatically']
+        # A key the notification never offered is ignored, then its own buttons and the body count.
+        for key in ['delete-everything', 'always', 'default']:
+            service.clicks.put((id, sender, key))
+        wait_for(qt, lambda: clicked)
+        assert acted == [('wow', 'always')] and clicked == ['wow']
     finally:
         notifier.close()
         service.close()

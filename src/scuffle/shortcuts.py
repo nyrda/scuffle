@@ -1,8 +1,10 @@
-"""Entries that start one client from the desktop's app launcher, and the command they run.
+"""Entries that start one client from the desktop's app launcher, the entry that starts
+Scuffle at sign-in, and the command they run.
 
 Every file written here carries a marker that names its client: a key in a desktop entry,
-a text chunk in a PNG, the --shortcut argument in a Windows link. Removal checks the
-marker, so a file Scuffle did not write is never deleted, whatever its name.
+a text chunk in a PNG, the --shortcut argument in a Windows link. The sign-in entry carries
+a key of its own on Linux and the --tray argument on Windows. Removal checks the marker, so
+an entry Scuffle did not write is never deleted, whatever its name.
 """
 from __future__ import annotations
 
@@ -19,6 +21,10 @@ from .library import atomic_bytes
 from .settings import data_dir
 
 MARKER = 'X-Scuffle-Client'
+AUTOSTART_MARKER = 'X-Scuffle-Autostart'
+TRAY_FLAG = '--tray'          # Scuffle's option to start hidden in the tray
+RUN_KEY = r'Software\Microsoft\Windows\CurrentVersion\Run'
+RUN_VALUE = 'Scuffle'
 ICON_SIZES = (48, 64, 128, 256)
 PNG_SIGNATURE = b'\x89PNG\r\n\x1a\n'
 PNG_KEYWORD = b'Scuffle'
@@ -181,12 +187,12 @@ def desktop_entry(client, command: list[str]) -> str:
     return '\n'.join(lines) + '\n'
 
 
-def desktop_marker(path: Path) -> str | None:
+def desktop_marker(path: Path, key: str = MARKER) -> str | None:
     try:
         text = path.read_text(errors='replace')
     except OSError:
         return None
-    found = re.search(rf'^{re.escape(MARKER)}=(.*)$', text, re.MULTILINE)
+    found = re.search(rf'^{re.escape(key)}=(.*)$', text, re.MULTILINE)
     return found.group(1).strip() if found else None
 
 
@@ -348,3 +354,76 @@ def remove_from_launcher(code: str) -> bool:
     for icon in icon_paths(code):
         remove_marked(icon, code)
     return found
+
+
+# Starting Scuffle at sign-in
+
+def tray_command() -> list[str]:
+    return [*program(), TRAY_FLAG]
+
+
+def autostart_path() -> Path:
+    """The desktop's autostart entry, by the XDG autostart specification."""
+    return Path(os.environ.get('XDG_CONFIG_HOME') or Path.home() / '.config') / 'autostart' / 'scuffle.desktop'
+
+
+def autostart_entry(command: list[str]) -> str:
+    lines = ['[Desktop Entry]', 'Type=Application', 'Version=1.5', 'Name=Scuffle',
+             'Comment=Keep World of Warcraft up to date from the tray', f'Exec={exec_line(command)}',
+             'Icon=scuffle', 'Terminal=false', 'X-GNOME-Autostart-enabled=true', f'{AUTOSTART_MARKER}=true']
+    if Path(command[0]).is_absolute():
+        lines.insert(6, f'TryExec={entry_value(command[0])}')    # nothing starts once the program is gone
+    return '\n'.join(lines) + '\n'
+
+
+def own_run_value(value) -> bool:
+    """Whether a Run value is the command Scuffle writes, by its --tray argument."""
+    return isinstance(value, str) and value.split()[-1:] == [TRAY_FLAG]
+
+
+def _run_value():
+    """The Run value named Scuffle, or None."""
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
+            return winreg.QueryValueEx(key, RUN_VALUE)[0]
+    except FileNotFoundError:
+        return None
+
+
+def starts_at_sign_in() -> bool:
+    """Whether Scuffle's own entry starts it at sign-in."""
+    if system.WINDOWS:
+        return own_run_value(_run_value())
+    path = autostart_path()
+    return not path.is_symlink() and desktop_marker(path, AUTOSTART_MARKER) == 'true'
+
+
+def start_at_sign_in(on: bool) -> None:
+    """Write or remove the entry. An entry of that name that Scuffle did not make stays as it is."""
+    if system.WINDOWS:
+        _set_run_value(on)
+        return
+    path = autostart_path()
+    ours = starts_at_sign_in()
+    if not on:
+        if ours:
+            path.unlink()
+        return
+    if (path.exists() or path.is_symlink()) and not ours:
+        raise ShortcutError(f'{path} was not made by Scuffle, so it was left as it is.')
+    atomic_bytes(path, autostart_entry(tray_command()).encode())
+
+
+def _set_run_value(on: bool) -> None:
+    import winreg
+    value = _run_value()
+    if not on and not own_run_value(value):
+        return                      # nothing of Scuffle's to remove
+    if on and value is not None and not own_run_value(value):
+        raise ShortcutError(f'The start entry named {RUN_VALUE} was not made by Scuffle, so it was left as it is.')
+    with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
+        if on:
+            winreg.SetValueEx(key, RUN_VALUE, 0, winreg.REG_SZ, subprocess.list2cmdline(tray_command()))
+        else:
+            winreg.DeleteValue(key, RUN_VALUE)

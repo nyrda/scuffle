@@ -13,7 +13,8 @@ that a Windows build needs only a different runtime layer.
   account or several with quick switching.
 - A download manager with a queue, pause and resume, a bandwidth limit, and
   cleanup of content no installed client needs.
-- Updates are checked before launch and can run while Scuffle is open.
+- Updates are checked before launch and can run while Scuffle is open. With the
+  user's consent they install by themselves, never while a game runs.
 
 Not in scope: account ownership filtering, starting a client before its
 download finished, and delta patches. The game
@@ -870,15 +871,17 @@ The settings file is written under a lock, since the window and a move on the
 download worker can save at once. The settings page changes the folder only
 through Choose…, never from its field, so an older field cannot undo a move.
 Settings include the installation folder, region, locale, bandwidth limit, the
-clients listed, each client's launch options and, on Linux, the Proton build
-with its launch options. `extra_clients` holds the test and other clients chosen
+clients listed, the consent to automatic updates, each client's launch options
+and, on Linux, the Proton build with its launch options. `extra_clients` holds the test and other clients chosen
 for the list, `hidden_clients` the clients left out of it, live ones too, and
 `show_other_clients` whether other public clients that are not installed appear.
 A client with a download stays listed until the download is gone. Client codes
 the catalog does not know are kept, since discovery can find them again. An
 installed client the catalog does not offer now still gets a row in Settings, so
 it can be shown again after it was hidden. Entries that cannot be a product code
-are dropped when loading.
+are dropped when loading. The consent to automatic updates follows the same
+rules: only `true` turns the switch on, an entry that cannot be a product code
+is dropped, and a malformed failure record is dropped.
 
 The settings page has five sections: General for the folder, region,
 language, notifications and the tray, Clients for the three categories,
@@ -911,6 +914,91 @@ percentage, time, speed and size fields through warm-up and stalls, using
 "Estimating…" for unavailable time and speed. Rates of at least 10 MB/s use
 whole MB/s. The queue total uses all known remaining sizes and the current rate,
 with an explicit qualification when paused jobs need to resume.
+
+## Automatic updates
+
+The update check runs on start, every 30 minutes and from **Check now** in the
+tray. Its answer goes to `DownloadManager.enqueue_automatic` for every installed
+client that is behind. The queue itself decides, under its lock, so no caller
+can skip a rule:
+
+- **Consent.** `auto_update` covers the live clients, less those in
+  `auto_update_except`. A test or other client needs its own entry in
+  `auto_update_extra`. A live client's own choice also turns the switch on, so
+  **Always update automatically** from a notification or the client page turns
+  on all live clients at once, as the user was asked.
+- **One job per client.** Any job of the client stays, also a paused or failed
+  one. The only exception is a failed automatic update whose wait is over.
+- **Failures.** A failed automatic update writes its client, its version and
+  the time to `auto_update_failures` under the queue lock, before anything can
+  queue it again, and saves the settings right after. The same version is not
+  queued automatically for three hours. A newer version is. Each failure is one
+  run that went from running to failed, so it is notified once by the existing
+  failure notification, with the library's own message, such as the free space
+  needed. **Try again** is an ordinary `enqueue` and is never held back.
+
+An automatic job is an ordinary `update` job with `automatic` set and the version
+it was queued for, both kept in `downloads.json`. It shares the queue's order,
+speed limit, connections, pause and resume. On a restart it comes back queued
+while the consent still holds, since the user agreed to it in advance. Pausing
+or resuming it by hand clears `automatic`. It is then the user's update, which
+waits for the user after a restart and runs while a game does when resumed. A
+withdrawn consent pauses the client's automatic job the same way.
+
+### Waiting for games
+
+A running client compacts the shared segments in `Data/data`. It moves objects,
+shortens segments and writes new indexes. A manual update writes the store
+while a game runs and relies on the store following those moves, but an
+automatic one must not take that chance without the user present. So an
+automatic job never writes while any game of the installation runs, not only
+its own client's.
+
+The queue holds it through the same machinery as `pause_while_playing`.
+`set_playing` says whether a game of the folder runs or starts, and
+`_apply_holds` pauses each waiting or running job a game holds and resumes the
+ones it held before. `pause_while_playing` holds every job, `set_playing` only
+the automatic ones, and the user's own pauses stay as they are in both. A held
+job reads **Waiting for games** and starts by itself after the last game.
+
+Three checks keep it off the store:
+
+- The window calls `set_playing` from the first phase of a start, before the
+  game reads anything, and from its process scan every 2 seconds, which also
+  finds games Scuffle did not start.
+- The job looks itself, so it never depends on the window. Under the library
+  lock and before anything is planned it lists the processes with
+  `Library.running_games`. Before each manifest, object and staged file it
+  stores, it looks again at most every second. Right before it publishes the indexes it
+  looks once more without that limit, through the updater's `may_publish`. A
+  game found any of these ways holds it as `set_playing` would, and it stops as
+  a pause does. Everything it stored stays for the resume.
+- The cleanup after it refuses while any client runs, as before.
+
+A game can still start between two checks, so at most the object in flight is
+stored after it. Nothing is activated and no index is published while a game
+runs. The job resumes when the window's scan finds no game, which it reports on
+every scan, so a hold the job set itself is released too. A game the user starts
+for the client being updated is refused as during any update, since its page,
+its shortcut and the tray offer no Play while it has a job.
+
+### Starting at sign-in
+
+**Start Scuffle when I sign in, in the tray** writes an entry that runs
+`scuffle --tray`, with the same command as a shortcut. On Linux it is
+`$XDG_CONFIG_HOME/autostart/scuffle.desktop` with the key
+`X-Scuffle-Autostart=true`. On Windows it is the value `Scuffle` under
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, marked by its
+`--tray` argument as links are by `--shortcut`. The setting is read from the
+entry itself, not from the settings file. Turning it off removes only an entry
+with the marker. Turning it on refuses to replace one without it and says so
+under the setting.
+
+`--tray` hides the window into the tray as closing it with `keep_in_tray`
+does. A tray bar that starts after Scuffle gets 20 seconds. After that the
+window shows when there is still no tray, so there is never a process the user
+cannot reach. A later start with `--tray` hands `{'tray': true}` to the running
+window, which stays where it is.
 
 ## Diagnostics
 
@@ -956,7 +1044,9 @@ icon and its menu, which the window fills from its own state on every refresh.
   Scuffle sends it with `jeepney`, a pure-Python D-Bus library.
 - The connection stays open for the whole run. KDE and dunst send a click only
   to the connection that showed the notification. The `default` action of a
-  known notification id opens the window on its client.
+  known notification id opens the window on its client. Any other action key
+  counts only when that notification offered it, and goes to the window with
+  its client.
 - All D-Bus work runs on a thread of its own with a 5 second reply timeout, so
   a missing bus, a missing service or a hung one never holds up the window. A
   failure falls back to the tray icon's message, or to nothing, and the next
@@ -971,7 +1061,8 @@ What counts:
 | Event | Detected by |
 | --- | --- |
 | A download finished or failed | the job's status going from running to done or failed, seen by a download manager listener on the thread that changed it. A failure removed later, or one restored on start, is not a new one |
-| A new version | the update check. `announced_updates` in the settings keeps the last version announced per client, so each version is announced once, also across restarts |
+| A new version | the update check. `announced_updates` in the settings keeps the last version announced per client, so each version is announced once, also across restarts. A client that updates automatically is not announced. Without consent the notification has the buttons **Update now** and **Always update automatically** |
+| An automatic update finished | as a finished download, titled with the version it reached |
 | A start that failed, or a needed update | the same results the window's banner shows. They matter for a start from the tray |
 | A crash | a file in the game folder's `Errors` folder newer than the start, or, on Windows, a non-zero exit code. On Linux the bridge returns 0 after any game exit, so only the crash report counts there. A Force quit is never a crash |
 
@@ -979,8 +1070,9 @@ What counts:
 
 The icon is created on every desktop, and it counts as reachable only while
 `QSystemTrayIcon.isSystemTrayAvailable()` is true, which a tray bar that starts
-later can change. Its menu has Show Scuffle, the current download with Pause all and Resume all, up
-to five installed and listed clients by last play, and Quit. A client's entry
+later can change. Its menu has Show Scuffle, the current download with Pause all and Resume all,
+when the next update check runs with Check now, up to five installed and listed clients by last
+play, and Quit. The check's timer is precise, so the minutes it shows are the ones left. A client's entry
 reads as the main button would, Play, Sign in and play or Update, and runs the
 same `MainWindow.start`. It is greyed out while the client has a job, is
 starting or running, and during a sign-in, when the window locks the other

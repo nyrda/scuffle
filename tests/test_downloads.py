@@ -220,6 +220,67 @@ def test_a_download_held_for_a_game_says_so_and_resuming_it_by_hand_runs_it(mana
     assert manager._next() is job                 # it runs although the game still does
 
 
+def test_an_automatic_update_needs_consent_and_never_doubles_a_clients_job(managers):
+    manager = managers()
+    assert manager.enqueue_automatic('wow', '12.0.7.1') is None         # the switch is off
+    assert manager.jobs == []
+    manager.settings.auto_update = True
+    manager.settings.auto_update_except = ['wowf']
+    job = manager.enqueue_automatic('wow', '12.0.7.1')
+    assert (job.kind, job.status, job.automatic) == ('update', QUEUED, True)
+    assert manager.enqueue_automatic('wow', '12.0.7.1') is None         # already queued
+    assert manager.enqueue_automatic('wowf', '12.0.7.1') is None        # excepted
+    assert manager.enqueue_automatic('wowt', '12.0.7.1') is None        # a test client needs its own choice
+    # Any job of the client stays, the user's own pause and failure too.
+    manager.enqueue('wow_classic', 'update')
+    manager.pause('wow_classic')
+    manager.enqueue('wow_anniversary', 'update').status = FAILED
+    assert manager.enqueue_automatic('wow_classic', '5.5.3.1') is None
+    assert manager.enqueue_automatic('wow_anniversary', '2.5.5.1') is None
+    assert [(j.client, j.status, j.automatic) for j in manager.jobs] == [
+        ('wow', QUEUED, True), ('wow_classic', PAUSED, False), ('wow_anniversary', FAILED, False)]
+    assert saved()['jobs'][0] == {'client': 'wow', 'kind': 'update', 'status': QUEUED, 'error': '',
+                                  'automatic': True, 'version': '12.0.7.1'}
+
+
+def test_automatic_updates_wait_for_any_game_of_the_folder_and_start_after_the_last(managers):
+    manager = managers(auto_update=True)
+    manager.enqueue_automatic('wow', '12.0.7.1')
+    manager.set_playing(True)
+    held = manager.job('wow')
+    assert held.status == PAUSED and held.held
+    manager.enqueue('wowf', 'install')                 # the user's own download is not held
+    assert manager.enqueue_automatic('wow_classic', '5.5.3.1').status == PAUSED
+    assert manager._next() is manager.job('wowf')
+    manager.set_playing(False)
+    assert [(j.client, j.status) for j in manager.jobs] == [
+        ('wow', QUEUED), ('wowf', RUNNING), ('wow_classic', QUEUED)]
+
+
+def test_an_automatic_update_paused_or_resumed_by_hand_is_the_users_own(managers):
+    manager = managers(auto_update=True)
+    manager.enqueue_automatic('wow', '12.0.7.1')
+    manager.enqueue_automatic('wowf', '12.0.7.1')
+    manager.set_playing(True)
+    manager.enqueue('wow', 'update')                   # Resume on the held update runs it now
+    assert manager.job('wow').status == QUEUED and not manager.job('wow').automatic
+    manager.pause('wowf')
+    manager.set_playing(False)                         # the last game's exit resumes no user's pause
+    assert manager.job('wowf').status == PAUSED and not manager.job('wowf').automatic
+
+
+@pytest.mark.parametrize('consent', [True, False])
+def test_an_interrupted_automatic_update_carries_on_after_a_restart_while_consent_lasts(managers, consent):
+    manager = managers(auto_update=True)
+    manager.library.create()
+    manager.enqueue_automatic('wow', '12.0.7.1')
+    manager.shutdown()                                 # closing Scuffle pauses it, which is no user's pause
+    # Resuming other downloads on start is no consent to this one.
+    restored = managers(auto_update=consent, resume_downloads=True)
+    job = restored.job('wow')
+    assert (job.status, job.automatic, job.version) == (QUEUED if consent else PAUSED, True, '12.0.7.1')
+
+
 def test_auto_resume_waits_when_the_folder_is_gone_such_as_an_unmounted_drive(managers, tmp_path):
     import shutil
     manager = managers()

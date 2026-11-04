@@ -286,7 +286,18 @@ def preferences(settings: Settings, library) -> list[str]:
             f'Connections: {settings.workers}, speed limit {limit}',
             f'Resume downloads on start: {yes(settings.resume_downloads)}, '
             f'pause while playing: {yes(settings.pause_while_playing)}',
+            automatic_updates(settings),
             f'Battle.net: {sign_in}']
+
+
+def automatic_updates(settings: Settings) -> str:
+    """The consent to automatic updates, and which clients wait after a failure. Codes only."""
+    line = f"Automatic updates: {'yes' if settings.auto_update else 'no'}"
+    for name, codes in [('except', settings.auto_update_except), ('also', settings.auto_update_extra),
+                        ('failed', sorted(settings.auto_update_failures))]:
+        if codes:
+            line += f', {name} {" ".join(codes)}'
+    return line
 
 
 def clients(settings: Settings, library, updates: dict | None) -> list[str]:

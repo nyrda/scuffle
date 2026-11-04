@@ -1,4 +1,4 @@
-"""The tray icon: show the window, the downloads, a few clients to play, and Quit."""
+"""The tray icon: show the window, the downloads, the update check, a few clients to play, and Quit."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -17,6 +17,7 @@ class Tray(QObject):
     pause_all = Signal()
     resume_all = Signal()
     play = Signal(str)
+    check_now = Signal()
     quit = Signal()
 
     def __init__(self, parent=None):
@@ -35,6 +36,11 @@ class Tray(QObject):
         self.pause_action.triggered.connect(self.pause_all.emit)
         self.resume_action = self.menu.addAction('Resume all')
         self.resume_action.triggered.connect(self.resume_all.emit)
+        self.check_separator = self.menu.addSeparator()
+        self.next_check = self.menu.addAction('')
+        self.next_check.setEnabled(False)
+        self.check_action = self.menu.addAction('Check now')
+        self.check_action.triggered.connect(self.check_now.emit)
         self.clients_separator = self.menu.addSeparator()
         self.client_actions: dict[str, object] = {}
         self.quit_separator = self.menu.addSeparator()
@@ -52,10 +58,15 @@ class Tray(QObject):
             self.show_window.emit()
 
     def show_state(self, downloads: str, can_pause: bool, can_resume: bool,
-                   clients: list[tuple[str, str, bool]]) -> None:
-        """The download line, Pause all and Resume all, and each client's action text and whether it
-        can start now. Actions are changed in place, so an open menu is not rebuilt under the pointer."""
+                   clients: list[tuple[str, str, bool]], next_check: str = '', can_check: bool = False) -> None:
+        """The download line, Pause all and Resume all, when the next update check runs, and each
+        client's action text and whether it can start now. Without next_check there is nothing to
+        check. Actions are changed in place, so an open menu is not rebuilt under the pointer."""
         self.downloads.setText(downloads)
+        for action in (self.check_separator, self.next_check, self.check_action):
+            action.setVisible(bool(next_check))
+        self.next_check.setText(next_check)
+        self.check_action.setEnabled(can_check)
         self.icon.setToolTip(f'Scuffle\n{downloads}')
         self.pause_action.setVisible(can_pause or can_resume)
         self.resume_action.setVisible(can_pause or can_resume)
