@@ -5,7 +5,8 @@ import struct
 
 import pytest
 
-from scuffle.auth.bgs import BGS, BuildRefused, CredentialRejected, WOW_TITLE
+from scuffle.auth import bgs as bgs_module
+from scuffle.auth.bgs import BGS, BuildRefused, CredentialRejected, QueueDropped, WOW_TITLE, queued_logon
 from scuffle.auth.protobuf import blob, fields, first, integer
 
 # Bytes sent by the launcher version that authenticated against Battle.net.
@@ -114,6 +115,82 @@ def test_another_refused_logon_is_not_taken_for_a_refused_build():
     with pytest.raises(RuntimeError, match='status 3$') as raised:
         bgs.logon(b'TICKET', b'{}', 70790)
     assert not isinstance(raised.value, BuildRefused)
+
+
+def queue_update(position, exit_time):
+    return frame(integer(1, 0) + integer(2, 2), blob(1, integer(1, position) + integer(2, exit_time) + integer(3, 60)))
+
+
+QUEUE_END = frame(integer(1, 0) + integer(2, 3))
+
+
+def test_a_logon_waits_out_the_login_queue_and_reports_its_place():
+    # Battle.net sent a queue end and then more updates, so only the logon's own answer ends the wait.
+    server = Server(reply(1, blob(9, b'CID')), reply(2), queue_update(746, 1000), QUEUE_END, queue_update(643, 990),
+                    logon_complete(0, blob(7, b'TICKET')))
+    bgs = client(server)
+    seen = []
+    bgs.on_queue = lambda position, exit_time: seen.append((position, exit_time))
+    bgs.connect()
+    assert first(bgs.logon(b'TICKET', b'{}', 70790), 7) == b'TICKET'
+    assert seen == [(746, 1000), (643, 990)]
+
+
+def test_a_queue_update_that_arrives_before_the_logon_reply_still_counts():
+    server = Server(reply(1, blob(9, b'CID')), queue_update(5, 1000), reply(2), logon_complete(0, blob(7, b'x')))
+    bgs = client(server)
+    seen = []
+    bgs.on_queue = lambda position, exit_time: seen.append(position)
+    bgs.connect()
+    bgs.logon(b'TICKET', b'{}', 70790)
+    assert seen == [5]
+
+
+class Closing(Server):
+    """A real server closes a queued connection by ending the stream."""
+
+    def recv(self, size):
+        if not self.incoming:
+            return b''
+        return super().recv(size)
+
+    def close(self):
+        self.closed = True
+
+
+def queued_connections(monkeypatch, *servers):
+    pending = list(servers)
+    monkeypatch.setattr(bgs_module, 'BGS', lambda host: client(pending.pop(0)))
+    monkeypatch.setattr(bgs_module, 'QUEUE_RETRY', 0)
+
+
+def test_a_connection_the_queue_drops_starts_the_logon_over_on_a_new_one(monkeypatch):
+    dropped = Closing(reply(1, blob(9, b'CID')), reply(2), queue_update(746, 1000))
+    through = Closing(reply(1, blob(9, b'CID')), reply(2), logon_complete(0, blob(7, b'x')))
+    queued_connections(monkeypatch, dropped, through)
+    seen = []
+    bgs, record = queued_logon('host', lambda position, exit_time: seen.append(position),
+                               lambda bgs: bgs.logon(b'TICKET', b'{}', 70790))
+    assert first(record, 7) == b'x' and bgs.socket is through
+    assert seen == [746] and dropped.closed and not hasattr(through, 'closed')
+    assert len(dropped.sent) == 2 and len(through.sent) == 2
+
+
+def test_a_queue_that_never_ends_gives_up(monkeypatch):
+    queued_connections(monkeypatch, *[Closing(reply(1, blob(9, b'CID')), reply(2), queue_update(9, 1000))
+                                      for _ in range(2)])
+    monkeypatch.setattr(bgs_module, 'QUEUE_LIMIT', 0)
+    with pytest.raises(RuntimeError, match='login queue did not finish'):
+        queued_logon('host', None, lambda bgs: bgs.logon(b'TICKET', b'{}', 70790))
+
+
+def test_a_closed_connection_outside_the_queue_stays_an_error():
+    server = Closing(reply(1, blob(9, b'CID')), reply(2))
+    bgs = client(server)
+    bgs.connect()
+    with pytest.raises(RuntimeError, match='closed the BGS connection') as raised:
+        bgs.logon(b'TICKET', b'{}', 70790)
+    assert not isinstance(raised.value, QueueDropped)
 
 
 def test_browser_sign_in_sends_the_verified_wire_bytes():

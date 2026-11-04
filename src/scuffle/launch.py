@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import os
+import socket
 from pathlib import Path
 import re
 import subprocess
@@ -29,6 +30,17 @@ SignIn = Callable[[str], bytes]
 
 class LaunchError(RuntimeError):
     pass
+
+
+def queue_status(position: int, exit_time: int, now: float) -> str:
+    """The launch phase while Battle.net's login queue holds the logon."""
+    parts = ['In login queue']
+    if position:
+        parts.append(f'{position:,} ahead')
+    if exit_time > now:
+        minutes = round((exit_time - now) / 60)
+        parts.append(f'about {minutes} min' if minutes else 'under a minute')
+    return ' · '.join(parts)
 
 
 def parse_ticket(text: str) -> bytes:
@@ -152,14 +164,14 @@ class Launcher:
     def signed_in(self) -> bool:
         return self.vault.has_session()
 
-    def sign_in(self, version: int, sign_in: SignIn) -> Login:
+    def sign_in(self, version: int, sign_in: SignIn, queue=None) -> Login:
         """Add the account the browser signs in to, or renew its session if it is listed. It becomes active."""
         self.runtime.prepare()
-        added = login(self.vault, self.settings.auth_host, version, sign_in)
+        added = login(self.vault, self.settings.auth_host, version, sign_in, queue)
         self.vault.record('signed_in')
         return added
 
-    def renew(self, version: int, sign_in: SignIn, account: Login | None = None) -> Login:
+    def renew(self, version: int, sign_in: SignIn, account: Login | None = None, queue=None) -> Login:
         """Renew a login's session, the active one's by default, signing in through the browser when needed.
 
         Returns the login renewed. A browser sign-in to another account adds that account and stops,
@@ -170,19 +182,19 @@ class Launcher:
         wanted = account.label if account is not None else ''     # read before a rejection deletes it
         if account is not None and account.has_session():
             try:
-                renew(account, self.settings.auth_host, version)
+                renew(account, self.settings.auth_host, version, queue)
                 self.vault.record('renewed')
                 return account
             except CredentialRejected as error:
                 self.vault.record('rejected', str(error))
                 # The ticket is spent. Keeping it would claim a sign-in that is gone. Other logins stay.
                 self.vault.remove(account)
-        added = self.sign_in(version, sign_in)
+        added = self.sign_in(version, sign_in, queue)
         if account is not None and account.id is not None and added.id != account.id:
             raise LaunchError(f'Battle.net ended the session of {wanted}, and the browser signed in to '
                               f'{added.label} instead. {added.label} was added and is now the active account. '
                               'Press Play to play with it.')
-        renew(added, self.settings.auth_host, version)
+        renew(added, self.settings.auth_host, version, queue)
         self.vault.record('renewed')
         return added
 
@@ -210,7 +222,10 @@ class Launcher:
             login = self.vault.active()
             status('Connecting')        # renews the saved session, or signs in if it has none
             try:
-                login = self.renew(version, sign_in, login)
+                login = self.renew(version, sign_in, login,
+                                   lambda position, exit_time: status(queue_status(position, exit_time, time.time())))
+            except (TimeoutError, ConnectionError, socket.gaierror) as error:
+                raise LaunchError('Battle.net did not answer. Check your connection and try again.') from error
             except BuildRefused as error:
                 raise LaunchError(f'Battle.net is refusing logons from {entry.label} {state["version"]} right '
                                   'now, which can happen while Blizzard rolls out a patch. '

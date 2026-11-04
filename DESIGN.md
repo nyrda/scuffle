@@ -475,7 +475,15 @@ side. That says nothing about the session, so Scuffle keeps it, opens no browser
 and asks the user to try later. It always logs on as the build it starts, as the
 game does, and never sends another build's number to get past the refusal. The
 Battle.net app itself logs on as `App` with its own version and only then asks
-for a `WoW` token. The game
+for a `WoW` token.
+
+Battle.net can hold a logon in a login queue, as it did when Forever opened. The
+listener then sends `OnLogonQueueUpdate` about every 25 seconds, with the place
+in the queue and an estimated exit as Unix time, and `OnLogonQueueEnd` now and
+then, followed by more updates. Only the logon's own result ends the wait. It
+also closes a queued connection after a minute or two. Scuffle then logs on again
+over a new connection, for up to 30 minutes, and shows the place and the estimate
+as the launch phase. The game
 reads its ticket only from `HKCU\Software\Blizzard Entertainment\Battle.net\Launch Options\WoW`,
 so Scuffle writes `WEB_TOKEN` and `ACCOUNT_TS` there right before launch.
 Scuffle never reads or uses Battle.net's own saved login.

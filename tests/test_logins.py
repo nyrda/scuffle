@@ -376,6 +376,16 @@ def test_a_refused_build_explains_itself_and_keeps_the_session_without_a_browser
     assert not runtime.started
 
 
+@pytest.mark.parametrize('position, exit_time, text', [
+    (746, 1000 + 200, 'In login queue · 746 ahead · about 3 min'),
+    (1234, 1000 + 20, 'In login queue · 1,234 ahead · under a minute'),
+    (7, 900, 'In login queue · 7 ahead'),
+    (0, 0, 'In login queue'),
+])
+def test_the_login_queue_phase_says_what_battlenet_reported(position, exit_time, text):
+    assert launch.queue_status(position, exit_time, 1000) == text
+
+
 @pytest.mark.parametrize('text, tag', [
     ('Wanderer#7395', 'Wanderer#7395'), ('Ärger#12345', 'Ärger#12345'),
     (EMAIL, None), ('player#7395@example.com', None), ('EU-0123abcd-314159265', None), ('#7395', None),

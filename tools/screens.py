@@ -160,6 +160,8 @@ def main(output: Path) -> None:
     window.updates['wow'] = False
     window.phases['wow'] = 'Connecting'
     shot('06-launching')
+    window.phases['wow'] = 'In login queue · 1,234 ahead · about 12 min'
+    shot('06a-login-queue')
     window.phases['wow'] = 'Running'
     shot('07-running')
     window.phases.clear()
