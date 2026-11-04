@@ -340,6 +340,42 @@ def test_switching_during_a_launch_waits_for_it_and_never_changes_its_account(va
     assert vault.active().key == str(ALT)
 
 
+def test_a_refused_build_explains_itself_and_keeps_the_session_without_a_browser(vault, battlenet, monkeypatch):
+    added = add(vault, battlenet, MAIN)
+    ticket = saved_ticket(added)
+
+    class Library:
+        def state(self, code):
+            return {'version': '1.60.1.70790'}
+
+        def moving(self):
+            return False
+
+        def pending(self, code):
+            return False
+
+        def running(self, code):
+            return False
+
+        def executable(self, code):
+            return vault.directory / 'Wow.exe'
+
+    def refused(host):
+        connection = battlenet.connection(host)
+
+        def logon(credential, device, version):
+            raise bgs.BuildRefused(version)
+        connection.logon = logon
+        return connection
+
+    monkeypatch.setattr(bgs, 'BGS', refused)
+    runtime = Runtime()
+    with pytest.raises(launch.LaunchError, match=r'refusing logons from .* 1\.60\.1\.70790.*Try again later'):
+        launch.Launcher(Settings(), Library(), runtime=runtime, vault=vault).play('wow', never)
+    assert saved_ticket(vault.active()) == ticket
+    assert not runtime.started
+
+
 @pytest.mark.parametrize('text, tag', [
     ('Wanderer#7395', 'Wanderer#7395'), ('Ärger#12345', 'Ärger#12345'),
     (EMAIL, None), ('player#7395@example.com', None), ('EU-0123abcd-314159265', None), ('#7395', None),
