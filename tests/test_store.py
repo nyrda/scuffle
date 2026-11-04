@@ -906,6 +906,7 @@ def test_a_segment_the_game_compacted_keeps_every_object_at_its_new_place(tmp_pa
         # Appends continue at the shorter end, and the next publication names every new place.
         extra = blte(b"after the game ran")
         casc.put(*extra)
+        assert casc.verify_indexes()            # the new object is not published yet, and that is allowed
         casc.publish()
         assert casc.verify_indexes()
     assert (tmp_path / "Data/data/data.000").stat().st_size > after
@@ -922,3 +923,15 @@ def test_an_object_the_game_moved_that_does_not_check_out_still_fails_closed(tmp
     game_compacts(tmp_path, keep, damage=keep[-1][0])
     with pytest.raises(StoreError, match="durable CASC segment was truncated"):
         CascStore(tmp_path)
+
+
+def test_an_empty_index_file_from_the_game_changes_nothing(tmp_path):
+    key, data = blte(b"kept")
+    with CascStore(tmp_path) as casc:
+        casc.put(key, data)
+        casc.publish()
+    data_dir = tmp_path / "Data" / "data"
+    latest = max(data_dir.glob("00*.idx"))
+    (data_dir / f"00{int(latest.name[2:10], 16) + 1:08x}.idx").write_bytes(b"")
+    with CascStore(tmp_path) as casc:
+        assert casc.read(key) == data

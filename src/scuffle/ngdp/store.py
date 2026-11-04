@@ -560,7 +560,7 @@ class CascStore:
                     return
                 self._db.executemany("INSERT OR REPLACE INTO temp.indexed VALUES(?,?,?,?)",
                                      _index_entries(path, bucket))
-        except (OSError, StoreError, struct.error):
+        except (OSError, ValueError, StoreError, struct.error):
             # Indexes this store cannot read move nothing. Recovery then checks the catalogue as before.
             self._db.rollback()
             return
@@ -589,6 +589,8 @@ class CascStore:
                                        (SPAN_HEADER_SIZE, segment)).fetchone()[0] or 0
                 if end <= size:
                     self._db.execute("UPDATE segments SET durable_end=?,tail_end=? WHERE segment=?", (size, size, segment))
+                    # Appends now start below the old end, so they are not published yet.
+                    self._db.execute("UPDATE published SET tail_end=min(tail_end,?) WHERE segment=?", (size, segment))
             if not unverified:
                 self._db.execute("DELETE FROM indexes")
                 self._db.executemany("INSERT INTO indexes VALUES(?,?)", names.items())
