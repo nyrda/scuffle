@@ -456,6 +456,18 @@ long operations report progress as events. Downloads and sign-in can be
 cancelled. The update check and ticket exchange before a launch take seconds
 and run to completion.
 
+## Memory
+
+The window alone uses about 130 MB, of which 65 MB is shared libraries. A download
+adds what its network threads hold, at most `workers` groups of 8 MB. With
+glibc's defaults it added far more, and kept it. Network threads allocate those
+buffers and another thread frees them, so each thread's arena fills with free
+space the system still counts: a download alone reached 300 to 400 MB, and stayed
+near 300 MB afterwards with 5 MB in use. `memory.py` therefore sends buffers from
+1 MB up to `mmap`, which returns them when freed, limits the process to two arenas
+and trims after each job. The window with a running download now uses 240 to
+290 MB, at the same speed, and about 140 MB once the job ends.
+
 ## Sign-in
 
 1. A logon without a ticket returns Battle.net's sign-in URL.
