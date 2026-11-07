@@ -204,10 +204,14 @@ def test_the_folder_picker_reveals_the_current_folder_once_it_has_loaded(qt, tmp
     page.resize(700, 400)
     page.show()
     page.start(str(target))
-    deadline = time.monotonic() + 3
-    while time.monotonic() < deadline and Path(page.model.filePath(page.tree.currentIndex())) != target:
-        qt.processEvents()
-    for _ in range(20):
+
+    def revealed():
+        rect = page.tree.visualRect(page.tree.currentIndex())
+        return (Path(page.model.filePath(page.tree.currentIndex())) == target
+                and 0 <= rect.top() and rect.bottom() <= page.tree.viewport().height())
+    # Folders load in the background, so how soon this happens depends on the machine.
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline and not revealed():
         qt.processEvents()
         time.sleep(0.01)
     rect = page.tree.visualRect(page.tree.currentIndex())
@@ -1630,6 +1634,10 @@ def test_a_running_game_closes_and_shift_turns_the_button_into_force_quit(qt, wi
         qt.processEvents()
     # A hung game has no window to close, so the banner points at Force quit.
     click_and_wait(1)
+    # The worker reports after its call returns, so the banner can come a moment later.
+    deadline = time.monotonic() + 5
+    while 'Force quit' not in page.banner.text.text() and time.monotonic() < deadline:
+        qt.processEvents()
     assert calls[-1] == ([4242], False) and 'Force quit' in page.banner.text.text()
     shift['held'] = True
     window.refresh()

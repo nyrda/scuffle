@@ -53,8 +53,6 @@ packaging/windows/remote-build.sh <ssh host>   # Scuffle.exe, built on Windows
   new states with `tools/screens.py` and look at all three sizes.
 - Tests check behaviour at the real boundary, with no test-only seams in
   production code. A regression test must fail without its fix.
-- `tests/test_ui.py::test_the_folder_picker_reveals_the_current_folder_once_it_has_loaded`
-  is timing-sensitive and fails when `/tmp` is crowded. Rerun it alone.
 
 ## Docs and commits
 
