@@ -14,7 +14,7 @@ import threading
 import time
 from typing import Callable
 
-from . import catalog, imports, move
+from . import catalog, imports, memory, move
 from .library import Cancelled, Library, LibraryError, Updater, atomic_json, default_preferences
 from .ngdp.cdn import CDNClient, Throttle
 from .settings import Settings, cache_dir, data_dir
@@ -505,6 +505,7 @@ class DownloadManager:
         while (job := self._next()) is not None:
             if isinstance(job, MoveTask):
                 self._run_move(job)
+                memory.release()
                 continue
             self._notify(job)
             status, error = DONE, ''
@@ -532,6 +533,7 @@ class DownloadManager:
                 except OSError:
                     pass            # it then waits only for this run, as the failure in memory says
             self._notify(job)
+            memory.release()
 
     def _remember(self, job: Job, status: str) -> None:
         """Note when an automatic update failed, before anything can queue it again. Called with the queue lock."""
