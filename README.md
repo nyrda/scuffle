@@ -87,8 +87,9 @@ sign in, the browser fails to open a page at `http://localhost:0/?ST=...`. Copy
 that address from the address bar. Scuffle reads it from the clipboard when you
 switch back, or you can paste it. The address works only once.
 
-Scuffle turns it into a session of its own that each launch renews, so you sign
-in again only when Battle.net ends the session. The session is protected with
+Scuffle turns it into a session of its own that each launch renews. Battle.net
+ends a session that sits unused for most of a day, so Scuffle also keeps what the
+sign-in hands back and tries that before it asks you to sign in again. The session is protected with
 DPAPI, kept under `~/.local/share/scuffle/session` with owner-only permissions.
 Scuffle never reads the Battle.net app's saved login, so both stay signed in.
 

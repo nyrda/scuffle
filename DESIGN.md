@@ -510,7 +510,13 @@ and trims after each job. The window with a running download now uses 240 to
    first renewable ticket.
 
 Each launch consumes the saved ticket, reserves its successor and issues a
-separate game ticket. A rejected session starts the sign-in again. Battle.net
+separate game ticket. Those tickets expire: every one that sat 12 hours or more
+was rejected, and the longest that still worked sat 3.4 hours. The logon record
+of a browser sign-in can carry a `login_ticket` of its own. When that is not just
+the page's one-time ticket again, it is kept protected in `login-ticket.dpapi`,
+and an expired session tries it before a new browser sign-in. How long it lasts
+is not known yet, and `history.jsonl` records each use or rejection without the
+ticket. A rejected session then starts the sign-in again. Battle.net
 can also refuse every logon from one build, with status 33
 (`ERROR_SERVER_IS_PRIVATE`), as it did for a while after publishing
 Forever 1.60.1.70790, before accepting that build again with no change on our
@@ -575,6 +581,7 @@ session/
   game-token.dpapi      the game ticket, only between a renewal and the game's start
   logins/<key>/
     session.dpapi       the renewable ticket, protected with DPAPI
+    login-ticket.dpapi  what a browser sign-in handed back, protected with DPAPI
     login.json          its number and its BattleTag, when Battle.net sent one
     accounts.json       its WoW accounts, as described above
 ```
