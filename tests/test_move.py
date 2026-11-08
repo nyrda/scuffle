@@ -129,9 +129,10 @@ def test_a_copy_that_lost_bytes_on_the_new_drive_is_never_switched_to(installed,
     damaged = []
 
     def flaky_drive(event):
-        # The new drive loses the end of a file it already took, as a failing disk can.
+        # The new drive loses the end of a file it already took, as a failing disk can. Copying
+        # reports only now and then, so a fast copy may never report after this file.
         copied = target / '_retail_/Wow.exe'
-        if event['stage'] == 'copying' and copied.is_file() and not damaged:
+        if event['stage'] == 'verifying' and not damaged:
             copied.write_bytes(copied.read_bytes()[:-1] + b'?')
             damaged.append(copied)
     with pytest.raises(LibraryError, match='differs from the original'):

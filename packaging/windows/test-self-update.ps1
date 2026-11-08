@@ -36,8 +36,11 @@ function Build-Copy([string] $name, [string] $version) {
 function Invoke-Scuffle([string[]] $arguments) {
     $output = Join-Path $work 'output.txt'
     $errors = Join-Path $work 'errors.txt'
-    $process = Start-Process $exe -ArgumentList $arguments -Wait -PassThru -NoNewWindow `
+    # Not -Wait, which also waits for what the program starts, as the updated Scuffle's window.
+    $process = Start-Process $exe -ArgumentList $arguments -PassThru -NoNewWindow `
         -RedirectStandardOutput $output -RedirectStandardError $errors
+    $null = $process.Handle
+    $process.WaitForExit()
     return [pscustomobject]@{ Code = $process.ExitCode; Output = (Get-Content $output -Raw); Errors = (Get-Content $errors -Raw) }
 }
 
