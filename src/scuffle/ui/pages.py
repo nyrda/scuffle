@@ -605,6 +605,9 @@ class SettingsPage(Page):
     NOTES = ['Installed', 'Downloading', 'Queued', 'Paused', 'Install failed', 'Update failed', 'Needs repair',
              'Repair failed', 'Not in this region', 'Older than live', 'Old build', 'Runs 12.12.12']
 
+    self_update_clicked = Signal()
+    self_update_notes_clicked = Signal()
+    self_update_skipped = Signal()
     saved = Signal()
     recheck_catalog = Signal()
     closed = Signal()
@@ -723,6 +726,27 @@ class SettingsPage(Page):
         self.sign_in_note = label('', 'caution', wrap=True)
         self.sign_in_note.hide()
         grid.addWidget(self.sign_in_note, grid.rowCount(), 0, 1, 3)
+        grid = self.card(general, 'Scuffle updates', 'Scuffle asks GitHub once a day whether a newer Scuffle is out, '
+                         'and installs one only when you say so.')
+        self.check_self_updates = QCheckBox('Check for Scuffle updates')
+        self.check_self_updates.toggled.connect(self.apply)
+        grid.addWidget(self.check_self_updates, grid.rowCount(), 0, 1, 3)
+        self.self_update_note = label('', 'small', wrap=True)
+        grid.addWidget(self.self_update_note, grid.rowCount(), 0, 1, 3)
+        self.self_update_row = QWidget()
+        row = QHBoxLayout(self.self_update_row)
+        row.setContentsMargins(0, 0, 0, 0)
+        self.self_update_now = fixed(QPushButton('Update and restart'), 160)
+        self.self_update_notes = fixed(QPushButton('Release notes'), 120)
+        self.self_update_skip = fixed(QPushButton('Skip this version'), 140)
+        self.self_update_now.clicked.connect(self.self_update_clicked.emit)
+        self.self_update_notes.clicked.connect(self.self_update_notes_clicked.emit)
+        self.self_update_skip.clicked.connect(self.self_update_skipped.emit)
+        for button in [self.self_update_now, self.self_update_notes, self.self_update_skip]:
+            row.addWidget(button)
+        row.addStretch(1)
+        self.self_update_row.hide()
+        grid.addWidget(self.self_update_row, grid.rowCount(), 0, 1, 3)
 
         # Clients
         clients = self.section_layouts['clients']
@@ -934,7 +958,9 @@ class SettingsPage(Page):
         chain = [self.close_button, *self.sections.group.buttons()]
         if self.section == 'general':
             chain += [self.browse, self.move_button, self.region, self.locale, self.show_notifications, self.keep_in_tray,
-                      self.sign_in_start]
+                      self.sign_in_start, self.check_self_updates,
+                      *(button for button in (self.self_update_now, self.self_update_notes, self.self_update_skip)
+                        if button.isVisibleTo(self))]
         elif self.section == 'clients':
             for category, _, _ in self.CATEGORIES:
                 if category == catalog.OTHER:
@@ -1066,6 +1092,7 @@ class SettingsPage(Page):
         self.resume_downloads.setChecked(settings.resume_downloads)
         self.auto_update.setChecked(settings.auto_update)
         self.show_notifications.setChecked(settings.show_notifications)
+        self.check_self_updates.setChecked(settings.check_self_updates)
         self.keep_in_tray.setChecked(settings.keep_in_tray and self.keep_in_tray.isEnabled())
         if self.launch is not None:
             self.launch.load(settings)
@@ -1082,6 +1109,15 @@ class SettingsPage(Page):
             self._loading, was_loading = True, self._loading
             self.keep_in_tray.setChecked(available and self.settings.keep_in_tray)
             self._loading = was_loading
+
+    def show_self_update(self, note: str, *, available: bool, can_install: bool, busy: bool, skipped: bool) -> None:
+        """This version and a newer one, what is happening to it, and what can be done about it."""
+        self.self_update_note.setText(note)
+        self.self_update_row.setVisible(available)
+        self.self_update_now.setVisible(can_install)
+        self.self_update_now.setEnabled(not busy)
+        self.self_update_skip.setVisible(not skipped)
+        self.self_update_skip.setEnabled(not busy)
 
     def show_start_at_sign_in(self, on: bool, problem: str = '') -> None:
         """Whether Scuffle's own entry starts it at sign-in, and why a change did not apply."""
@@ -1148,6 +1184,7 @@ class SettingsPage(Page):
         s.resume_downloads = self.resume_downloads.isChecked()
         s.auto_update = self.auto_update.isChecked()
         s.show_notifications = self.show_notifications.isChecked()
+        s.check_self_updates = self.check_self_updates.isChecked()
         if self.keep_in_tray.isEnabled():
             s.keep_in_tray = self.keep_in_tray.isChecked()
         if self.launch is not None:

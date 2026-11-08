@@ -18,6 +18,7 @@ class Tray(QObject):
     resume_all = Signal()
     play = Signal(str)
     check_now = Signal()
+    self_update = Signal()
     quit = Signal()
 
     def __init__(self, parent=None):
@@ -29,6 +30,9 @@ class Tray(QObject):
         self.menu = QMenu()
         self.show_action = self.menu.addAction('Show Scuffle')
         self.show_action.triggered.connect(self.show_window.emit)
+        self.self_update_action = self.menu.addAction('')
+        self.self_update_action.triggered.connect(self.self_update.emit)
+        self.self_update_action.setVisible(False)
         self.menu.addSeparator()
         self.downloads = self.menu.addAction('No downloads')
         self.downloads.setEnabled(False)
@@ -58,10 +62,13 @@ class Tray(QObject):
             self.show_window.emit()
 
     def show_state(self, downloads: str, can_pause: bool, can_resume: bool,
-                   clients: list[tuple[str, str, bool]], next_check: str = '', can_check: bool = False) -> None:
+                   clients: list[tuple[str, str, bool]], next_check: str = '', can_check: bool = False,
+                   self_update: str = '') -> None:
         """The download line, Pause all and Resume all, when the next update check runs, and each
         client's action text and whether it can start now. Without next_check there is nothing to
         check. Actions are changed in place, so an open menu is not rebuilt under the pointer."""
+        self.self_update_action.setText(self_update)
+        self.self_update_action.setVisible(bool(self_update))
         self.downloads.setText(downloads)
         for action in (self.check_separator, self.next_check, self.check_action):
             action.setVisible(bool(next_check))

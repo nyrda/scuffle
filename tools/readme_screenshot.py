@@ -43,6 +43,7 @@ def main() -> None:
     discovery.load = lambda cache, region: fixture | {'region': region, 'checked_at': DAY}
     application = QApplication(sys.argv)
     screens.ui.prepare(application)
+    screens.ui.selfupdate.latest = lambda: None
     window = screens.ui.MainWindow()
     window.check_updates = lambda: None
     window.free_space = lambda: 1_240_000_000_000     # the same on every machine

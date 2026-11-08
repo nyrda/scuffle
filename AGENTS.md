@@ -11,8 +11,8 @@ Read `DESIGN.md` before changing behaviour. `README.md` is the user's guide, and
 
 - `src/scuffle/`: `library.py` (installations, uninstall), `downloads.py` (the
   queue and its worker), `move.py`, `imports.py`, `launch.py`, `cli.py`,
-  `settings.py`, `diagnostics.py`, `shortcuts.py` and `steam.py`, and
-  `instance.py` (one window per user)
+  `settings.py`, `diagnostics.py`, `shortcuts.py` and `steam.py`, `selfupdate.py`
+  (Scuffle's own updates), `memory.py`, and `instance.py` (one window per user)
 - `src/scuffle/ngdp/`: Blizzard's CDN formats and the shared object store
 - `src/scuffle/auth/`: the Battle.net sign-in and the per-account session vault
 - `src/scuffle/runtime/`: Proton, the Wine bridge and the Windows runtime

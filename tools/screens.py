@@ -39,6 +39,7 @@ def main(output: Path) -> None:
     discovery.load = lambda cache, region: fixture | {'region': region, 'checked_at': int(time.time())}
     application = QApplication(sys.argv)
     ui.prepare(application)
+    ui.selfupdate.latest = lambda: None      # the pictures show made-up states, not GitHub's
     window = ui.MainWindow()
     window.screens_output = output
     window.check_updates = lambda: None
@@ -226,6 +227,11 @@ def main(output: Path) -> None:
                                                'so it was left as it is.')
     shot('10l-settings-sign-in-start-refused', reveal=window.settings_page.sign_in_note)
     window.settings_page.show_start_at_sign_in(False)
+    window.self_release = ui.selfupdate.Release('0.2.0', ui.selfupdate.PAGES, 'Scuffle.exe', 'u', 1, 's')
+    shot('10m-settings-scuffle-update', reveal=window.settings_page.self_update_row)
+    window.self_state, window.self_done = 'downloading', (42, 100)
+    shot('10n-settings-scuffle-update-downloading', reveal=window.settings_page.self_update_row)
+    window.self_release, window.self_state = None, ''
     window.downloads.jobs.clear() if window.downloads else None
     window.settings.extra_clients = ['wow_classic_era_ptr']
     window.populate()

@@ -77,6 +77,17 @@ python.org with the `py` launcher. On a Windows checkout,
 The build tools are pinned with hashes in `packaging/windows/requirements.txt`.
 After changing `requirements.in`, regenerate it with the command at its top.
 
+## Self-update checks
+
+`packaging/windows/test-self-update.ps1` and `packaging/appimage/test-self-update.sh`
+run on every CI run. Each makes two real packages, one pointing at a local stand-in
+for GitHub (`tools/self_update_server.py`) and a newer one, and updates one to the
+other. A wrong checksum must change nothing. A good release must replace the
+running program, restart it and clear away the old file. The AppImage check needs
+the image `test-ubuntu.sh` builds. Smart App Control and SmartScreen do not exist on
+GitHub's Windows Server runners, so an update on a Windows 11 desktop is still
+worth trying by hand.
+
 ## What the packages contain
 
 Both packages bundle other programs, unchanged and each under its own license:
@@ -99,8 +110,9 @@ and `packaging/windows/requirements.txt`. Their sources are at those projects.
 A tag such as `v0.1.0` that matches the version in `pyproject.toml` makes CI
 build both packages, test them and publish a GitHub release with
 `Scuffle.exe`, `Scuffle-<version>-x86_64.AppImage` and their `SHA256SUMS`.
-Before tagging, refresh the client snapshot and the README picture, and raise
-the version in `pyproject.toml`.
+Each file gets a GitHub build attestation, which needs the repository to be
+public. Before tagging, refresh the client snapshot and the README picture, and
+raise the version in `pyproject.toml`.
 
 ```sh
 git tag v0.1.0

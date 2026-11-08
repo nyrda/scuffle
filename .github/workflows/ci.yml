@@ -29,6 +29,8 @@ jobs:
         run: nix build -L .#appimage -o appimage
       - name: Start the AppImage on Ubuntu
         run: packaging/appimage/test-ubuntu.sh appimage/Scuffle-*-x86_64.AppImage
+      - name: Update one AppImage to another
+        run: nix shell nixpkgs#squashfsTools -c packaging/appimage/test-self-update.sh appimage/Scuffle-*-x86_64.AppImage
       - uses: actions/upload-artifact@v7
         with:
           name: Scuffle-AppImage
@@ -53,6 +55,8 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: build/windows/venv/Scripts/python.exe -m pytest -q
+      - name: Update one Scuffle.exe to another
+        run: ./packaging/windows/test-self-update.ps1 -Venv build/windows/venv
       - uses: actions/upload-artifact@v7
         with:
           name: Scuffle-exe
@@ -68,6 +72,8 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v7
       - name: Check that the tag is the package version
@@ -81,6 +87,11 @@ jobs:
         with:
           path: release
           merge-multiple: true
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            release/Scuffle.exe
+            release/Scuffle-*-x86_64.AppImage
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
