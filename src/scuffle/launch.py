@@ -168,7 +168,7 @@ class Launcher:
         """Add the account the browser signs in to, or renew its session if it is listed. It becomes active."""
         self.runtime.prepare()
         added = login(self.vault, self.settings.auth_host, version, sign_in, queue)
-        self.vault.record('signed_in')
+        self.vault.record('signed_in', 'with a login ticket' if added.has_login_ticket() else 'without a login ticket')
         return added
 
     def renew(self, version: int, sign_in: SignIn, account: Login | None = None, queue=None) -> Login:
@@ -187,6 +187,8 @@ class Launcher:
                 return account
             except CredentialRejected as error:
                 self.vault.record('rejected', str(error))
+                if self.renew_with_login_ticket(account, version, queue):
+                    return account
                 # The ticket is spent. Keeping it would claim a sign-in that is gone. Other logins stay.
                 self.vault.remove(account)
         added = self.sign_in(version, sign_in, queue)
@@ -197,6 +199,18 @@ class Launcher:
         renew(added, self.settings.auth_host, version, queue)
         self.vault.record('renewed')
         return added
+
+    def renew_with_login_ticket(self, account: Login, version: int, queue) -> bool:
+        """Try the ticket the last browser sign-in handed back, so an expired session needs no browser."""
+        if not account.has_login_ticket():
+            return False
+        try:
+            renew(account, self.settings.auth_host, version, queue, credential=account.load_login_ticket())
+        except CredentialRejected as error:
+            self.vault.record('login_ticket_rejected', str(error))
+            return False
+        self.vault.record('renewed_with_login_ticket')
+        return True
 
     def play(self, code: str, sign_in: SignIn, *, mode: str | None = None,
              status: Callable[[str], None] | None = None) -> subprocess.Popen:

@@ -49,6 +49,10 @@ class Login:
         return self.directory / 'session.dpapi'
 
     @property
+    def login_ticket_file(self) -> Path:
+        return self.directory / 'login-ticket.dpapi'
+
+    @property
     def account_list(self) -> Path:
         return self.directory / 'accounts.json'
 
@@ -89,6 +93,15 @@ class Login:
 
     def save_session(self, ticket: bytes) -> None:
         self.vault._save(self.session, ticket)
+
+    def has_login_ticket(self) -> bool:
+        return self.login_ticket_file.is_file()
+
+    def load_login_ticket(self) -> bytes:
+        return self.vault.bridge.unprotect(self.login_ticket_file.read_bytes())
+
+    def save_login_ticket(self, ticket: bytes) -> None:
+        self.vault._save(self.login_ticket_file, ticket)
 
     def save_game_token(self, ticket: bytes) -> None:
         self.vault._save(self.vault.token, ticket)

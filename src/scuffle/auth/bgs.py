@@ -342,6 +342,10 @@ def login(vault, host, version, sign_in, queue=None):
         # Keyed by the account id the logon names, so the session is saved as that account only.
         with vault.adding(first(record, 1)) as added:
             added.save_session(bgs.generate_auth_token(WOW_TITLE))
+            # What a sign-in hands back, when it is not just the page's one-time ticket again.
+            login_ticket = first(record, 7)
+            if isinstance(login_ticket, bytes) and login_ticket and login_ticket != ticket:
+                added.save_login_ticket(login_ticket)
             log('unused_broker_credential_saved_protected')
             added.save_battle_tag(logon_battle_tag(record))
             # After the credential is saved, so a failed lookup never costs the sign-in.
@@ -351,9 +355,12 @@ def login(vault, host, version, sign_in, queue=None):
         bgs.socket.close()
 
 
-def renew(login, host, version, queue=None):
-    """Consume a login's broker credential, then save its successor and a game credential."""
-    credential = login.load_session()
+def renew(login, host, version, queue=None, credential=None):
+    """Consume a login's broker credential, then save its successor and a game credential.
+
+    credential is the login ticket when the saved session no longer works.
+    """
+    credential = login.load_session() if credential is None else credential
     log('credential_loaded', 'bytes', len(credential))
     device = login.device_id()
     log('logon_device_id', 'bytes', len(device))

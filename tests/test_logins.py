@@ -42,6 +42,9 @@ class Battlenet:
         self.verified = []          # every redirect ticket presented
         self.tags = tags or {}
         self.issued = 0
+        self.login_tickets = {}     # lasting ticket -> account, handed back by a browser sign-in
+        self.hands_back_login_ticket = False
+        self.echoes = False
 
     def ticket(self, owner) -> bytes:
         self.issued += 1
@@ -57,10 +60,20 @@ class Battlenet:
             return ticket
         return sign_in
 
-    def record(self, owner):
+    def login_ticket(self, owner, presented):
+        if self.echoes:
+            return presented
+        if not self.hands_back_login_ticket:
+            return None
+        ticket = f'LT-{owner}'.encode()
+        self.login_tickets[ticket] = owner
+        return ticket
+
+    def record(self, owner, login_ticket=None):
         # The email is in the record too, and must never become a label or be stored.
         tag = self.tags.get(owner)
-        return fields(integer(1, owner) + (blob(3, tag) if tag else b'') + blob(4, EMAIL))
+        return fields(integer(1, owner) + (blob(3, tag) if tag else b'') + blob(4, EMAIL)
+                      + (blob(7, login_ticket) if login_ticket else b''))
 
     def connection(self, host):
         server = self
@@ -78,9 +91,12 @@ class Battlenet:
             def verify_web_ticket(self, ticket):
                 server.verified.append(ticket)
                 self.owner = server.redirects.pop(ticket)
-                return server.record(self.owner)
+                return server.record(self.owner, server.login_ticket(self.owner, ticket))
 
             def logon(self, credential, device, version):
+                if credential in server.login_tickets:     # lasting, so it is not used up
+                    self.owner = server.login_tickets[credential]
+                    return server.record(self.owner, credential)
                 if credential not in server.tickets:
                     raise CredentialRejected('BGS logon completed with status 3')
                 self.owner = server.tickets.pop(credential)
@@ -374,6 +390,39 @@ def test_a_refused_build_explains_itself_and_keeps_the_session_without_a_browser
         launch.Launcher(Settings(), Library(), runtime=runtime, vault=vault).play('wow', never)
     assert saved_ticket(vault.active()) == ticket
     assert not runtime.started
+
+
+def test_an_expired_session_comes_back_through_the_sign_ins_login_ticket_without_the_browser(vault, battlenet):
+    battlenet.hands_back_login_ticket = True
+    added = add(vault, battlenet, MAIN)
+    assert added.load_login_ticket() == f'LT-{MAIN}'.encode() and owner_only(added.login_ticket_file)
+    battlenet.tickets.clear()       # the saved one-time tickets expire within a day
+    renewed = launcher(vault).renew(VERSION, never)
+    assert renewed.id == MAIN and saved_ticket(renewed) in battlenet.tickets
+    assert vault.last('renewed_with_login_ticket') is not None
+    # It lasts, so it works again the next day.
+    battlenet.tickets.clear()
+    assert launcher(vault).renew(VERSION, never).id == MAIN
+
+
+def test_a_sign_in_that_only_echoes_the_pages_ticket_keeps_no_login_ticket(vault, battlenet):
+    battlenet.echoes = True
+    assert not add(vault, battlenet, MAIN).has_login_ticket()
+
+
+@pytest.mark.parametrize('keeps_login_ticket', [True, False])
+def test_with_no_ticket_left_that_works_the_browser_opens(vault, battlenet, keeps_login_ticket):
+    battlenet.hands_back_login_ticket = keeps_login_ticket
+    add(vault, battlenet, MAIN)
+    battlenet.tickets.clear()
+    battlenet.login_tickets.clear()
+    opened = []
+
+    def browser(url):
+        opened.append(url)
+        return battlenet.browser(MAIN)(url)
+    assert launcher(vault).renew(VERSION, browser).id == MAIN and len(opened) == 1
+    assert (vault.last('login_ticket_rejected') is not None) == keeps_login_ticket
 
 
 @pytest.mark.parametrize('position, exit_time, text', [
