@@ -29,7 +29,7 @@ function Build-Copy([string] $name, [string] $version) {
     [IO.File]::WriteAllText($module, $text)
     $project = Join-Path $copy 'pyproject.toml'
     [IO.File]::WriteAllText($project, (Get-Content $project -Raw).Replace("version = `"$current`"", "version = `"$version`""))
-    & (Join-Path $copy 'packaging\windows\build.ps1') -Venv $Venv
+    & (Join-Path $copy 'packaging\windows\build.ps1') -Venv $Venv | Out-Host     # only the path is this function's answer
     return Join-Path $copy 'dist\Scuffle.exe'
 }
 

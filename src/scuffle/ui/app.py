@@ -2133,8 +2133,8 @@ class MainWindow(QMainWindow):
         def work():
             try:
                 post(self.bus.self_update_found, selfupdate.latest())
-            except (OSError, ValueError, RuntimeError, TypeError, AttributeError):
-                pass            # offline, or GitHub is busy. The next check tries again
+            except Exception:   # offline, or GitHub is busy. The next check tries again
+                pass
 
         threading.Thread(target=work, name='scuffle-self-update-check', daemon=True).start()
 
@@ -2192,8 +2192,8 @@ class MainWindow(QMainWindow):
             try:
                 selfupdate.install(release, lambda done, total: post(self.bus.self_update_progress, done, total))
                 post(self.bus.self_update_installed, '')
-            except (selfupdate.UpdateError, OSError) as error:
-                post(self.bus.self_update_installed, str(error))
+            except Exception as error:      # shown in the banner, and Update can be pressed again
+                post(self.bus.self_update_installed, str(error) or 'The download failed.')
 
         threading.Thread(target=work, name='scuffle-self-update', daemon=True).start()
 

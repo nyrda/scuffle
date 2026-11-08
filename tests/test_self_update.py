@@ -24,7 +24,7 @@ def program_text(version=NEW, code=0):
 class GitHub:
     """Serves one release the way the API and the download addresses do."""
 
-    def __init__(self, monkeypatch, body=program_text(), listed_sum=None, listed_name=ASSET, size=None, **release):
+    def __init__(self, monkeypatch, body=program_text(), listed_sum=None, listed_name=ASSET, size=None, cut_short=False, garbled=False, **release):
         self.body, self.requests = body, []
         digest = listed_sum or hashlib.sha256(body).hexdigest()
         files = {'/SHA256SUMS': f'{digest}  {listed_name}\n'.encode(), f'/{ASSET}': body}
@@ -33,11 +33,17 @@ class GitHub:
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
                 github.requests.append(self.path)
+                if garbled and self.path == f'/{ASSET}':
+                    self.wfile.write(b'not an HTTP answer\r\n\r\n')
+                    self.close_connection = True
+                    return
                 data = files.get(self.path)
                 if self.path == '/latest':
                     data = json.dumps(github.description).encode()
                 self.send_response(200 if data is not None else 404)
-                self.send_header('Content-Length', str(len(data or b'')))
+                # A connection that ends early promises more than it sends.
+                extra = 1000 if cut_short and self.path == f'/{ASSET}' else 0
+                self.send_header('Content-Length', str(len(data or b'') + extra))
                 self.end_headers()
                 self.wfile.write(data or b'')
 
@@ -132,6 +138,23 @@ def test_a_bad_release_changes_nothing(monkeypatch, running, options, message):
         selfupdate.install(selfupdate.latest())
     assert running.read_bytes() == before
     assert siblings(running) == [running.name]
+
+
+def test_a_download_cut_short_is_a_clear_failure_that_changes_nothing(monkeypatch, running):
+    github = GitHub(monkeypatch, cut_short=True, size=None)
+    github.description['assets'][0]['size'] += 1000
+    before = running.read_bytes()
+    with pytest.raises(selfupdate.UpdateError):
+        selfupdate.install(selfupdate.latest())
+    assert running.read_bytes() == before and siblings(running) == [running.name]
+
+
+def test_an_answer_that_is_not_http_is_a_clear_failure_that_changes_nothing(monkeypatch, running):
+    GitHub(monkeypatch, garbled=True)
+    before = running.read_bytes()
+    with pytest.raises(selfupdate.UpdateError, match='could not be installed'):
+        selfupdate.install(selfupdate.latest())
+    assert running.read_bytes() == before and siblings(running) == [running.name]
 
 
 def test_a_release_without_a_checksum_for_the_file_is_refused(monkeypatch, running):

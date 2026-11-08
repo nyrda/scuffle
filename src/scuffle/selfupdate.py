@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import http.client
 import json
 import os
 from pathlib import Path
@@ -197,7 +198,7 @@ def install(release: Release, progress: Callable[[int, int], None] | None = None
         _download(release, staged, _expected_sum(release), progress, cancelled)
         _try_out(staged, release.version)
         _swap(running, staged)
-    except OSError as error:
+    except (OSError, http.client.HTTPException) as error:
         raise UpdateError(f'The update could not be installed: {error}') from error
     finally:
         try:
