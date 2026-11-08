@@ -28,7 +28,8 @@ Scuffle is experimental. Back up your WTF and Interface folders before you
 point it at clients you care about, and expect rough edges. Download the
 current version from
 [Releases](https://github.com/nyrda/scuffle/releases). Each release lists the
-SHA-256 sums of its files in `SHA256SUMS`.
+SHA-256 sums of its files in `SHA256SUMS`, and GitHub records how each file was
+built, which `gh attestation verify Scuffle.exe -R nyrda/scuffle` checks.
 
 **Windows**: `Scuffle.exe` is a single file with everything inside. Put it in a
 folder of its own and start it. It is not signed yet, so Smart App Control,
@@ -53,6 +54,20 @@ when Scuffle exits, so close the game before Scuffle.
 ```sh
 nix profile install github:nyrda/scuffle   # or nix run github:nyrda/scuffle
 ```
+
+## Updating Scuffle
+
+Scuffle asks GitHub once a day whether a newer version is out and says so in the
+window, the tray and a notification. **Update and restart** downloads it, checks
+it against the release's checksum and checks that it starts on your system, then
+replaces the program. Nothing is installed unless you click, and Scuffle waits
+while a game runs or a download is active. The AppImage keeps its file name, so
+shortcuts go on working. A folder Scuffle cannot write to stops the update, and
+**Release notes** has the download instead.
+
+**Settings › General** has **Check for Scuffle updates** and **Skip this version**.
+`scuffle self-update` does the same from the command line. Nix installations are
+only told about a release, since Nix owns the package.
 
 ## First start
 

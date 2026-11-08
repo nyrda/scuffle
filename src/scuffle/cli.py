@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 import sys
 
-from . import catalog, memory, move, system
+from . import catalog, diagnostics, memory, move, selfupdate, system
 from .instance import InstanceError, exclusive
 from .library import Library, LibraryError, Updater
 from .ngdp.cdn import CDNClient
@@ -50,6 +50,7 @@ def main(argv=None):
     parser.add_argument('--root', type=Path, help='Installation folder, by default the saved one')
     parser.add_argument('--tray', action='store_true',
                         help='Open the window hidden in the tray, as Scuffle starts at sign-in')
+    parser.add_argument('--version', action='store_true', help='Print the version of Scuffle and exit')
     commands = parser.add_subparsers(dest='command')
     commands.add_parser('clients', help='List the clients and their installed versions')
     commands.add_parser('sign-in', help='Sign in to a Battle.net account through the browser and make it active')
@@ -62,6 +63,8 @@ def main(argv=None):
     play.add_argument('--shortcut', action='store_true',
                       help='Start as a shortcut does: through the Scuffle window if it runs, and with the '
                            'window when the client needs a sign-in or an update')
+    update = commands.add_parser('self-update', help='Replace Scuffle with its newest release')
+    update.add_argument('--start', action='store_true', help='Open the updated Scuffle afterwards')
     adopt = commands.add_parser('adopt-wowupdater', help='Adopt a wowupdater installation in place')
     adopt.add_argument('source', type=Path)
     for name in ['install', 'update', 'verify']:
@@ -75,6 +78,11 @@ def main(argv=None):
         if name == 'verify':
             command.add_argument('--quick', action='store_true', help='Skip reading every stored object')
     args = parser.parse_args(argv)
+    if args.version:
+        print(f'scuffle {diagnostics.version()}', flush=True)
+        return
+    if args.command == 'self-update':
+        return self_update(args)
     if args.command is None:
         from .ui.app import main as interface
         return interface(tray=args.tray)
@@ -92,6 +100,24 @@ def main(argv=None):
     # The window's queue, launches and session must not run beside a command's.
     with exclusive():
         return run(args)
+
+
+def self_update(args):
+    with exclusive():
+        release = selfupdate.latest()
+        if release is None:
+            print(json.dumps({'updated': False, 'version': selfupdate.current()}), flush=True)
+            return
+        if not selfupdate.can_install() or not release.asset:
+            raise LibraryError(f'Scuffle {release.version} is out, but this installation cannot update itself. '
+                               f'See {release.page}')
+        try:
+            selfupdate.install(release)
+        except selfupdate.UpdateError as error:
+            raise LibraryError(str(error)) from error
+    print(json.dumps({'updated': True, 'version': release.version}), flush=True)
+    if args.start:
+        selfupdate.restart()
 
 
 def run(args):

@@ -2428,3 +2428,106 @@ def test_starting_at_sign_in_writes_and_removes_only_scuffles_own_entry(qt, wind
     assert not page.sign_in_start.isChecked() and 'not made by Scuffle' in page.sign_in_note.text()
     window.set_start_at_sign_in(False)
     assert entry.exists()
+
+
+def self_update_release(asset='Scuffle.exe'):
+    from scuffle import selfupdate
+    return selfupdate.Release('9.0.0', f'{selfupdate.PAGES}tag/v9.0.0', asset, 'u', 1, 's' if asset else '')
+
+
+def found_self_update(qt, window, monkeypatch, release):
+    from scuffle import selfupdate
+    monkeypatch.setattr(selfupdate, 'latest', lambda: release)
+    window.self_checked = None
+    window.check_self_update()
+    deadline = time.monotonic() + 5
+    while window.self_release is not release and time.monotonic() < deadline:
+        qt.processEvents()
+    window.refresh()
+    assert window.self_release is release
+
+
+def test_a_scuffle_update_waits_for_the_game_then_installs_and_restarts(qt, window, monkeypatch):
+    from scuffle import selfupdate
+    installed, quit_calls = [], []
+    monkeypatch.setattr(selfupdate, 'install', lambda release, progress: installed.append(release.version))
+    monkeypatch.setattr(window, 'quit', lambda: quit_calls.append(True))
+    found_self_update(qt, window, monkeypatch, self_update_release())
+    page = window.settings_page
+    assert '9.0.0 is out' in window.client_page.banner.text.text()
+    assert window.client_page.banner.action.text() == 'Update and restart'
+    assert window.self_update_menu_text() == 'Update Scuffle to 9.0.0'
+
+    window.phases['wow'] = 'Running'
+    window.client_page.banner.action.click()
+    window.refresh()
+    qt.processEvents()
+    assert installed == [] and window.self_state == 'waiting' and 'when the game is finished' in page.self_update_note.text()
+    assert not page.self_update_now.isEnabled()
+
+    window.phases.clear()
+    window.refresh()
+    assert wait_for(qt, lambda: quit_calls)
+    assert installed == ['9.0.0'] and window.restart_after_quit
+
+
+def test_a_scuffle_update_never_restarts_over_a_game_that_started_while_it_downloaded(qt, window, monkeypatch):
+    from scuffle import selfupdate
+    quit_calls = []
+    monkeypatch.setattr(selfupdate, 'install', lambda release, progress: None)
+    monkeypatch.setattr(window, 'quit', lambda: quit_calls.append(True))
+    found_self_update(qt, window, monkeypatch, self_update_release())
+    window.start_self_update()
+    window.phases['wow'] = 'Running'
+    assert wait_for(qt, lambda: window.self_state == 'installed')
+    window.refresh()
+    assert not quit_calls and 'It is installed' in window.settings_page.self_update_note.text()
+    window.phases.clear()
+    window.refresh()
+    assert quit_calls and window.restart_after_quit
+
+
+def test_a_failed_scuffle_update_says_why_and_can_be_tried_again(qt, window, monkeypatch):
+    from scuffle import selfupdate
+
+    def fails(release, progress):
+        raise selfupdate.UpdateError('The download does not match the checksum of the release')
+    monkeypatch.setattr(selfupdate, 'install', fails)
+    found_self_update(qt, window, monkeypatch, self_update_release())
+    window.start_self_update()
+    assert wait_for(qt, lambda: 'could not update itself' in window.client_page.banner.text.text())
+    assert 'checksum' in window.client_page.banner.text.text()
+    assert window.self_state == '' and not window.restart_after_quit and window.settings_page.self_update_now.isEnabled()
+
+
+def test_a_skipped_scuffle_version_stays_quiet(qt, window, monkeypatch):
+    release = self_update_release()
+    found_self_update(qt, window, monkeypatch, release)
+    window.settings_page.self_update_skip.click()
+    assert window.settings.skipped_self_update == '9.0.0' and window.self_update_menu_text() == ''
+    assert not window.messages.get('') and 'You skipped' in window.settings_page.self_update_note.text()
+    window.on_self_update_found(release)
+    assert not window.messages.get('')
+
+
+def test_a_managed_installation_is_only_told_about_a_new_scuffle(qt, window, monkeypatch):
+    from PySide6.QtGui import QDesktopServices
+    opened = []
+    monkeypatch.setattr(QDesktopServices, 'openUrl', lambda url: opened.append(url.toString()))
+    found_self_update(qt, window, monkeypatch, self_update_release(asset=''))
+    assert window.client_page.banner.action.text() == 'Release notes' and window.self_update_menu_text() == ''
+    assert window.settings_page.self_update_now.isHidden()
+    window.client_page.banner.action.click()
+    assert opened == ['https://github.com/nyrda/scuffle/releases/tag/v9.0.0']
+
+
+def test_the_update_check_stays_off_when_the_user_turned_it_off(qt, window, monkeypatch):
+    from scuffle import selfupdate
+    asked = []
+    monkeypatch.setattr(selfupdate, 'latest', lambda: asked.append(True))
+    window.settings.check_self_updates = False
+    window.self_checked = None
+    window.check_self_update()
+    for _ in range(20):
+        qt.processEvents()
+    assert not asked

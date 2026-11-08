@@ -63,6 +63,9 @@ class Settings:
     auto_update_extra: list[str] = field(default_factory=list)
     # Client -> the version an automatic update failed for and when, as {'version', 'at'}.
     auto_update_failures: dict[str, dict] = field(default_factory=dict)
+    check_self_updates: bool = True   # whether Scuffle asks GitHub for a newer Scuffle
+    skipped_self_update: str = ''     # the release the user chose to skip
+    announced_self_update: str = ''   # the release a desktop notification already told about
     proton: str = ''                  # Linux only, empty means the newest found
     selected: str = 'wow'
     modes: dict[str, str] = field(default_factory=dict)

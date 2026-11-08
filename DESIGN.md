@@ -456,6 +456,37 @@ long operations report progress as events. Downloads and sign-in can be
 cancelled. The update check and ticket exchange before a launch take seconds
 and run to completion.
 
+## Updating Scuffle
+
+`selfupdate.py` reads GitHub's latest release once a day, without an account.
+Drafts, pre-releases and anything not newer are ignored. Only addresses under this
+repository's release downloads are used. The update only happens when the user
+asks, because the program it replaces holds the Battle.net session.
+
+1. The file is downloaded beside the program, as `Scuffle.new.exe`, and must match
+   the release's size and its line in `SHA256SUMS`.
+2. It must run with `--version` and name the release's version. So a package that
+   cannot start here, or a wrong file under the right name, changes nothing.
+3. The running program is replaced. Linux hard links it as `.old` and renames the
+   new file over it, which is atomic. Windows cannot overwrite a running program,
+   only rename it, so it renames the program to `.old` and the new file to its name,
+   and renames back if the second step fails. A power cut between those two renames
+   is the one moment the program has no file of its name, and `Scuffle.old.exe`
+   still beside it is the working copy.
+4. Scuffle restarts once it has released the window's lock, or a new start would
+   hand its request to the window that is closing. The new version removes `.old`
+   once its window is up.
+
+A new Scuffle is started with `PYINSTALLER_RESET_ENVIRONMENT`, or a one-file
+package would use the unpacked files of the one that started it, and without the
+AppImage's own variables. The restart waits while a game runs or a download is
+active, and repeats that check after the download, since a game can start during
+it.
+
+A checksum from the same release catches a damaged download, and does not protect
+against someone publishing a release in this repository. Scuffle does not verify
+GitHub's build attestations. They are there for people who want to check a download.
+
 ## Memory
 
 The window alone uses about 130 MB, of which 65 MB is shared libraries. A download

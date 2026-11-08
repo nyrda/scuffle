@@ -17,7 +17,7 @@ from PySide6.QtGui import QDesktopServices, QIcon
 from PySide6.QtWidgets import (QApplication, QFrame, QGraphicsOpacityEffect, QHBoxLayout, QMainWindow, QPushButton, QStackedWidget,
                                QMenu, QStyleFactory, QVBoxLayout, QWidget)
 
-from .. import battlenet, catalog, diagnostics, discovery, imports, instance, move, shortcuts, steam, system
+from .. import battlenet, catalog, diagnostics, discovery, imports, instance, move, selfupdate, shortcuts, steam, system
 from ..downloads import DONE, FAILED, PAUSED, QUEUED, RUNNING, DownloadManager, Job, MoveTask
 from ..launch import Launcher, LaunchError
 from ..library import Library, LibraryError, update_available
@@ -54,6 +54,9 @@ class Bus(QObject):
     sign_in_requested = Signal(str)
     updates_checked = Signal(dict)
     launch_phase = Signal(str, str)      # client, phase text
+    self_update_found = Signal(object)   # a newer release of Scuffle, or None
+    self_update_progress = Signal(int, int)
+    self_update_installed = Signal(str)  # why it failed, or nothing
     task_finished = Signal(str, str)     # client or '' for sign-in, error text or ''
     update_needed = Signal(str)
     storage_ready = Signal(dict)
@@ -104,6 +107,16 @@ class MainWindow(QMainWindow):
         self.bus.sign_in_requested.connect(self.on_sign_in_requested)
         self.bus.updates_checked.connect(self.on_updates)
         self.bus.launch_phase.connect(self.on_phase)
+        self.bus.self_update_found.connect(self.on_self_update_found)
+        self.bus.self_update_progress.connect(self.on_self_update_progress)
+        self.bus.self_update_installed.connect(self.on_self_update_installed)
+        self.self_release = None        # a newer release of Scuffle
+        self.self_state = ''            # '', waiting, downloading or installed, once the user asked
+        self.self_done = (0, 0)
+        self.self_checked = None
+        self.restart_after_quit = False
+        # Read now, since the Windows package reads it from a file that an update replaces.
+        self.running_version = diagnostics.attempt(selfupdate.current, 'unknown')
         self.bus.task_finished.connect(self.on_task_finished)
         self.bus.update_needed.connect(self.on_update_needed)
         self.bus.storage_ready.connect(self.on_storage)
@@ -177,6 +190,9 @@ class MainWindow(QMainWindow):
         self.options_page.closed.connect(self.show_client_page)
         self.settings_page = SettingsPage()
         self.settings_page.saved.connect(self.on_settings_saved)
+        self.settings_page.self_update_clicked.connect(self.start_self_update)
+        self.settings_page.self_update_notes_clicked.connect(self.open_self_update_notes)
+        self.settings_page.self_update_skipped.connect(self.skip_self_update)
         self.settings_page.recheck_catalog.connect(lambda: self.discover(force=True))
         self.settings_page.closed.connect(self.show_client_page)
         self.settings_page.choose_folder.connect(self.open_folder_picker)
@@ -228,6 +244,7 @@ class MainWindow(QMainWindow):
         self.tray.resume_all.connect(lambda: self.downloads and self.downloads.resume_all())
         self.tray.play.connect(self.play_from_tray)
         self.tray.check_now.connect(self.check_now)
+        self.tray.self_update.connect(self.start_self_update)
         self.tray.quit.connect(self.quit)
         self.notifier = Notifier(self.tray.icon)
         self.notifier.clicked.connect(self.reveal_client)
@@ -266,6 +283,9 @@ class MainWindow(QMainWindow):
         timer.start(1000)
         self.update_timer.timeout.connect(self.check_updates)
         self.update_timer.timeout.connect(self.discover)
+        self.update_timer.timeout.connect(self.check_self_update)
+        self.check_self_update()
+        self.refresh_self_update()
         self.update_timer.start(CHECK_INTERVAL * 1000)
 
 
@@ -633,6 +653,8 @@ class MainWindow(QMainWindow):
             else 'The Battle.net account Play uses. Switch, add or sign out here.' if signed
             else 'Install a client first. Signing in needs its version.' if not can_sign_in else '')
         self.refresh_downloads()
+        self.advance_self_update()
+        self.refresh_self_update()
         self.refresh_tray()
         if self.stack.currentWidget() is self.settings_page:
             self.update_move_button()       # a game can start or stop at any time
@@ -1879,7 +1901,9 @@ class MainWindow(QMainWindow):
             self.refresh()
 
     def on_notification_action(self, code: str, action: str):
-        if action == 'update':
+        if action == 'self-update':
+            self.start_self_update()
+        elif action == 'update':
             self.update_now(code)
         elif action == 'always':
             self.always_update(code)
@@ -2043,7 +2067,7 @@ class MainWindow(QMainWindow):
                              can_pause=any(j.status in {QUEUED, RUNNING} for j in jobs),
                              can_resume=any(j.status == PAUSED for j in jobs),
                              clients=self.tray_clients(), next_check=self.next_check_line(),
-                             can_check=not self._checking)
+                             can_check=not self._checking, self_update=self.self_update_menu_text())
 
     def next_check_line(self) -> str:
         """When the update check runs next, for the tray. Nothing without an installed client."""
@@ -2095,6 +2119,138 @@ class MainWindow(QMainWindow):
         if self.start_label(code):
             self.start(code)
         self.refresh()
+
+    # Updating Scuffle itself
+
+    def check_self_update(self) -> None:
+        """Ask GitHub for a newer Scuffle, at most once a day and only while the user wants that."""
+        now = time.monotonic()
+        if not self.settings.check_self_updates or self.self_state or (
+                self.self_checked is not None and now - self.self_checked < selfupdate.CHECK_SECONDS):
+            return
+        self.self_checked = now
+
+        def work():
+            try:
+                post(self.bus.self_update_found, selfupdate.latest())
+            except Exception:   # offline, or GitHub is busy. The next check tries again
+                pass
+
+        threading.Thread(target=work, name='scuffle-self-update-check', daemon=True).start()
+
+    def on_self_update_found(self, release) -> None:
+        if self.self_state:
+            return
+        self.self_release = release
+        self.refresh_self_update()
+        if release is None or release.version == self.settings.skipped_self_update:
+            return
+        self.announce_self_update(release)
+
+    def announce_self_update(self, release) -> None:
+        text = f'Scuffle {release.version} is out.'
+        if release.asset:
+            self.notify(text, 'info', 'Update and restart', self.start_self_update, client='')
+        else:
+            how = ' Update it the way you installed it.' if not selfupdate.can_install() else ''
+            self.notify(text + how, 'info', 'Release notes', self.open_self_update_notes, client='')
+        if self.settings.announced_self_update != release.version and self.settings.show_notifications:
+            self.settings.announced_self_update = release.version
+            self.settings.save()
+            actions = (('self-update', 'Update and restart'),) if release.asset else ()
+            self.notifier.show('Scuffle update', f'Scuffle {release.version} is out.', '', 'info', actions)
+
+    def self_update_blocker(self) -> str:
+        """What Scuffle must not be restarted in the middle of, as a word for the user."""
+        if self.phases or self.running_now():
+            return 'game'
+        if self.downloads and self.downloads.busy():
+            return 'download'
+        return ''
+
+    def start_self_update(self) -> None:
+        if self.self_release is None or not self.self_release.asset or self.self_state:
+            return
+        self.self_state = 'waiting'
+        self.clear_notice('')
+        self.advance_self_update()
+        self.refresh_self_update()
+
+    def advance_self_update(self) -> None:
+        """Download once nothing needs Scuffle to stay as it is, and restart when that is still so."""
+        if self.self_state not in ('waiting', 'installed') or self.self_update_blocker():
+            return
+        if self.self_state == 'installed':
+            self.restart_after_quit = True
+            self.self_state = 'restarting'
+            self.quit()
+            return
+        self.self_state = 'downloading'
+        release = self.self_release
+
+        def work():
+            try:
+                selfupdate.install(release, lambda done, total: post(self.bus.self_update_progress, done, total))
+                post(self.bus.self_update_installed, '')
+            except Exception as error:      # shown in the banner, and Update can be pressed again
+                post(self.bus.self_update_installed, str(error) or 'The download failed.')
+
+        threading.Thread(target=work, name='scuffle-self-update', daemon=True).start()
+
+    def on_self_update_progress(self, done: int, total: int) -> None:
+        self.self_done = (done, total)
+        self.refresh_self_update()
+
+    def on_self_update_installed(self, problem: str) -> None:
+        if problem:
+            self.self_state = ''
+            self.notify(f'Scuffle could not update itself. {problem}', 'error', 'Release notes',
+                        self.open_self_update_notes, client='')
+        else:
+            self.self_state = 'installed'
+            self.advance_self_update()
+        self.refresh_self_update()
+
+    def skip_self_update(self) -> None:
+        if self.self_release is not None:
+            self.settings.skipped_self_update = self.self_release.version
+            self.settings.save()
+            self.clear_notice('')
+            self.refresh_self_update()
+
+    def open_self_update_notes(self) -> None:
+        if self.self_release is not None:
+            QDesktopServices.openUrl(QUrl(self.self_release.page))
+
+    def self_update_note(self) -> str:
+        release, version = self.self_release, self.running_version
+        if release is None:
+            return f'You have Scuffle {version}.'
+        blocker = self.self_update_blocker()
+        text = f'You have Scuffle {version}. Scuffle {release.version} is out.'
+        if self.self_state == 'waiting' and blocker:
+            return f'{text} It installs when the {blocker} is finished.'
+        if self.self_state == 'downloading':
+            done, total = self.self_done
+            return f'{text} Downloading {done * 100 // total}%.' if total else f'{text} Downloading.'
+        if self.self_state == 'installed':
+            return f'{text} It is installed and starts when the {blocker or "game"} is finished.'
+        if release.version == self.settings.skipped_self_update:
+            return f'{text} You skipped this version.'
+        return text
+
+    def refresh_self_update(self) -> None:
+        release = self.self_release
+        self.settings_page.show_self_update(
+            self.self_update_note(), available=release is not None, can_install=bool(release and release.asset),
+            busy=bool(self.self_state), skipped=bool(release and release.version == self.settings.skipped_self_update))
+
+    def self_update_menu_text(self) -> str:
+        release = self.self_release
+        if (release is None or not release.asset or self.self_state
+                or release.version == self.settings.skipped_self_update):
+            return ''
+        return f'Update Scuffle to {release.version}'
 
     def looking_at(self, code: str, *, downloads: bool = False) -> bool:
         """Whether the window shows this client to the user right now, so a notification would repeat it."""
@@ -2230,6 +2386,9 @@ def main(request: dict | None = None, *, tray: bool = False):
         window.start_in_tray()
     else:
         window.show()
+    selfupdate.finish()
     code = application.exec()
     owner.close()
+    if window.restart_after_quit:
+        selfupdate.restart()
     sys.exit(code)

@@ -29,6 +29,8 @@ jobs:
         run: nix build -L .#appimage -o appimage
       - name: Start the AppImage on Ubuntu
         run: packaging/appimage/test-ubuntu.sh appimage/Scuffle-*-x86_64.AppImage
+      - name: Update one AppImage to another
+        run: nix shell nixpkgs#squashfsTools -c packaging/appimage/test-self-update.sh appimage/Scuffle-*-x86_64.AppImage
       - uses: actions/upload-artifact@v7
         with:
           name: Scuffle-AppImage
@@ -53,6 +55,9 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: build/windows/venv/Scripts/python.exe -m pytest -q
+      - name: Update one Scuffle.exe to another
+        timeout-minutes: 15
+        run: ./packaging/windows/test-self-update.ps1 -Venv build/windows/venv
       - uses: actions/upload-artifact@v7
         with:
           name: Scuffle-exe
@@ -68,6 +73,8 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v7
       - name: Check that the tag is the package version
@@ -81,6 +88,11 @@ jobs:
         with:
           path: release
           merge-multiple: true
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            release/Scuffle.exe
+            release/Scuffle-*-x86_64.AppImage
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -93,3 +105,31 @@ jobs:
             --notes "Scuffle is experimental. The README explains how to install it." \
             --generate-notes \
             Scuffle.exe Scuffle-*-x86_64.AppImage SHA256SUMS
+
+  # The real thing on real Windows: the release before this one, from GitHub, updates itself to this one.
+  update-from-previous:
+    name: Update the previous release to this one
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [release]
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - name: Update and check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tags = @(gh release list -R $env:GITHUB_REPOSITORY --limit 2 --exclude-pre-releases --json tagName --jq '.[].tagName')
+          gh release download $env:GITHUB_REF_NAME -R $env:GITHUB_REPOSITORY -p Scuffle.exe -D current
+          gh attestation verify current/Scuffle.exe -R $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE) { throw 'The release has no valid attestation' }
+          if ($tags.Count -lt 2) { Write-Host 'This is the first release.'; exit 0 }
+          gh release download $tags[1] -R $env:GITHUB_REPOSITORY -p Scuffle.exe -D install
+          $env:APPDATA = "$PWD/appdata"; $env:LOCALAPPDATA = "$PWD/localappdata"
+          New-Item -ItemType Directory -Force $env:APPDATA, $env:LOCALAPPDATA | Out-Null
+          $update = Start-Process install/Scuffle.exe -ArgumentList 'self-update' -PassThru -NoNewWindow -RedirectStandardOutput update.txt -RedirectStandardError errors.txt
+          $null = $update.Handle
+          $update.WaitForExit()
+          Get-Content update.txt, errors.txt
+          if ($update.ExitCode) { throw 'The update failed' }
+          if ((Get-FileHash install/Scuffle.exe).Hash -ne (Get-FileHash current/Scuffle.exe).Hash) { throw 'The program is not the new release' }
