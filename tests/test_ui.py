@@ -2015,14 +2015,20 @@ def test_a_new_version_is_announced_once_also_after_a_restart(qt, window, tmp_pa
         restarted.close()
 
 
-@pytest.mark.parametrize('exit_code, report, force, expected', [
-    (0, False, False, None),
-    (0, True, False, 'Its crash report is in the Errors folder of its game folder.'),
-    (0xC0000005, False, False, 'It exited with code 0xc0000005.'),
-    (1, False, True, None),          # Force quit ends a game on Windows with code 1
+OUTPUT = ' Its output is in the games folder of the logs, under Settings, Diagnostics.'
+
+
+@pytest.mark.parametrize('exit_code, report, force, bridge, expected', [
+    (0, False, False, None, None),
+    (0, True, False, None, 'Its crash report is in the Errors folder of its game folder.' + OUTPUT),
+    (0xC0000005, False, False, None, 'It exited with code 0xc0000005, access violation.' + OUTPUT),
+    (1, False, True, None, None),          # Force quit ends a game on Windows with code 1
+    # On Linux the launcher's own code can be a crash of its wrapper, as GameMode's at exit.
+    (134, False, False, 0, None),
+    (134, False, False, 0xC0000409, 'It exited with code 0xc0000409, stack buffer overrun.' + OUTPUT),
 ])
 def test_a_game_that_quits_unexpectedly_notifies(qt, window, tmp_path, monkeypatch, exit_code, report, force,
-                                                 expected):
+                                                 bridge, expected):
     import threading
     from types import SimpleNamespace
     from scuffle.ui import app as ui
@@ -2035,6 +2041,10 @@ def test_a_game_that_quits_unexpectedly_notifies(qt, window, tmp_path, monkeypat
 
     class Game:
         returncode = None
+        game_log = None
+        if bridge is not None:
+            game_log = tmp_path / 'run.log'
+            game_log.write_text(f'wine: some output\nscuffle-bridge: game exited with code 0x{bridge:08x}\n')
 
         def wait(self):
             assert release.wait(30)

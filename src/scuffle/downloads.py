@@ -14,7 +14,7 @@ import threading
 import time
 from typing import Callable
 
-from . import catalog, imports, memory, move
+from . import catalog, events, imports, memory, move
 from .library import Cancelled, Library, LibraryError, Updater, atomic_json, default_preferences
 from .ngdp.cdn import CDNClient, Throttle
 from .settings import Settings, cache_dir, data_dir
@@ -509,12 +509,14 @@ class DownloadManager:
                 continue
             self._notify(job)
             status, error = DONE, ''
+            events.log.info('%s %s %s', 'automatic' if job.automatic else 'starting', job.kind, job.client)
             try:
                 job.result = self._execute(job)
             except Cancelled:
                 status = PAUSED
             except (LibraryError, OSError, ValueError, RuntimeError, sqlite3.Error) as failure:
                 status, error = FAILED, str(failure)
+            events.log.info('%s %s ended: %s%s', job.kind, job.client, status, f', {error}' if error else '')
             with self._lock:
                 job.status, job.error, job.speed = status, error, 0.0
                 self._current = None

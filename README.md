@@ -257,7 +257,14 @@ clipboard: Scuffle's version, the system, Proton and `umu-run`, the settings
 that matter, the clients and downloads, and the last lines of the Proton log.
 It leaves out your sign-in, account names and ids, your user name and your
 home folder. Read it before you share it all the same. `scuffle diagnostics`
-prints the same report. Report a bug as an
+prints the same report.
+
+**Logs.** **Open logs folder** in **Settings › Diagnostics** shows what Scuffle
+keeps. `scuffle.log` says what Scuffle did: each start with its options, how each
+game ended with the game's own exit code, downloads and updates. The `games`
+folder holds the output of each client's last ten runs, with Wine's errors, which
+is where a crash shows its reason. A crash notification names the exit code, such
+as `0xc0000005, access violation`. Neither log holds a ticket, a token or an email. Report a bug as an
 [issue](https://github.com/nyrda/scuffle/issues) and paste the report there.
 
 ## Command line

@@ -29,8 +29,8 @@ class GameRuntime:
 
     def start(self, executable: Path, arguments: list[str], token: Path, ack: Path, *,
               environment: dict[str, str] | None = None, wrapper: list[str] = (),
-              account: tuple[str, str] | None = None) -> subprocess.Popen:
-        """Start the game. The environment and wrapper commands apply on Linux only.
+              account: tuple[str, str] | None = None, log: Path | None = None) -> subprocess.Popen:
+        """Start the game. The environment, wrapper commands and log of its output apply on Linux only.
 
         account is the WoW account's name and region. Without one the game asks for it.
         """
@@ -90,16 +90,25 @@ class LinuxRuntime(GameRuntime):
         env.pop('UMU_CONTAINER_NSENTER', None)
         env.update(WINEPREFIX=str(self.prefix), PROTONPATH=str(self.proton.path), GAMEID=self.GAMEID,
                    WOW_BROKER_PIPE='1')
+        if 'WINEDEBUG' not in extra and env.get('WINEDEBUG') == '-all':
+            # Wine's errors only, so a crash leaves its reason in the run's log without the noise.
+            env['WINEDEBUG'] = '-all,err+all'
         return env
 
-    def start(self, executable, arguments, token, ack, *, environment=None, wrapper=(), account=None):
+    def start(self, executable, arguments, token, ack, *, environment=None, wrapper=(), account=None, log=None):
         # Wrappers such as gamemoderun or gamescope go around umu-run, and so around the game.
         # Prefix creation and bridge calls never run through them.
         env = self.game_environment(environment)
         command = [*wrapper, str(self.umu),
                    *_launch_arguments(self.bridge_executable, executable, arguments, token, ack, account)]
-        return subprocess.Popen(command, env=env, cwd=executable.parent, stdin=subprocess.DEVNULL,
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        # The run's output goes to a file of its own, which outlives Scuffle if it quits first.
+        output = open(log, 'ab') if log else subprocess.DEVNULL      # noqa: SIM115, the child keeps it
+        try:
+            return subprocess.Popen(command, env=env, cwd=executable.parent, stdin=subprocess.DEVNULL,
+                                    stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
+        finally:
+            if log:
+                output.close()
 
     # The game's own Wine session lives in its container, whose wineserver only its mount
     # namespace can reach. The bridge joins it there with the game's Wine and variables.

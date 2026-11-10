@@ -5,6 +5,7 @@ status codes, and credential lengths are logged to stderr. No password or token
 is printed.
 """
 from collections import deque
+import logging
 import socket
 import ssl
 import struct
@@ -70,6 +71,7 @@ class BuildRefused(RuntimeError):
 
 def log(*parts):
     print(*parts, file=sys.stderr, flush=True)
+    logging.getLogger('scuffle.auth').info(' '.join(map(str, parts)))
 
 
 def launch_name(name) -> bool:
