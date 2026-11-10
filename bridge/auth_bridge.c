@@ -124,6 +124,12 @@ static int launch_protected(const char *token_file, const char *ack_file, const 
     plain.pbData = NULL;
     SecureZeroMemory(buffer, sizeof(buffer));
     WaitForSingleObject(child.hProcess, INFINITE);
+    /* What the game ended with, for Scuffle's log. Its launcher's own code says nothing about the game. */
+    DWORD exit_code = 0;
+    if (GetExitCodeProcess(child.hProcess, &exit_code)) {
+        fprintf(stderr, "scuffle-bridge: game exited with code 0x%08lx\n", (unsigned long)exit_code);
+        fflush(stderr);
+    }
     CloseHandle(child.hThread);
     CloseHandle(child.hProcess);
     result = 0;

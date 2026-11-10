@@ -17,7 +17,7 @@ from PySide6.QtGui import QDesktopServices, QIcon
 from PySide6.QtWidgets import (QApplication, QFrame, QGraphicsOpacityEffect, QHBoxLayout, QMainWindow, QPushButton, QStackedWidget,
                                QMenu, QStyleFactory, QVBoxLayout, QWidget)
 
-from .. import battlenet, catalog, diagnostics, discovery, imports, instance, move, selfupdate, shortcuts, steam, system
+from .. import battlenet, catalog, diagnostics, discovery, events, imports, instance, move, selfupdate, shortcuts, steam, system
 from ..downloads import DONE, FAILED, PAUSED, QUEUED, RUNNING, DownloadManager, Job, MoveTask
 from ..launch import Launcher, LaunchError
 from ..library import Library, LibraryError, update_available
@@ -1123,6 +1123,7 @@ class MainWindow(QMainWindow):
             self.play(code)
 
     def close_game(self, code: str, *, force: bool = False) -> None:
+        events.log.info('closing %s%s, as the user asked', code, ' by force' if force else '')
         executable, processes = self.library.executable(code), self.library.game_processes(code)
         if force:
             self.forced.add(code)       # its exit is not a crash
@@ -1415,8 +1416,16 @@ class MainWindow(QMainWindow):
                 # Before Running, which can end a shortcut's process and save the settings.
                 self.settings.last_played[code] = int(started)
                 post(self.bus.launch_phase, code, 'Running')
+                events.log.info('%s is running', code)
                 process.wait()
-                post(self.bus.game_exited, code, process.returncode or 0, self.crash_report(code, started))
+                game = events.game_exit_code(getattr(process, 'game_log', None))
+                if game is None and system.WINDOWS:
+                    game = process.returncode       # Windows starts the game itself
+                report = self.crash_report(code, started)
+                events.log.info('%s ended after %d s: the game with %s, its launcher with %s, crash report %s',
+                                code, time.time() - started, 'an unknown code' if game is None else
+                                events.exit_text(game), process.returncode, 'written' if report else 'none')
+                post(self.bus.game_exited, code, process.returncode or 0 if game is None else game, report)
                 post(self.bus.task_finished, code, '')
             except Exception as error:  # shown in the banner
                 post(self.bus.task_finished, code, str(error))
@@ -2202,6 +2211,8 @@ class MainWindow(QMainWindow):
         self.refresh_self_update()
 
     def on_self_update_installed(self, problem: str) -> None:
+        events.log.info('Scuffle update to %s: %s', self.self_release.version if self.self_release else '?',
+                        problem or 'installed')
         if problem:
             self.self_state = ''
             self.notify(f'Scuffle could not update itself. {problem}', 'error', 'Release notes',
@@ -2333,7 +2344,8 @@ class MainWindow(QMainWindow):
             return              # a force quit is not a crash, and code 0 is a game that quit itself
         detail = ('Its crash report is in the Errors folder of its game folder.' if crash_report else
                   f'It ended with signal {-exit_code}.' if exit_code < 0 else
-                  f'It exited with code {exit_code:#x}.' if exit_code > 255 else f'It exited with code {exit_code}.')
+                  f'It exited with code {events.exit_text(exit_code)}.')
+        detail += ' Its output is in the games folder of the logs, under Settings, Diagnostics.'
         self.tell(code, f'{catalog.get(code).label} quit unexpectedly', detail)
 
 

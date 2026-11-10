@@ -64,6 +64,7 @@ def report(settings: Settings, library=None, jobs=(), *, updates: dict | None = 
         ('Clients', lambda: clients(settings, library, updates)),
         ('Downloads', lambda: queue(jobs)),
         ('Proton log', proton_log),
+        ('Scuffle log', scuffle_log),
     ]
     lines = ['Scuffle diagnostics',
              'Sign-in data, account names and ids, the home folder and the user name are left out.']
@@ -368,6 +369,24 @@ def proton_log() -> list[str] | None:
     kept = [printable(line) for line in lines if line.strip() and not SECRET_WORDS.search(line)]
     return [f'File: {path}, {info.st_size / 1e6:.1f} MB, written {written}',
             *(f'| {line}' for line in kept[-LOG_LINES:])]
+
+
+def scuffle_log() -> list[str]:
+    """The last of what Scuffle did, and the newest run's last lines of each client's game."""
+    from . import events
+    path = events.folder() / events.NAME
+    lines = [line for line in (path.read_text(errors='replace').splitlines() if path.is_file() else [])
+             if not SECRET_WORDS.search(line)]
+    found = [f'| {line}' for line in lines[-LOG_LINES * 2:]] or ['Nothing yet.']
+    games = events.folder() / events.GAME_LOGS
+    newest = {}
+    for run in sorted(games.glob('*.log')) if games.is_dir() else []:
+        newest[run.name.rsplit('-', 2)[0]] = run
+    for run in newest.values():
+        tail = [line for line in run.read_text(errors='replace').splitlines()[-LOG_LINES:]
+                if line.strip() and not SECRET_WORDS.search(line)]
+        found += [f'Newest run: {run.name}', *(f'| {line}' for line in tail)]
+    return found
 
 
 def name(code: str) -> str:

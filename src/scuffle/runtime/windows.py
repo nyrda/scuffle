@@ -462,7 +462,7 @@ class WindowsRuntime(GameRuntime):
     def __init__(self):
         self.bridge = Bridge()
 
-    def start(self, executable, arguments, token, ack, *, environment=None, wrapper=(), account=None):
+    def start(self, executable, arguments, token, ack, *, environment=None, wrapper=(), account=None, log=None):
         commit_credential(token, account)
         process = start_game(executable, arguments)
         with open(ack, 'x', encoding='utf-8') as handle:

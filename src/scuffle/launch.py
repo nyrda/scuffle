@@ -14,7 +14,7 @@ from typing import Callable
 import urllib.parse
 import webbrowser
 
-from . import catalog, system
+from . import catalog, events, system
 from .auth.bgs import BuildRefused, CredentialRejected, login, renew
 from .auth.vault import Login, Vault
 from .launch_options import ClientOptions, OptionError, linux_environment, wrapper_command
@@ -247,9 +247,16 @@ class Launcher:
             status('Starting')
             ack = self.vault.directory / f'.launch-{os.getpid()}-{time.time_ns()}.ack'
             account = chosen_account(self.settings, login.accounts())
+            log = None if system.WINDOWS else events.game_log(code)
+            events.log.info('starting %s %s with %s, arguments %s, variables %s, wrapper %s, output %s', code,
+                            state['version'], getattr(getattr(self.runtime, 'proton', None), 'name', 'Windows'),
+                            ' '.join(arguments) or 'none', ' '.join(sorted(plan.environment)) or 'none',
+                            ' '.join(Path(part).name for part in plan.wrapper) or 'none', log.name if log else 'none')
             process = self.runtime.start(executable, arguments, self.vault.token, ack,
                                          environment=plan.environment, wrapper=plan.wrapper,
-                                         account=(account['name'], account['region']) if account else None)
+                                         account=(account['name'], account['region']) if account else None,
+                                         log=log)
+            process.game_log = log      # where the play thread finds how the game ended
             try:
                 deadline = time.monotonic() + STARTUP_TIMEOUT
                 while time.monotonic() < deadline:

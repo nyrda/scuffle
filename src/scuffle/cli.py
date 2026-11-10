@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 import sys
 
-from . import catalog, diagnostics, memory, move, selfupdate, system
+from . import catalog, diagnostics, events, memory, move, selfupdate, system
 from .instance import InstanceError, exclusive
 from .library import Library, LibraryError, Updater
 from .ngdp.cdn import CDNClient
@@ -194,6 +194,7 @@ def run(args):
 
 def entrypoint():
     memory.tune()
+    events.setup()
     system.attach_console()
     try:
         main()

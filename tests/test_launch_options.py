@@ -262,7 +262,7 @@ def test_the_game_runs_inside_the_wrappers_with_the_options_and_the_prefix_witho
 def test_a_proton_log_without_a_chosen_wine_debug_leaves_the_channels_to_proton(tmp_path):
     runtime = LinuxRuntime.__new__(LinuxRuntime)
     runtime.prefix, runtime.proton = tmp_path / 'prefix', Proton('GE', tmp_path)
-    assert runtime.game_environment({})['WINEDEBUG'] == '-all'
+    assert runtime.game_environment({})['WINEDEBUG'] == '-all,err+all'     # errors only, for the run's log
     env = runtime.game_environment({'PROTON_LOG': '1', 'WINEPREFIX': '/elsewhere'})
     assert 'WINEDEBUG' not in env and env['WINEPREFIX'] == str(tmp_path / 'prefix')
 
@@ -371,3 +371,44 @@ def test_switches_turned_off_before_they_became_variables_stay_off(config):
     assert not loaded.problems
     config.write_text(json.dumps({'root': '/games', 'linux_launch': {'ntsync': True, 'nvapi': True}}))
     assert Settings.load().linux_launch == LinuxOptions()
+
+
+def test_a_games_output_and_wine_errors_go_to_the_runs_own_log(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from scuffle.runtime import game
+    monkeypatch.setattr(game, 'wine_wrapper', lambda: [])
+    umu = tmp_path / 'umu-run'
+    umu.write_text('#!/bin/sh\necho "WINEDEBUG=$WINEDEBUG"\necho "a wine error" >&2\n'
+                   'echo "scuffle-bridge: game exited with code 0xc0000005" >&2\n')
+    umu.chmod(0o755)
+    runtime = game.LinuxRuntime(tmp_path / 'bridge.exe', tmp_path / 'prefix',
+                                SimpleNamespace(wine=tmp_path / 'wine', path=tmp_path / 'proton'), umu)
+    (tmp_path / '_retail_').mkdir()
+    log = tmp_path / 'run.log'
+    runtime.start(tmp_path / '_retail_/Wow.exe', [], tmp_path / 'token', tmp_path / 'ack', log=log).wait()
+    assert log.read_text().splitlines() == ['WINEDEBUG=-all,err+all', 'a wine error',
+                                            'scuffle-bridge: game exited with code 0xc0000005']
+    from scuffle import events
+    assert events.game_exit_code(log) == 0xC0000005
+
+
+def test_a_users_own_wine_channels_stay_as_they_are(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from scuffle.runtime import game
+    runtime = game.LinuxRuntime(tmp_path / 'bridge.exe', tmp_path / 'prefix',
+                                SimpleNamespace(wine=tmp_path / 'wine', path=tmp_path / 'proton'), tmp_path / 'umu')
+    assert runtime.game_environment({'WINEDEBUG': '+loaddll'})['WINEDEBUG'] == '+loaddll'
+
+
+def test_only_the_newest_runs_of_a_client_keep_their_logs(tmp_path, monkeypatch):
+    from scuffle import events
+    games = events.folder() / events.GAME_LOGS
+    games.mkdir(parents=True)
+    for day in range(1, 15):
+        (games / f'wowf-202611{day:02}-120000.log').write_text('x')
+    (games / 'wow-20261101-120000.log').write_text('x')
+    new = events.game_log('wowf')
+    new.write_text('y')
+    kept = sorted(p.name for p in games.glob('wowf-*.log'))
+    assert len(kept) == events.KEEP_GAME_LOGS and new.name in kept and 'wowf-20261101-120000.log' not in kept
+    assert (games / 'wow-20261101-120000.log').exists()

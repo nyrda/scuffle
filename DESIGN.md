@@ -487,6 +487,27 @@ A checksum from the same release catches a damaged download, and does not protec
 against someone publishing a release in this repository. Scuffle does not verify
 GitHub's build attestations. They are there for people who want to check a download.
 
+## Logs
+
+`events.py` writes `scuffle.log` in the logs folder, rotated at 1 MB with three old
+files: launches with their arguments, the names of their variables and their
+wrappers, how each run ended, close requests, downloads, Scuffle updates and the
+sign-in's progress. It takes names, versions, codes and times, never a ticket, a
+token or an email.
+
+Each run of a game on Linux writes its output to `logs/games/<client>-<time>.log`,
+and the ten newest runs of each client are kept. The file is the child's own, so
+it outlives a Scuffle that quits while the game runs. Scuffle's quiet default of
+`WINEDEBUG=-all` becomes `-all,err+all` there, so Wine's errors and an unhandled
+exception reach the log without the noise. A variable of the user's wins.
+
+The launcher's exit code says little about the game. umu-run runs it in a
+container, and GameMode's library aborts the container's `bwrap` at exit, so even
+a game that quit on its own ends its launcher with a signal. The bridge therefore
+waits for the game and writes its exit code as the run log's last line, and that
+code decides whether the game crashed. Windows starts the game itself and has its
+code directly.
+
 ## Memory
 
 The window alone uses about 130 MB, of which 65 MB is shared libraries. A download
