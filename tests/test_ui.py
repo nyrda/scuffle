@@ -2041,10 +2041,10 @@ def test_a_game_that_quits_unexpectedly_notifies(qt, window, tmp_path, monkeypat
 
     class Game:
         returncode = None
-        game_log = None
-        if bridge is not None:
-            game_log = tmp_path / 'run.log'
-            game_log.write_text(f'wine: some output\nscuffle-bridge: game exited with code 0x{bridge:08x}\n')
+        game_log, exit_file = tmp_path / 'run.log', tmp_path / 'launch.ack.exit'
+        game_log.write_text('wine: some output\n')
+        if bridge is not None:      # as the bridge writes it once the game has ended
+            exit_file.write_text(f'scuffle-bridge: game exited with code 0x{bridge:08x}\n')
 
         def wait(self):
             assert release.wait(30)
@@ -2067,6 +2067,7 @@ def test_a_game_that_quits_unexpectedly_notifies(qt, window, tmp_path, monkeypat
     release.set()
     wait_until(qt, lambda: 'wow' not in window.phases)
     assert shown == ([('wow', 'World of Warcraft quit unexpectedly', expected)] if expected else [])
+    assert not (tmp_path / 'launch.ack.exit').exists()
 
 
 @pytest.mark.parametrize('tray', [True, False])

@@ -253,7 +253,10 @@ def test_the_game_runs_inside_the_wrappers_with_the_options_and_the_prefix_witho
                                 '-d3d11', '-console', '-config', 'Era.wtf', '-initialgamemode=chc']
     env = game['env']
     assert env['MANGOHUD'] == '1' and env['DXVK_HUD'] == 'fps' and env['SHARED'] == 'client'
-    assert env['PROTON_LOG'] == '1' and env['PROTON_LOG_DIR'] == str(launch.log_dir())
+    # Proton's log has one name, so each run gets a folder of its own for it.
+    proton_log = Path(env['PROTON_LOG_DIR'])
+    assert env['PROTON_LOG'] == '1' and proton_log.parent == launch.log_dir() / 'games'
+    assert proton_log.name.startswith('wow_classic_era-') and proton_log.suffix == '.proton' and proton_log.is_dir()
     assert env['WINEDEBUG'] == '+loaddll'           # the user's choice beats Scuffle's quiet default
     assert env['WINEPREFIX'] == str(tmp_path / 'prefix') and env['WOW_BROKER_PIPE'] == '1'
     assert 'UMU_CONTAINER_NSENTER' not in env

@@ -9,6 +9,7 @@ import logging
 import logging.handlers
 from pathlib import Path
 import re
+import shutil
 import time
 
 from .settings import data_dir
@@ -53,21 +54,45 @@ def game_log(code: str) -> Path:
     games.mkdir(parents=True, exist_ok=True)
     for old in sorted(games.glob(f'{code}-*.log'))[:-(KEEP_GAME_LOGS - 1)]:
         old.unlink(missing_ok=True)
+        shutil.rmtree(proton_dir(old), ignore_errors=True)
     return games / f'{code}-{time.strftime("%Y%m%d-%H%M%S")}.log'
 
 
-def game_exit_code(path: Path | None) -> int | None:
-    """The code the game itself ended with, as the bridge wrote it at the end of the run's log."""
+def proton_dir(run: Path) -> Path:
+    """Where Proton writes its own log for a run, when its log is on, so the next run keeps it."""
+    return run.with_suffix('.proton')
+
+
+def newest_proton_log() -> Path | None:
+    """Proton names its log after the game and its own version, as steam-battlenet-<proton>.log."""
+    found = [*folder().glob('steam-*.log'), *(folder() / GAME_LOGS).glob('*.proton/steam-*.log')]
+    found = [path for path in found if path.is_file()]
+    return max(found, key=lambda path: path.stat().st_mtime) if found else None
+
+
+def game_exit_code(path: Path | None, exit_file: Path | None = None) -> int | None:
+    """The code the game itself ended with, from the bridge's file, or from the end of the run's log."""
+    if exit_file is not None:
+        try:
+            found = EXIT_LINE.findall(exit_file.read_text(errors='replace'))
+            exit_file.unlink(missing_ok=True)
+        except OSError:
+            found = []
+        if found:
+            return int(found[-1], 16)
     if path is None:
         return None
-    try:
-        with path.open('rb') as handle:
-            handle.seek(max(0, path.stat().st_size - 65536))
-            tail = handle.read().decode(errors='replace')
-    except OSError:
-        return None
-    found = EXIT_LINE.findall(tail)
-    return int(found[-1], 16) if found else None
+    # With Proton's log on, Wine's output and so the bridge's line go to Proton's file instead.
+    for source in [path, *sorted(proton_dir(path).glob('steam-*.log'))]:
+        try:
+            with source.open('rb') as handle:
+                handle.seek(max(0, source.stat().st_size - (4 << 20)))
+                found = EXIT_LINE.findall(handle.read().decode(errors='replace'))
+        except OSError:
+            continue
+        if found:
+            return int(found[-1], 16)
+    return None
 
 
 def exit_text(code: int) -> str:

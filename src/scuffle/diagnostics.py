@@ -26,7 +26,6 @@ from . import catalog, system
 from .runtime.proton import find_protons, find_umu
 from .settings import LOCALE_NAMES, MEGABYTE, REGIONS, Settings, cache_dir, data_dir
 
-LOG_NAME = 'steam-battlenet.log'
 LOG_LINES = 10             # the end of the Proton log, where a crash or an exit shows
 LOG_TAIL = 64 * 1024       # bytes read from its end, since the log can grow to gigabytes
 LINE_LIMIT = 300           # applied after the scrub, so a cut never hides a secret from it
@@ -353,9 +352,9 @@ def proton_log() -> list[str] | None:
     """Where the log is and its last lines. Lines that could hold a ticket or an account are left out."""
     if system.WINDOWS:
         return None
-    from .launch import log_dir
-    path = log_dir() / LOG_NAME
-    if not path.is_file():
+    from .events import newest_proton_log
+    path = newest_proton_log()
+    if path is None:
         return ['No log yet. Turn on Proton log under Settings, Launch, then start a game.']
     info = path.stat()
     written = datetime.fromtimestamp(info.st_mtime).strftime('%Y-%m-%d %H:%M')
