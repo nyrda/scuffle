@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QButtonGroup, QC
                                QRadioButton, QScrollArea, QSizePolicy, QSpacerItem, QSpinBox, QToolButton, QTreeView, QVBoxLayout, QWidget)
 
 from .. import catalog
-from ..diagnostics import LOG_NAME
+from ..events import newest_proton_log
 from ..launch import log_dir, looks_like_redirect, open_browser, parse_ticket, ticket_account
 from ..settings import LOCALE_NAMES, MEGABYTE, REGIONS, Settings
 from .launch_options import LaunchSettings
@@ -848,7 +848,7 @@ class SettingsPage(Page):
         self.log_buttons: list[QPushButton] = []
         if sys.platform != 'win32':
             self.open_log = fixed(QPushButton('Open Proton log'))
-            self.open_log.clicked.connect(lambda: self.reveal(log_dir() / LOG_NAME))
+            self.open_log.clicked.connect(lambda: (log := newest_proton_log()) and self.reveal(log))
             self.open_logs = fixed(QPushButton('Open logs folder'))
             self.open_logs.clicked.connect(lambda: self.reveal(log_dir()))
             self.log_buttons = [self.open_log, self.open_logs]
@@ -1209,12 +1209,12 @@ class SettingsPage(Page):
             return
         folder = log_dir()
         try:
-            has_log, has_folder = (folder / LOG_NAME).is_file(), folder.is_dir()
+            has_log, has_folder = newest_proton_log() is not None, folder.is_dir()
         except OSError:         # an unreadable folder before Python 3.13 raises instead of saying no
             has_log = has_folder = False
         reason = '' if has_log else 'No Proton log yet. Turn on Proton log under Launch, then start a game.'
         self.open_log.setEnabled(not reason)
-        self.open_log.setToolTip(reason or f'Opens {LOG_NAME}')
+        self.open_log.setToolTip(reason or 'Opens the newest run\'s Proton log')
         self.open_logs.setEnabled(has_folder)
         self.open_logs.setToolTip('' if has_folder else 'Scuffle has written no logs yet.')
         self.log_note.setText(reason)

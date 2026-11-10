@@ -125,10 +125,16 @@ static int launch_protected(const char *token_file, const char *ack_file, const 
     SecureZeroMemory(buffer, sizeof(buffer));
     WaitForSingleObject(child.hProcess, INFINITE);
     /* What the game ended with, for Scuffle's log. Its launcher's own code says nothing about the game. */
+    /* A windowed program's output reaches no log under Wine, so the code goes to a file beside the ack. */
     DWORD exit_code = 0;
     if (GetExitCodeProcess(child.hProcess, &exit_code)) {
-        fprintf(stderr, "scuffle-bridge: game exited with code 0x%08lx\n", (unsigned long)exit_code);
-        fflush(stderr);
+        char exit_file[1024];
+        snprintf(exit_file, sizeof(exit_file), "%s.exit", ack_file);
+        FILE *exit_out = fopen(exit_file, "wb");
+        if (exit_out) {
+            fprintf(exit_out, "scuffle-bridge: game exited with code 0x%08lx\n", (unsigned long)exit_code);
+            fclose(exit_out);
+        }
     }
     CloseHandle(child.hThread);
     CloseHandle(child.hProcess);

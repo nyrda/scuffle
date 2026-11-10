@@ -1418,7 +1418,7 @@ class MainWindow(QMainWindow):
                 post(self.bus.launch_phase, code, 'Running')
                 events.log.info('%s is running', code)
                 process.wait()
-                game = events.game_exit_code(getattr(process, 'game_log', None))
+                game = events.game_exit_code(getattr(process, 'game_log', None), getattr(process, 'exit_file', None))
                 if game is None and system.WINDOWS:
                     game = process.returncode       # Windows starts the game itself
                 report = self.crash_report(code, started)

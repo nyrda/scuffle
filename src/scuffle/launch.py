@@ -248,6 +248,10 @@ class Launcher:
             ack = self.vault.directory / f'.launch-{os.getpid()}-{time.time_ns()}.ack'
             account = chosen_account(self.settings, login.accounts())
             log = None if system.WINDOWS else events.game_log(code)
+            if log and 'PROTON_LOG_DIR' in plan.environment:
+                # Proton's log has one name for every run. A folder of its own keeps each run's.
+                events.proton_dir(log).mkdir(exist_ok=True)
+                plan.environment['PROTON_LOG_DIR'] = str(events.proton_dir(log))
             events.log.info('starting %s %s with %s, arguments %s, variables %s, wrapper %s, output %s', code,
                             state['version'], getattr(getattr(self.runtime, 'proton', None), 'name', 'Windows'),
                             ' '.join(arguments) or 'none', ' '.join(sorted(plan.environment)) or 'none',
@@ -257,6 +261,7 @@ class Launcher:
                                          account=(account['name'], account['region']) if account else None,
                                          log=log)
             process.game_log = log      # where the play thread finds how the game ended
+            process.exit_file = ack.with_name(ack.name + '.exit')     # what the bridge writes when it does
             try:
                 deadline = time.monotonic() + STARTUP_TIMEOUT
                 while time.monotonic() < deadline:
