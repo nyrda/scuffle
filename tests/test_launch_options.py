@@ -376,6 +376,7 @@ def test_switches_turned_off_before_they_became_variables_stay_off(config):
     assert Settings.load().linux_launch == LinuxOptions()
 
 
+@pytest.mark.skipif(sys.platform == 'win32', reason='Linux launch through umu-run')
 def test_a_games_output_and_wine_errors_go_to_the_runs_own_log(tmp_path, monkeypatch):
     from types import SimpleNamespace
     from scuffle.runtime import game
