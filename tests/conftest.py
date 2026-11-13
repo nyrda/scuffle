@@ -62,6 +62,11 @@ def private_folders(tmp_path, monkeypatch):
 
 
 LOOPBACK_NAMES = {'localhost', '127.0.0.1', '::1'}
+# The sign-in window's browser engine has network code of its own, which no_network below cannot
+# see. Every name it looks up is this machine, so a test's stand-in for Battle.net answers under
+# Battle.net's name and nothing else can be reached. It runs without its sandbox, which the Nix
+# build's own sandbox does not allow. Set before the engine starts, which reads this once.
+os.environ['QTWEBENGINE_CHROMIUM_FLAGS'] = '--host-resolver-rules="MAP * 127.0.0.1" --no-sandbox'
 
 
 @pytest.fixture(autouse=True)

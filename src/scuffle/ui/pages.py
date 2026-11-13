@@ -15,8 +15,9 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QButtonGroup, QC
 
 from .. import catalog
 from ..events import newest_proton_log
-from ..launch import log_dir, looks_like_redirect, open_browser, parse_ticket, ticket_account
+from ..launch import SignedIn, log_dir, looks_like_redirect, open_browser, parse_ticket, ticket_account
 from ..settings import LOCALE_NAMES, MEGABYTE, REGIONS, Settings
+from . import websignin
 from .launch_options import LaunchSettings
 from .style import (BACKGROUND, FAMILY_NAMES, SPACING, accent_shade, client_color, glyph_name, glyph_path, mix,
                     size_text, tile)
@@ -1244,25 +1245,38 @@ class SettingsPage(Page):
 
 
 class SignInPage(Page):
-    """Waits for the address Battle.net's sign-in page redirects to."""
+    """Battle.net's sign-in page in a view of Scuffle's own, or the address the user's browser is sent to."""
 
-    finished = Signal(object)            # the ticket bytes, or None when cancelled
+    finished = Signal(object)            # a SignedIn, or None when cancelled
+    asks = Signal()                      # there is something for the user to do, so the window shows the page
+    browser_chosen = Signal(bool)        # the user's choice between their own browser and Scuffle's window
 
     def __init__(self):
         super().__init__()
         self.on_escape(lambda: self.finish(None))
         self.url = ''
         self.active = False
+        self.embedded = False               # whether the sign-in runs in Scuffle's own view
         self._before = ''
+        self._session = None
         self.taken: dict[str, str] = {}     # account id -> label of the accounts already signed in
         outer = scrolling(self)
         self.balance(outer)
         content = self.centre(column(outer))
+        outer.setStretchFactor(content.row, 1)      # the view takes the height the window has
         content.addWidget(label('Sign in to Battle.net', 'pagetitle'))
         content.addSpacing(6)
         self.intro = label('', 'muted', wrap=True)
         content.addWidget(self.intro)
-        content.addSpacing(20)
+        content.addSpacing(16)
+        self.web = None                     # made for the first sign-in in Scuffle's own view
+        self.web_place = QVBoxLayout()
+        self.web_place.setContentsMargins(0, 0, 0, 0)
+        content.addLayout(self.web_place, 100)
+        self.manual = QWidget()
+        manual = QVBoxLayout(self.manual)
+        manual.setContentsMargins(0, 4, 0, 0)
+        manual.setSpacing(0)
         steps = QFrame()
         steps.setObjectName('card')
         steps_layout = QVBoxLayout(steps)
@@ -1280,16 +1294,16 @@ class SignInPage(Page):
             row.addWidget(badge, 0, Qt.AlignTop)
             row.addWidget(label(text, wrap=True), 1)
             steps_layout.addLayout(row)
-        content.addWidget(steps)
+        manual.addWidget(steps)
         # Battle.net signs a browser in to the account it used last, without asking.
         self.hint = label('If your browser is signed in to Battle.net, copy the link into a private window.',
                           'caution', wrap=True)
         self.hint.hide()
-        content.addSpacing(12)
-        content.addWidget(self.hint)
-        content.addSpacing(18)
-        content.addWidget(label('Address from the browser', 'key'))
-        content.addSpacing(6)
+        manual.addSpacing(12)
+        manual.addWidget(self.hint)
+        manual.addSpacing(18)
+        manual.addWidget(label('Address from the browser', 'key'))
+        manual.addSpacing(6)
         entry = QHBoxLayout()
         entry.setSpacing(SPACING)
         self.field = QLineEdit()
@@ -1308,46 +1322,120 @@ class SignInPage(Page):
         entry.addWidget(self.field, 1)
         entry.addWidget(submit)
         entry.addStretch()
-        content.addLayout(entry)
-        content.addSpacing(12)
+        manual.addLayout(entry)
+        manual.addSpacing(12)
         self.status = label('Waiting for the address.', 'small', wrap=True)
-        content.addWidget(self.status)
-        content.addSpacing(24)
+        manual.addWidget(self.status)
+        content.addWidget(self.manual)
+        content.addSpacing(20)
         buttons = QHBoxLayout()
         buttons.setSpacing(SPACING)
         self.open_button = reopen = fixed(QPushButton('Open the sign-in page again'))
         reopen.clicked.connect(lambda: open_browser(self.url))
-        copy = fixed(QPushButton('Copy link'))
+        self.copy_button = copy = fixed(QPushButton('Copy link'))
         copy.setToolTip('For a private window or another browser')
         copy.clicked.connect(self.copy_link)
+        # Someone who signs in with a password manager or a security key may want their own browser.
+        self.switch_button = switch = fixed(QPushButton())
+        switch.clicked.connect(self.switch)
         cancel = fixed(QPushButton('Cancel'), 96)
         cancel.clicked.connect(lambda: self.finish(None))
         buttons.addWidget(reopen)
         buttons.addWidget(copy)
+        buttons.addWidget(switch)
         buttons.addStretch()
         buttons.addWidget(cancel)
         content.addLayout(buttons)
-        outer.addStretch(1)
+        content.addStretch(1)
         QApplication.clipboard().dataChanged.connect(self.check_clipboard)
         QApplication.instance().applicationStateChanged.connect(lambda _: self.check_clipboard())
 
-    def start(self, url: str, taken: dict[str, str] | None = None):
-        """taken: the accounts already signed in, by id, when this sign-in adds another one."""
+    def start(self, url: str, taken: dict[str, str] | None = None, web_session: bytes | None = None,
+              own_browser: bool = False):
+        """Sign in at url.
+
+        taken: the accounts already signed in, by id, when this sign-in adds another one.
+        web_session: the browser session kept for the account. With it the page is not shown
+        unless Battle.net asks for something, and asks tells the window when it does.
+        own_browser: the user signs in with their own browser, and pastes the address it ends at.
+        """
         self.url, self.active = url, True
         self.taken = dict(taken or {})
-        adding = bool(self.taken)
-        self.hint.setVisible(adding)
+        self._session = web_session
         self.field.clear()
         self.status.setText('Waiting for the address.')
         self._before = QApplication.clipboard().text()
+        if own_browser or not websignin.available():
+            self.show_manual()
+            self.asks.emit()
+        else:
+            self.show_web(web_session)
+            if not web_session:
+                # Nothing is kept that could sign in by itself, so the page is for the user at once.
+                self.web.asked = True
+                self.asks.emit()
+
+    def show_web(self, web_session: bytes | None = None) -> None:
+        """Battle.net's page in Scuffle's own view."""
+        self.embedded = True
+        if self.web is None:
+            self.web = websignin.WebSignIn()
+            self.web.finished.connect(self.signed_in_here)
+            self.web.asks.connect(self.asks)
+            self.web_place.addWidget(self.web)
+        self.manual.hide()
+        self.open_button.hide()
+        self.copy_button.hide()
+        self.web.show()
+        self.intro.setText('This is Battle.net\'s own sign-in page. Scuffle does not read what you type and '
+                           'keeps you signed in afterwards.')
+        self.switch_button.setText('Use my browser instead')
+        self.switch_button.show()
+        self.web.start(self.url, web_session)
+
+    def show_manual(self) -> None:
+        """The user's own browser, and a field for the address it ends at."""
+        self.embedded = False
+        if self.web is not None:
+            self.web.stop()
+            self.web.hide()
+        adding = bool(self.taken)
+        self.hint.setVisible(adding)
+        self.manual.show()
+        self.open_button.show()
+        self.copy_button.show()
         # A browser signed in to Battle.net would answer at once for that account, so adding one
         # leaves the choice of window to the user.
         self.intro.setText('Open Battle.net\'s own sign-in page to add an account. Scuffle never sees your '
                            'password.' if adding else
                            'Your browser opened Battle.net\'s own sign-in page. Scuffle never sees your password.')
         self.open_button.setText('Open in browser' if adding else 'Open the sign-in page again')
+        self.switch_button.setText('Sign in here')
+        self.switch_button.setVisible(websignin.available())
         if not adding:
-            open_browser(url)
+            open_browser(self.url)
+
+    def switch(self) -> None:
+        """Change between Scuffle's view and the user's browser, for this sign-in and the ones after it."""
+        if not self.active:
+            return
+        self.browser_chosen.emit(self.embedded)
+        if self.embedded:
+            self.show_manual()
+            self.field.setFocus()
+        else:
+            self.show_web()
+            self.web.asked = True
+            self.web.setFocus()
+
+    def focus(self) -> None:
+        (self.web if self.embedded else self.field).setFocus()
+
+    def signed_in_here(self, ticket: bytes, session: bytes) -> None:
+        if self.active and self.embedded:
+            asked = self.web.asked or not self._session
+            self.finish(SignedIn(ticket, session or None,
+                                 'in the sign-in window' if asked else 'with the kept browser session'))
 
     def copy_link(self):
         self._before = self.url         # the link on the clipboard is no address to take
@@ -1357,14 +1445,14 @@ class SignInPage(Page):
     def check_clipboard(self):
         # Wayland shares the clipboard only with the focused window, so this
         # also runs when Scuffle becomes active again.
-        if not self.active:
+        if not self.active or self.embedded:
             return
         text = QApplication.clipboard().text()
         if text != self._before and looks_like_redirect(text):
             self.take(text)
 
     def take(self, text: str, explicit: bool = False):
-        if not self.active:
+        if not self.active or self.embedded:
             return
         try:
             ticket = parse_ticket(text)
@@ -1380,18 +1468,20 @@ class SignInPage(Page):
                                 'Copy the link into a private window.')
             self._before = QApplication.clipboard().text()
             return
-        self.finish(ticket)
+        self.finish(SignedIn(ticket))
         if looks_like_redirect(QApplication.clipboard().text()):
             # The ticket works only once, but do not leave it on the clipboard.
             # Clearing triggers dataChanged, which finish() already disarmed.
             QTimer.singleShot(0, QApplication.clipboard().clear)
 
-    def finish(self, ticket):
+    def finish(self, result):
         if not self.active:
             return
         self.active = False
         self.field.clear()
-        self.finished.emit(ticket)
+        if self.web is not None:
+            self.web.stop()
+        self.finished.emit(result)
 
 
 class FolderPage(Page):

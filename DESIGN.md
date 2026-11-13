@@ -520,25 +520,78 @@ near 300 MB afterwards with 5 MB in use. `memory.py` therefore sends buffers fro
 and trims after each job. The window with a running download now uses 240 to
 290 MB, at the same speed, and about 140 MB once the job ends.
 
+The sign-in window's browser engine is loaded for the first sign-in of a run,
+also one that shows no page. It adds about 150 MB, counted with its two helper
+processes and shared pages once, and keeps them until Scuffle quits, since the
+engine cannot be unloaded. A run that never signs in never loads it.
+
+Holding Shift turns **Close game** into **Force quit**. The window asks for the
+key's state a few times a second while it shows. A filter on every event of the
+application would be the direct way, but it also sees the engine's own objects,
+which Python cannot hold, and that ends the process.
+
 ## Sign-in
 
 1. A logon without a ticket returns Battle.net's sign-in URL.
-2. Scuffle opens it in the default browser.
-3. After signing in, the browser fails to open `http://localhost:0/?ST=...`.
-   The user copies that address. Scuffle reads it from the clipboard when its
-   window regains focus, or the user pastes it.
+2. Scuffle shows that page in its sign-in window, or opens it in the user's
+   browser when they chose that.
+3. After signing in, the page is sent to `http://localhost:0/?ST=...`, which
+   nothing can open. The sign-in window reads that address itself. From their
+   own browser the user copies it, and Scuffle reads it from the clipboard when
+   its window regains focus, or the user pastes it.
 4. `VerifyAuthToken` completes the logon, and `GenerateAuthToken` reserves the
    first renewable ticket.
 
 Each launch consumes the saved ticket, reserves its successor and issues a
-separate game ticket. Those tickets expire: every one that sat 12 hours or more
-was rejected, and the longest that still worked sat 3.4 hours. The logon record
-of a browser sign-in can carry a `login_ticket` of its own. When that is not just
-the page's one-time ticket again, it is kept protected in `login-ticket.dpapi`,
-and an expired session tries it before a new browser sign-in. How long it lasts
-is not known yet, and `history.jsonl` records each use or rejection without the
-ticket. A rejected session then starts the sign-in again. Battle.net
-can also refuse every logon from one build, with status 33
+separate game ticket. Those tickets expire: every one that sat 8.3 hours or
+more was rejected, and the longest that still worked sat 3.4 hours. So a session
+alone asked for a new sign-in about once a day.
+
+### Staying signed in
+
+What lasts is not a ticket but the browser's session with Battle.net's site. A
+browser that is still signed in is sent on to the address with a new ticket at
+once, with no form and no second factor. The user's own browser did that for at
+least eight days. The sign-in window gives Scuffle such a session of its own,
+as the Battle.net app has one in its embedded browser.
+
+- **The window.** `ui/websignin.py` shows Battle.net's page in Qt's browser
+  engine, on the sign-in page of the window, under a line with the site's
+  address. Scuffle reads two things from it: the address the page is sent to
+  after the sign-in, and the cookies Battle.net sets. It runs no script in the
+  page and never reads the page or what is typed.
+- **The session.** The engine's profile is in memory only, so it writes
+  nothing to disk. The cookies of Battle.net's own domains go back with the
+  ticket and are kept in `web-session.dpapi` beside the login's session,
+  protected with DPAPI like a ticket. The bridge protects values up to 32 KiB
+  for that. Session cookies are kept too, as a browser that is never closed
+  keeps them.
+- **Signing in again.** When Battle.net rejects a login's saved tickets, the
+  launch reads the login's cookies before its folder goes and hands them to the
+  sign-in. The page is loaded with them and is not shown. When it is sent on to
+  the address, the launch goes on and nobody was asked. When it stays, after a
+  moment to settle, or does not load, the window shows it and the user signs
+  in. The cookies of either end are kept for the next time.
+- **Accounts.** Each login has its own cookies. **Add account…** and a sign-in
+  with none kept start from an empty browser, so no account is signed in to by
+  itself.
+- **The user's browser.** **Use my browser instead** is the sign-in as it was,
+  for a password manager or a security key the engine has no access to. The
+  choice is the setting `sign_in_with_browser`. Such a sign-in has no cookies
+  to keep, and a package without the engine always uses it.
+- **What was tried first.** The logon record's `login_ticket` is only the
+  presented ticket again, and it does not outlast the session. Signing in as
+  the Battle.net app, with title `App`, and presenting that sign-in's ticket
+  again 8 hours later was rejected, and the app's page ignores a browser that
+  is already signed in. `login-ticket.dpapi` is from that time and nothing
+  writes it.
+- **What is not known.** How long Battle.net keeps a session of the sign-in
+  window, and whether it treats the engine like the user's browser.
+  `history.jsonl` records for each sign-in whether it was in the sign-in
+  window, with the kept browser session or in the browser.
+
+A rejected session with no browser session left starts the sign-in again.
+Battle.net can also refuse every logon from one build, with status 33
 (`ERROR_SERVER_IS_PRIVATE`), as it did for a while after publishing
 Forever 1.60.1.70790, before accepting that build again with no change on our
 side. That says nothing about the session, so Scuffle keeps it, opens no browser
@@ -602,6 +655,7 @@ session/
   game-token.dpapi      the game ticket, only between a renewal and the game's start
   logins/<key>/
     session.dpapi       the renewable ticket, protected with DPAPI
+    web-session.dpapi   the sign-in window's cookies for this account, protected with DPAPI
     login-ticket.dpapi  what a browser sign-in handed back, protected with DPAPI
     login.json          its number and its BattleTag, when Battle.net sent one
     accounts.json       its WoW accounts, as described above
@@ -634,12 +688,13 @@ session/
   account is saved as its own login and becomes active, and the launch stops
   with a message naming both. Play therefore never starts an account other than
   the one the sidebar shows.
-- **Adding.** **Add account…** runs the browser sign-in. The redirect ticket goes
+- **Adding.** **Add account…** runs the sign-in. The redirect ticket goes
   to one `VerifyAuthToken` and is then dropped. The new session is saved under
   the id that logon returns and becomes active. Signing in again to an account
   that is already listed replaces its session and keeps its number and choices.
-  A browser still signed in to Battle.net skips the form and returns a ticket
-  for the account it knows. So adding does not open the browser. The page
+  The sign-in window starts from an empty browser. The user's own browser, when
+  still signed in to Battle.net, skips the form and returns a ticket
+  for the account it knows. So adding does not open that browser. The page
   offers **Copy link**, for a private window, and **Open in browser**. It reads
   the account id that today's tickets end in, as in `EU-<hex>-314159265`, and
   refuses a ticket for a listed account before it is used. A ticket of another

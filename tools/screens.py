@@ -53,6 +53,12 @@ def main(output: Path) -> None:
     window.populate()
     window.show()
 
+    def wait(seconds):
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            application.processEvents()
+            time.sleep(0.01)
+
     def shot(name, arrange=None, reveal=None):
         for size, (width, height) in SIZES.items():
             window.resize(width, height)
@@ -267,8 +273,17 @@ def main(output: Path) -> None:
     from scuffle.ui import pages
     pages.open_browser = lambda url: None
     window.signed_in = lambda: False             # the sign-in page only appears without a session
-    window.on_sign_in_requested('https://eu.account.battle.net/login/?externalChallenge=login&app=wow')
+    # Scuffle's own sign-in window. A stand-in page, so no state reaches Battle.net or shows its artwork.
+    stand_in = ('data:text/html,<body style="margin:0;background:%23101826;color:%23c8d2e4;font:16px sans-serif;'
+                'display:flex;align-items:center;justify-content:center;height:100vh">'
+                'Battle.net%27s sign-in page appears here.</body>')
+    window.on_sign_in_requested(stand_in)
+    wait(1.5)                                    # the browser engine draws a moment after the page loads
     shot('11-sign-in')
+    # The user's own browser, which they can choose on the page.
+    window.sign_in_page.switch_button.click()
+    window.sign_in_page.url = 'https://eu.account.battle.net/login/?externalChallenge=login&app=wow'
+    shot('11a-sign-in-own-browser')
     window.on_sign_in_finished(None)
     # Adding a second account while the browser is still signed in to the first one.
     window._signing_in = True
@@ -279,7 +294,7 @@ def main(output: Path) -> None:
     shot('11b-add-account-same-account')
     window.on_sign_in_finished(None)
     window._signing_in = False
-    # Closed before Python exits, so the window's event filter goes before the widgets it reads.
+    # Closed before Python exits, so the window ends its timers and its sign-in before the widgets go.
     window.close()
     print(f'Wrote {len(list(output.glob("*.png")))} screenshots to {output}')
 

@@ -12,14 +12,14 @@ import sys
 import threading
 import time
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QTimer, QUrl, Qt, Signal
+from PySide6.QtCore import QObject, QPoint, QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import QDesktopServices, QIcon
 from PySide6.QtWidgets import (QApplication, QFrame, QGraphicsOpacityEffect, QHBoxLayout, QMainWindow, QPushButton, QStackedWidget,
                                QMenu, QStyleFactory, QVBoxLayout, QWidget)
 
 from .. import battlenet, catalog, diagnostics, discovery, events, imports, instance, move, selfupdate, shortcuts, steam, system
 from ..downloads import DONE, FAILED, PAUSED, QUEUED, RUNNING, DownloadManager, Job, MoveTask
-from ..launch import Launcher, LaunchError
+from ..launch import Launcher, LaunchError, SignedIn
 from ..library import Library, LibraryError, update_available
 from ..ngdp.cdn import CDNClient
 from ..settings import LOCALE_NAMES, MEGABYTE, REGIONS, Settings, cache_dir, data_dir
@@ -51,7 +51,7 @@ def post(signal, *args) -> None:
 class Bus(QObject):
     """Signals from worker threads to the window."""
     job_changed = Signal(object)
-    sign_in_requested = Signal(str)
+    sign_in_requested = Signal(str, object)     # the address, and the browser session kept for the account
     updates_checked = Signal(dict)
     launch_phase = Signal(str, str)      # client, phase text
     self_update_found = Signal(object)   # a newer release of Scuffle, or None
@@ -133,7 +133,6 @@ class MainWindow(QMainWindow):
         self.bus.move_changed.connect(self.on_move)
         self.bus.move_previewed.connect(self.on_move_preview)
         # Shift turns Close game into Force quit while it is held.
-        QApplication.instance().installEventFilter(self)
         self.storage: dict = {}
         # The last lists from the version service and Battle.net, so the window starts without waiting.
         discovery.restore(cache_dir(), self.settings.region)
@@ -204,6 +203,8 @@ class MainWindow(QMainWindow):
         self.move_page.confirmed.connect(self.confirm_move)
         self.sign_in_page = SignInPage()
         self.sign_in_page.finished.connect(self.on_sign_in_finished)
+        self.sign_in_page.asks.connect(self.show_sign_in_page)
+        self.sign_in_page.browser_chosen.connect(self.set_sign_in_browser)
         self.folder_page = FolderPage()
         self.folder_page.chosen.connect(self.on_folder_chosen)
         self.folder_page.cancelled.connect(lambda: self.stack.setCurrentWidget(self.settings_page))
@@ -281,6 +282,9 @@ class MainWindow(QMainWindow):
         timer = QTimer(self)
         timer.timeout.connect(self.refresh)
         timer.start(1000)
+        self._shift_held = False
+        self.shift_timer = QTimer(self)
+        self.shift_timer.timeout.connect(self.watch_shift)
         self.update_timer.timeout.connect(self.check_updates)
         self.update_timer.timeout.connect(self.discover)
         self.update_timer.timeout.connect(self.check_self_update)
@@ -1098,7 +1102,9 @@ class MainWindow(QMainWindow):
         code = self.selected()
         job = self.downloads.job(code)
         if self.game_running(code):
-            self.close_game(code, force=bool(QApplication.queryKeyboardModifiers() & Qt.ShiftModifier))
+            # The click's own modifiers. By the time the click is handled, Shift can be up again,
+            # as with a quick Shift+click, and asking the keyboard then says no Shift.
+            self.close_game(code, force=bool(QApplication.keyboardModifiers() & Qt.ShiftModifier))
             return
         if self.moving():
             return              # the button is disabled meanwhile, but a click can be on its way
@@ -1165,12 +1171,27 @@ class MainWindow(QMainWindow):
                         'error', client=code)
         self.refresh()
 
-    def eventFilter(self, watched, event):
-        if event.type() in (QEvent.KeyPress, QEvent.KeyRelease) and event.key() == Qt.Key_Shift:
+    def watch_shift(self):
+        """Shift turns Close game into Force quit at once, wherever the focus is.
+
+        Asked a few times a second while the window shows. A filter on every event of the
+        application would also see the sign-in window's browser engine, whose objects Python
+        cannot hold, and that ends the process.
+        """
+        held = bool(QApplication.queryKeyboardModifiers() & Qt.ShiftModifier)
+        if held != self._shift_held:
+            self._shift_held = held
             code = self.selected()
             if code and self.game_running(code):
                 self.refresh_client(code)
-        return super().eventFilter(watched, event)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.shift_timer.start(120)
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self.shift_timer.stop()
 
     def verify(self):
         if self.moving():
@@ -1432,28 +1453,42 @@ class MainWindow(QMainWindow):
 
         threading.Thread(target=work, name='scuffle-play', daemon=True).start()
 
-    def request_sign_in(self, url: str) -> bytes:
-        """Runs on a worker thread. Shows the sign-in page and waits for it."""
+    def request_sign_in(self, url: str, web_session: bytes | None = None) -> SignedIn:
+        """Runs on a worker thread. Starts the sign-in on the window's thread and waits for it.
+
+        web_session is the browser session kept for the account. While Battle.net still knows it,
+        the sign-in finishes without the page ever being shown.
+        """
         self._sign_in_done.clear()
-        post(self.bus.sign_in_requested, url)
+        post(self.bus.sign_in_requested, url, web_session)
         self._sign_in_done.wait()
         if not self._sign_in_result or self._sign_in_result[0] is None:
             raise LaunchError('Sign-in was cancelled')
         return self._sign_in_result[0]
 
-    def on_sign_in_requested(self, url: str):
-        self.present()          # also when a shortcut or the tray started the launch
+    def on_sign_in_requested(self, url: str, web_session: bytes | None = None):
         # Adding an account must not sign one in again. A sign-in for Play renews the same account.
         taken = {str(login.id): login.label for login in self.vault().logins()
                  if login.id is not None} if self._signing_in else {}
-        self.sign_in_page.start(url, taken)
+        # The page says when it has something to ask. With a kept browser session it may never.
+        self.sign_in_page.start(url, taken, web_session, self.settings.sign_in_with_browser)
+
+    def show_sign_in_page(self):
+        if not self.sign_in_page.active:
+            return
+        self.present()          # also when a shortcut or the tray started the launch
         self.settings_button.setChecked(False)
         self.stack.setCurrentWidget(self.sign_in_page)
         self.client_list.set_active(False)
         # The sign-in page finishes or is cancelled. Other pages wait until then.
         self.lock_navigation(True)
-        self.sign_in_page.field.setFocus()
+        self.sign_in_page.focus()
         self.refresh()
+
+    def set_sign_in_browser(self, own: bool):
+        """Keep the user's choice between their own browser and Scuffle's sign-in window."""
+        self.settings.sign_in_with_browser = own
+        self.settings.save()
 
     def lock_navigation(self, locked: bool):
         """Ignore the sidebar without greying it out, so the selection cannot change underneath."""
@@ -1468,12 +1503,14 @@ class MainWindow(QMainWindow):
         self.client_list.setFocusPolicy(Qt.NoFocus if locked else Qt.StrongFocus)
         self.settings_button.setEnabled(not locked)
 
-    def on_sign_in_finished(self, ticket):
-        self._sign_in_result = [ticket]
+    def on_sign_in_finished(self, result):
+        self._sign_in_result = [result]
         self._sign_in_done.set()
-        self.stack.setCurrentWidget(self.client_page)
-        self.lock_navigation(False)
-        self.client_list.set_active(True)
+        # A sign-in the kept browser session answered never showed its page.
+        if self.stack.currentWidget() is self.sign_in_page:
+            self.stack.setCurrentWidget(self.client_page)
+            self.lock_navigation(False)
+            self.client_list.set_active(True)
         self.refresh()
 
     def sign_in_from_sidebar(self):
@@ -2015,8 +2052,8 @@ class MainWindow(QMainWindow):
             self.hide_to_tray()
             return
         self._closing = True
-        # Every event in the application passes the filter, so it goes with the window.
-        QApplication.instance().removeEventFilter(self)
+        # A sign-in in progress ends with the window, and its browser session with it.
+        self.sign_in_page.finish(None)
         if self.downloads:
             self.downloads.shutdown()
         if self.downloads and self.downloads.busy():
@@ -2384,6 +2421,8 @@ def main(request: dict | None = None, *, tray: bool = False):
     owner = instance.claim(request or ({'tray': True} if tray else {'show': True}))
     if owner is None:
         return
+    # The sign-in window's browser engine shares its drawing with Qt's, which has to be said first.
+    QApplication.setAttribute(Qt.AA_ShareOpenGLContexts)
     application = QApplication(sys.argv)
     application.setApplicationName('Scuffle')
     application.setDesktopFileName('scuffle')       # Wayland matches the window to scuffle.desktop

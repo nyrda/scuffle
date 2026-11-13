@@ -11,7 +11,7 @@ content they share is stored once.
   the PTRs and betas.
 - A download queue with pause and resume that survives restarts, a speed limit,
   and cleanup of content no client needs.
-- Battle.net's own sign-in page in your browser, a session that renews itself,
+- Battle.net's own sign-in page, a sign-in that lasts as it does in a browser,
   and several Battle.net accounts to switch between.
 - Shortcuts that start a client straight from your app launcher or from Steam.
 - Import from an existing installation, such as Battle.net's, without
@@ -82,22 +82,33 @@ the settings. All clients share one Wine prefix in
 
 ## Signing in
 
-The first **Play** opens Battle.net's sign-in page in your browser. After you
-sign in, the browser fails to open a page at `http://localhost:0/?ST=...`. Copy
-that address from the address bar. Scuffle reads it from the clipboard when you
-switch back, or you can paste it. The address works only once.
+The first **Play** shows Battle.net's own sign-in page inside Scuffle, with its
+address above it. Sign in there as you would in a browser. Scuffle does not read
+the page or what you type. It reads the address the page ends at and the cookies
+Battle.net sets.
 
-Scuffle turns it into a session of its own that each launch renews. Battle.net
-ends a session that sits unused for most of a day, so Scuffle also keeps what the
-sign-in hands back and tries that before it asks you to sign in again. The session is protected with
-DPAPI, kept under `~/.local/share/scuffle/session` with owner-only permissions.
-Scuffle never reads the Battle.net app's saved login, so both stay signed in.
+Battle.net ends a game session that sits unused for some hours. Scuffle then
+signs in again by itself, the way a browser that is still signed in to
+Battle.net does, so you see the sign-in page again only when Battle.net itself
+asks for it. The session and the cookies are protected with DPAPI and kept under
+`~/.local/share/scuffle/session` with owner-only permissions. Scuffle never
+reads the Battle.net app's saved login, so both stay signed in.
+
+**Your own browser.** **Use my browser instead** on the sign-in page opens the
+page in your browser, for a password manager or a security key. After you sign
+in, the browser fails to open a page at `http://localhost:0/?ST=...`. Copy that
+address from the address bar. Scuffle reads it from the clipboard when you
+switch back, or you can paste it. Scuffle remembers the choice, and **Sign in
+here** changes it back. A sign-in in your browser lasts only as long as the
+game session, so Scuffle asks again about once a day. The AppImage and
+`Scuffle.exe` do not have the sign-in window yet and always use your browser.
 
 **Several accounts.** The sidebar shows the signed-in account by its BattleTag,
 or "Account 1" until Battle.net sends one. Its menu switches accounts, signs out
-of one, and has **Add account…**. A browser that is signed in to Battle.net
-answers at once for that account, so **Add account…** does not open the browser
-by itself. Use **Copy link** and open it in a private window, or **Open in
+of one, and has **Add account…**, which shows an empty sign-in page for the
+other account. With your own browser, a browser that is signed in to Battle.net
+answers at once for that account, so **Add account…** does not open it by
+itself. Use **Copy link** and open it in a private window, or **Open in
 browser** when your browser is not signed in. **Play** always uses the account
 the sidebar shows, and you cannot switch while a game is starting.
 

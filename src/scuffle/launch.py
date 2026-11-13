@@ -25,7 +25,22 @@ from .runtime.proton import Proton, find_protons, find_umu
 from .settings import Settings, data_dir
 
 STARTUP_TIMEOUT = 120
-SignIn = Callable[[str], bytes]
+
+
+@dataclass
+class SignedIn:
+    """What a sign-in hands back: the ticket of its redirect, and how it came about.
+
+    web_session is the browser session of Scuffle's own sign-in window, as its cookies. With it the
+    next sign-in needs no one to type anything. A sign-in in the user's browser has none.
+    """
+    ticket: bytes
+    web_session: bytes | None = None
+    how: str = 'in the browser'
+
+
+# Takes Battle.net's sign-in address and the browser session kept for the account, if any.
+SignIn = Callable[[str, 'bytes | None'], SignedIn]
 
 
 class LaunchError(RuntimeError):
@@ -164,12 +179,38 @@ class Launcher:
     def signed_in(self) -> bool:
         return self.vault.has_session()
 
-    def sign_in(self, version: int, sign_in: SignIn, queue=None) -> Login:
-        """Add the account the browser signs in to, or renew its session if it is listed. It becomes active."""
+    def sign_in(self, version: int, sign_in: SignIn, queue=None, web_session: bytes | None = None) -> Login:
+        """Add the account the sign-in is for, or renew its session if it is listed. It becomes active.
+
+        web_session is the browser session kept for the account whose session ended. Battle.net's page
+        then signs in by itself, as a browser that is still signed in does.
+        """
         self.runtime.prepare()
-        added = login(self.vault, self.settings.auth_host, version, sign_in, queue)
-        self.vault.record('signed_in', 'with a login ticket' if added.has_login_ticket() else 'without a login ticket')
+        answer = SignedIn(b'')
+
+        def ask(url: str) -> bytes:
+            nonlocal answer
+            answer = sign_in(url, web_session)
+            return answer.ticket
+        added = login(self.vault, self.settings.auth_host, version, ask, queue)
+        if answer.web_session:
+            try:
+                added.save_web_session(answer.web_session)
+            except (RuntimeError, OSError) as error:
+                # The sign-in itself is done. Without the browser session the next one asks again.
+                events.log.warning('the browser session could not be kept: %s', type(error).__name__)
+        self.vault.record('signed_in', answer.how)
         return added
+
+    def web_session(self, account: Login) -> bytes | None:
+        """The browser session kept for a login, or None when there is none that can be read."""
+        if not account.has_web_session():
+            return None
+        try:
+            return account.load_web_session()
+        except (RuntimeError, OSError) as error:
+            events.log.warning('the kept browser session could not be read: %s', type(error).__name__)
+            return None
 
     def renew(self, version: int, sign_in: SignIn, account: Login | None = None, queue=None) -> Login:
         """Renew a login's session, the active one's by default, signing in through the browser when needed.
@@ -180,6 +221,7 @@ class Launcher:
         self.runtime.prepare()
         account = account or self.vault.active()
         wanted = account.label if account is not None else ''     # read before a rejection deletes it
+        kept = None
         if account is not None and account.has_session():
             try:
                 renew(account, self.settings.auth_host, version, queue)
@@ -190,8 +232,9 @@ class Launcher:
                 if self.renew_with_login_ticket(account, version, queue):
                     return account
                 # The ticket is spent. Keeping it would claim a sign-in that is gone. Other logins stay.
+                kept = self.web_session(account)        # read before the login's folder goes
                 self.vault.remove(account)
-        added = self.sign_in(version, sign_in, queue)
+        added = self.sign_in(version, sign_in, queue, kept)
         if account is not None and account.id is not None and added.id != account.id:
             raise LaunchError(f'Battle.net ended the session of {wanted}, and the browser signed in to '
                               f'{added.label} instead. {added.label} was added and is now the active account. '

@@ -17,7 +17,7 @@ Read `DESIGN.md` before changing behaviour. `README.md` is the user's guide, and
 - `src/scuffle/auth/`: the Battle.net sign-in and the per-account session vault
 - `src/scuffle/runtime/`: Proton, the Wine bridge and the Windows runtime
 - `src/scuffle/ui/`: the window. `style.py` holds the colours, the stylesheet
-  and the code-drawn tiles
+  and the code-drawn tiles. `websignin.py` is the sign-in window's browser
 - `bridge/`: the C helper that runs inside the Wine prefix
 - `packaging/`: the AppImage (`appimage/`) and the Windows package (`windows/`)
 - `tools/`: `screens.py` renders every window state. The `check_*_mutations.py`
@@ -37,11 +37,14 @@ packaging/windows/remote-build.sh <ssh host>   # Scuffle.exe, built on Windows
 
 ## Rules for the product
 
-- No Blizzard artwork, logos or icons, bundled or fetched. Icons and tiles are
-  drawn in code or are original SVGs.
-- Sign-in uses Battle.net's own page in the browser. Never read or write the
-  Battle.net app's saved login. Never log, show or store a ticket, token or
-  email in plain text.
+- No Blizzard artwork, logos or icons in Scuffle's own interface, bundled or
+  fetched. Icons and tiles are drawn in code or are original SVGs. The sign-in
+  window shows Battle.net's page as Battle.net serves it.
+- Sign-in uses Battle.net's own page, in Scuffle's sign-in window or in the
+  user's browser. Scuffle reads the address the page ends at and the cookies
+  it sets, never the page or what is typed into it. Never read or write the
+  Battle.net app's saved login. Never log, show or store a ticket, token,
+  cookie or email in plain text.
 - Every change of state on disk is crash safe: write atomically, journal
   multi-step changes, and recover on the next start. Uninstall and move are
   the models.

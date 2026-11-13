@@ -72,6 +72,8 @@ class Settings:
     last_played: dict[str, int] = field(default_factory=dict)   # client -> Unix time
     # Battle.net login -> the id of the WoW account the game starts with. Without one the game asks.
     game_accounts: dict[str, int] = field(default_factory=dict)
+    # Sign in with the user's own browser, which they chose on the sign-in page, and not in Scuffle's window.
+    sign_in_with_browser: bool = False
     # Launch options. The Linux ones apply to every client, and each client can add its own.
     linux_launch: LinuxOptions = field(default_factory=LinuxOptions)
     client_launch: dict[str, ClientOptions] = field(default_factory=dict)
@@ -104,6 +106,7 @@ class Settings:
             value = known.get(name, [])
             known[name] = sorted({code for code in value if catalog.is_product(code)}) if isinstance(value, list) else []
         known['show_other_clients'] = known.get('show_other_clients') is True
+        known['sign_in_with_browser'] = known.get('sign_in_with_browser') is True
         launch, clients = known.pop('linux_launch', {}), known.pop('client_launch', {})
         settings = cls(**known)
         settings.validate()

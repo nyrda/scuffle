@@ -53,6 +53,10 @@ class Login:
         return self.directory / 'login-ticket.dpapi'
 
     @property
+    def web_session_file(self) -> Path:
+        return self.directory / 'web-session.dpapi'
+
+    @property
     def account_list(self) -> Path:
         return self.directory / 'accounts.json'
 
@@ -102,6 +106,16 @@ class Login:
 
     def save_login_ticket(self, ticket: bytes) -> None:
         self.vault._save(self.login_ticket_file, ticket)
+
+    def has_web_session(self) -> bool:
+        return self.web_session_file.is_file()
+
+    def load_web_session(self) -> bytes:
+        """The cookies of this account's sign-in in Scuffle's own sign-in window."""
+        return self.vault.bridge.unprotect(self.web_session_file.read_bytes())
+
+    def save_web_session(self, cookies: bytes) -> None:
+        self.vault._save(self.web_session_file, cookies)
 
     def save_game_token(self, ticket: bytes) -> None:
         self.vault._save(self.vault.token, ticket)

@@ -57,8 +57,11 @@ def values(path):
 def test_the_session_round_trips_through_dpapi_within_the_bridge_limits():
     protected = windows.protect(b'EU-ticket')
     assert protected != b'EU-ticket' and windows.unprotect(protected) == b'EU-ticket'
+    # A browser session is far larger than a ticket.
+    cookies = b'login=' + b'x' * 20000
+    assert windows.unprotect(windows.protect(cookies)) == cookies
     with pytest.raises(BridgeError):
-        windows.protect(b'x' * 2049)
+        windows.protect(b'x' * 32769)
     with pytest.raises(BridgeError):
         windows.unprotect(b'not protected')
 

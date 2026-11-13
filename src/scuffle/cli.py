@@ -15,14 +15,14 @@ from .ngdp.cdn import CDNClient
 from .settings import Settings, cache_dir
 
 
-def terminal_sign_in(url: str) -> bytes:
-    from .launch import open_browser, parse_ticket
+def terminal_sign_in(url: str, web_session: bytes | None = None):
+    from .launch import SignedIn, open_browser, parse_ticket
     print(f'Sign in to Battle.net in your browser:\n\n  {url}\n\n'
           'Afterwards the browser cannot open http://localhost:0/?ST=... '
           'Copy that whole address and paste it here.', file=sys.stderr, flush=True)
     open_browser(url)
     text = getpass.getpass('Address (hidden): ') if sys.stdin.isatty() else sys.stdin.readline(4096)
-    return parse_ticket(text)
+    return SignedIn(parse_ticket(text))
 
 
 def progress(event: dict) -> None:
