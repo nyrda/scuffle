@@ -208,10 +208,11 @@ static int close_game(const char *executable, int force) {
 }
 
 /* Protect or unprotect one length-prefixed stdin value and write it as a
- * WBC1 frame. Plaintext is at most 2048 bytes, protected data 8192. */
+ * WBC1 frame. Plaintext is at most 32768 bytes, protected data 65536, which
+ * holds the cookies of a browser session as well as a ticket. */
 static int pipe_dpapi(int protect) {
-    BYTE buffer[8192];
-    DWORD size, input_limit = protect ? 2048 : 8192, output_limit = protect ? 8192 : 2048;
+    static BYTE buffer[65536];
+    DWORD size, input_limit = protect ? 32768 : 65536, output_limit = protect ? 65536 : 32768;
     DATA_BLOB output = {0}, entropy = {16, entropy_bytes};
     int result = 1;
     _setmode(_fileno(stdin), _O_BINARY);

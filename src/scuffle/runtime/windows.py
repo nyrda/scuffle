@@ -22,7 +22,7 @@ import subprocess
 import time
 import winreg
 
-from .bridge import BridgeError
+from .bridge import PLAIN_LIMIT, PROTECTED_LIMIT, BridgeError
 from .game import ASKED, NO_WINDOW, NOT_RUNNING, GameRuntime, RuntimeFailure
 
 ENTROPY = bytes.fromhex('c876f4ae4c952efef2fa0f5419c09c43')
@@ -139,7 +139,7 @@ def _release(blob: Blob) -> None:
 
 
 def protect(value: bytes) -> bytes:
-    blob = _crypt(True, value, 2048, 8192)
+    blob = _crypt(True, value, PLAIN_LIMIT, PROTECTED_LIMIT)
     if blob is None:
         raise BridgeError('Could not protect a new credential')
     try:
@@ -149,7 +149,7 @@ def protect(value: bytes) -> bytes:
 
 
 def unprotect(protected: bytes) -> bytes:
-    blob = _crypt(False, protected, 8192, 2048)
+    blob = _crypt(False, protected, PROTECTED_LIMIT, PLAIN_LIMIT)
     if blob is None:
         raise BridgeError('Could not decrypt the saved credential')
     try:

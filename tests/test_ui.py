@@ -37,19 +37,20 @@ def test_copied_redirect_signs_in_once_and_leaves_no_ticket_on_the_clipboard(qt,
     page.finished.connect(results.append)
     clipboard = qt.clipboard()
     clipboard.setText('unrelated text')
-    page.start('https://eu.account.battle.net/login/?externalChallenge=login&app=wow')
+    page.start('https://eu.account.battle.net/login/?externalChallenge=login&app=wow', own_browser=True)
     redirect = 'http://localhost:0/?ST=EU-0123abcd-314159265&flowTrackingId='
     clipboard.setText(redirect)
     for _ in range(5):
         qt.processEvents()
-    assert results == [b'EU-0123abcd-314159265']
+    # A sign-in in the user's browser has a ticket and no browser session to keep.
+    assert [(result.ticket, result.web_session) for result in results] == [(b'EU-0123abcd-314159265', None)]
     assert 'ST=' not in clipboard.text()
     # On Wayland a late change notification can still report the old address.
     # Handling it again used to recurse until Python's recursion limit.
     clipboard.setText(redirect)
     for _ in range(5):
         qt.processEvents()
-    assert results == [b'EU-0123abcd-314159265']
+    assert len(results) == 1
 
 
 def test_clipboard_text_from_before_the_sign_in_is_ignored(qt, monkeypatch):
@@ -58,7 +59,7 @@ def test_clipboard_text_from_before_the_sign_in_is_ignored(qt, monkeypatch):
     page = pages.SignInPage()
     results = []
     page.finished.connect(results.append)
-    page.start('https://eu.account.battle.net/login/?externalChallenge=login&app=wow')
+    page.start('https://eu.account.battle.net/login/?externalChallenge=login&app=wow', own_browser=True)
     page.check_clipboard()
     qt.processEvents()
     assert results == []
@@ -97,6 +98,8 @@ def window(qt, tmp_path, monkeypatch):
         monkeypatch.setattr(settings_module, name, lambda name=name: tmp_path / name)
         monkeypatch.setattr(ui, name, lambda name=name: tmp_path / name, raising=False)
     window = ui.MainWindow()
+    # As after the user chose their own browser. The tests of Scuffle's sign-in window turn this off.
+    window.settings.sign_in_with_browser = True
     window.show()
     qt.processEvents()
     yield window
@@ -1513,7 +1516,7 @@ def test_adding_an_account_refuses_the_address_of_one_already_signed_in(qt, wind
 
     class Launcher:
         def sign_in(self, version, sign_in):
-            tickets.append(sign_in('https://eu.account.battle.net/login/?externalChallenge=login&app=wow'))
+            tickets.append(sign_in('https://eu.account.battle.net/login/?externalChallenge=login&app=wow').ticket)
     monkeypatch.setattr(window, 'launcher', lambda: Launcher())
     window.sign_in_from_sidebar()           # Add account…
     page = window.sign_in_page
@@ -1703,6 +1706,7 @@ def unseen(qt, tmp_path, monkeypatch):
     quits = []
     monkeypatch.setattr(ui.QApplication, 'quit', lambda: quits.append(True))
     window = ui.MainWindow(unseen=True)
+    window.settings.sign_in_with_browser = True
     installed(window, monkeypatch, ['wow', 'wow_classic_era'])
     window.populate()
     window.quits = quits
@@ -2542,3 +2546,173 @@ def test_the_update_check_stays_off_when_the_user_turned_it_off(qt, window, monk
     for _ in range(20):
         qt.processEvents()
     assert not asked
+
+
+# The sign-in in Scuffle's own window
+
+REDIRECT = 'http://localhost:0/?ST=EU-0123abcd-314159265&flowTrackingId='
+
+
+@pytest.fixture
+def sign_in_address():
+    """A stand-in for Battle.net's sign-in page on this machine, under Battle.net's name.
+
+    Like the real one it shows a form to a browser it does not know, and sends a browser it
+    knows by its cookie straight on to the address that holds the ticket.
+    """
+    import http.server
+    import threading
+    pytest.importorskip('PySide6.QtWebEngineWidgets')
+
+    class Page(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *_):
+            pass
+
+        def go(self, where, cookie):
+            self.send_response(302)
+            self.send_header('Set-Cookie', cookie)
+            self.send_header('Location', where)
+            self.end_headers()
+
+        def do_GET(self):
+            if self.path.startswith('/submit'):
+                self.go('/login/', 'login=known; Path=/; Max-Age=86400; HttpOnly')
+            elif 'login=known' in self.headers.get('Cookie', ''):
+                # The answer that redirects also renews a cookie, which belongs to the session too.
+                self.go(REDIRECT, 'seen=again; Path=/; Max-Age=86400')
+            else:
+                body = b'<form action="/submit"><input name="account"><button>Continue</button></form>'
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/html')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+    server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Page)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f'http://eu.account.battle.net:{server.server_port}/login/?externalChallenge=login&app=wow'
+    server.shutdown()
+    server.server_close()
+
+
+def until(qt, condition, seconds=20):
+    deadline = time.monotonic() + seconds
+    while not condition() and time.monotonic() < deadline:
+        qt.processEvents()
+        time.sleep(0.01)
+    return condition()
+
+
+def sign_in_as_the_user(qt, page):
+    """Wait for the form and send it, as the user does with Continue."""
+    forms = []
+
+    def form_is_there():
+        if not any(forms) and page.web.page is not None:
+            page.web.page.runJavaScript('document.forms.length', 0, forms.append)
+            until(qt, lambda: False, 0.2)
+        return any(forms)
+    assert until(qt, form_is_there)
+    page.web.page.runJavaScript('document.forms[0].submit()')
+
+
+def test_a_sign_in_in_scuffles_window_hands_back_the_ticket_and_the_browser_session(qt, sign_in_address):
+    page = pages.SignInPage()
+    results, asked = [], []
+    page.finished.connect(results.append)
+    page.asks.connect(lambda: asked.append(True))
+    page.start(sign_in_address)
+    # Nothing is kept that could sign in by itself, so the page is for the user at once, and says where it is.
+    assert asked == [True] and page.embedded and page.manual.isHidden()
+    assert page.web.place.text() == 'http://eu.account.battle.net'
+    sign_in_as_the_user(qt, page)
+    assert until(qt, lambda: results)
+    [result] = results
+    assert result.ticket == b'EU-0123abcd-314159265' and result.how == 'in the sign-in window'
+    # The session is Battle.net's cookies, also the one a script cannot read and the one the redirect set.
+    assert b'login=known' in result.web_session and b'HttpOnly' in result.web_session
+    assert b'seen=again' in result.web_session
+    # The browser itself is gone, and the page asked only once.
+    assert page.web.view is None and not page.active and asked == [True]
+    page.deleteLater()
+
+
+def test_only_the_address_the_sign_in_ends_at_is_taken_for_a_ticket(qt, sign_in_address):
+    page = pages.SignInPage()
+    results = []
+    page.finished.connect(results.append)
+    # Another page that only names that address, as a page trying to pass a ticket of its own might.
+    elsewhere = sign_in_address.split('/login/')[0] + '/elsewhere?next=http://localhost:0/&ST=EU-0fake000-1'
+    page.start(elsewhere, web_session=b'other=1; domain=eu.account.battle.net; path=/')
+    assert until(qt, lambda: page.web.asked) and page.active and results == []
+    page.finish(None)
+    page.deleteLater()
+
+
+def test_a_kept_browser_session_signs_in_without_showing_the_page(qt, unseen, sign_in_address):
+    unseen.settings.sign_in_with_browser = False
+    session = b'login=known; HttpOnly; domain=eu.account.battle.net; path=/'
+    unseen.on_sign_in_requested(sign_in_address, session)
+    assert until(qt, unseen._sign_in_done.is_set)
+    [result] = unseen._sign_in_result
+    assert result.ticket == b'EU-0123abcd-314159265' and result.how == 'with the kept browser session'
+    assert b'login=known' in result.web_session and b'seen=again' in result.web_session
+    # Nobody was asked anything: the window stayed hidden and no page was locked.
+    assert not unseen.isVisible() and unseen.stack.currentWidget() is not unseen.sign_in_page
+    assert unseen.settings_button.isEnabled()
+
+
+def test_a_browser_session_battlenet_no_longer_knows_shows_the_page(qt, unseen, sign_in_address):
+    unseen.settings.sign_in_with_browser = False
+    unseen.on_sign_in_requested(sign_in_address, b'login=ended; domain=eu.account.battle.net; path=/')
+    assert not unseen.isVisible()               # not before Battle.net's page asks
+    assert until(qt, unseen.isVisible)
+    assert unseen.stack.currentWidget() is unseen.sign_in_page and not unseen.settings_button.isEnabled()
+    sign_in_as_the_user(qt, unseen.sign_in_page)
+    assert until(qt, unseen._sign_in_done.is_set)
+    [result] = unseen._sign_in_result
+    assert result.how == 'in the sign-in window' and b'login=known' in result.web_session
+    assert unseen.stack.currentWidget() is unseen.client_page and unseen.settings_button.isEnabled()
+
+
+def test_the_users_choice_of_their_own_browser_is_kept(qt, window, monkeypatch, sign_in_address):
+    from scuffle.settings import Settings
+    opened = []
+    monkeypatch.setattr(pages, 'open_browser', opened.append)
+    window.settings.sign_in_with_browser = False
+    window.on_sign_in_requested(sign_in_address)
+    page = window.sign_in_page
+    assert page.embedded and page.switch_button.text() == 'Use my browser instead'
+    page.switch_button.click()
+    # The browser opens, the address is pasted as before, and the next sign-in starts there too.
+    assert not page.embedded and opened == [sign_in_address] and page.web.view is None
+    assert not page.manual.isHidden() and Settings.load().sign_in_with_browser
+    page.take(REDIRECT, explicit=True)
+    assert window._sign_in_result[0].ticket == b'EU-0123abcd-314159265'
+    assert window._sign_in_result[0].web_session is None
+    # And back again.
+    window.on_sign_in_requested(sign_in_address)
+    assert not page.embedded and page.switch_button.text() == 'Sign in here'
+    page.switch_button.click()
+    assert page.embedded and not Settings.load().sign_in_with_browser
+    page.finish(None)
+
+
+def test_only_battlenets_own_unexpired_cookies_are_kept(qt):
+    from PySide6.QtNetwork import QNetworkCookie
+    from scuffle.ui import websignin
+
+    def cookies(*lines):
+        return [cookie for line in lines for cookie in QNetworkCookie.parseCookies(line)]
+    session = websignin.pack(cookies(
+        b'login=1; domain=.battle.net; path=/; secure; HttpOnly',
+        b'region=eu; domain=eu.account.battle.net; path=/login',
+        b'web=2; domain=.blizzard.com; path=/',
+        b'captcha=3; domain=.example.com; path=/',
+        b'fake=4; domain=notbattle.net; path=/',
+        b'old=5; domain=.battle.net; path=/; expires=Wed, 01-Jan-2020 00:00:00 GMT'))
+    names = sorted(cookie.name().data() for cookie in websignin.unpack(session))
+    assert names == [b'login', b'region', b'web']
+    assert b'captcha' not in session and b'fake' not in session and b'old' not in session
+    # A session the vault could not protect is not kept at all.
+    assert websignin.pack(cookies(b'big=' + b'x' * 40000 + b'; domain=.battle.net; path=/')) == b''

@@ -17,6 +17,14 @@ the uninstall and move code on purpose and check that the tests catch each
 change. Run them with `nix develop -c python3 tools/<script>`. Their reports go
 under `.pytest_cache/`.
 
+The tests never reach the network. The sign-in window's browser engine has
+network code of its own, so `tests/conftest.py` makes every name it looks up
+this machine. A test's stand-in for Battle.net's page then answers under
+Battle.net's name, and nothing else can be reached. The engine comes with the
+PySide6 of the Nix dev shell and package. The AppImage and `Scuffle.exe` are
+built from the smaller PySide6 wheel without it, and sign in through the user's
+browser until their packaging adds it.
+
 ## Screenshots
 
 ```sh
@@ -30,6 +38,8 @@ sizes, for review after a change to the UI. `tools/readme_screenshot.py` draws
 `docs/screenshot.png`, the picture in the README. Both make up their clients,
 downloads and sign-in in memory, with a fixed client catalog from
 `tests/fixtures/catalog-us.json`, so they need no installation and no network.
+The sign-in window shows a stand-in page there, so no picture holds Battle.net's
+artwork.
 The README picture only changes when the window does, so run the script and
 commit the new picture after changing the window.
 

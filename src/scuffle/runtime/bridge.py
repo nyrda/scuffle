@@ -18,6 +18,10 @@ from ..library import atomic_bytes
 from ..settings import data_dir
 
 FRAME_MAGIC = b'WBC1'
+# The largest value the bridge protects, and the largest it hands back protected. A ticket is far
+# smaller. The cookies of a browser session are what needs the room.
+PLAIN_LIMIT = 32768
+PROTECTED_LIMIT = 65536
 
 
 class BridgeError(RuntimeError):
@@ -112,10 +116,10 @@ class Bridge:
         return payload
 
     def protect(self, value: bytes) -> bytes:
-        return self._frame('--protect-auth-stdin', value, 8192, 'Could not protect a new credential')
+        return self._frame('--protect-auth-stdin', value, PROTECTED_LIMIT, 'Could not protect a new credential')
 
     def unprotect(self, protected: bytes) -> bytes:
-        return self._frame('--unprotect-auth-stdin', protected, 2048, 'Could not decrypt the saved credential')
+        return self._frame('--unprotect-auth-stdin', protected, PLAIN_LIMIT, 'Could not decrypt the saved credential')
 
     def device_id(self) -> bytes:
         result = self.run(['--pipe-device'])

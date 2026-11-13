@@ -42,6 +42,7 @@ class Battlenet:
         self.verified = []          # every redirect ticket presented
         self.tags = tags or {}
         self.issued = 0
+        self.kept = []              # the browser session each sign-in was handed
         self.login_tickets = {}     # lasting ticket -> account, handed back by a browser sign-in
         self.hands_back_login_ticket = False
         self.echoes = False
@@ -52,12 +53,16 @@ class Battlenet:
         self.tickets[ticket] = owner
         return ticket
 
-    def browser(self, owner):
-        """A browser sign-in to owner, as the sign-in page returns its redirect ticket."""
-        def sign_in(url):
+    def browser(self, owner, web_session=None, how='in the browser'):
+        """A sign-in to owner, as the sign-in page hands back its redirect ticket.
+
+        web_session is what Scuffle's own sign-in window hands back with it. A browser has none.
+        """
+        def sign_in(url, kept=None):
+            self.kept.append(kept)
             ticket = f'ST-{owner}-{len(self.redirects)}'.encode()
             self.redirects[ticket] = owner
-            return ticket
+            return launch.SignedIn(ticket, web_session, how)
         return sign_in
 
     def login_ticket(self, owner, presented):
@@ -137,7 +142,7 @@ def launcher(vault):
     return launch.Launcher(Settings(), library=None, runtime=Runtime(), vault=vault)
 
 
-def never(url):
+def never(url, web_session=None):
     raise AssertionError('asked to sign in through the browser')
 
 
@@ -418,11 +423,63 @@ def test_with_no_ticket_left_that_works_the_browser_opens(vault, battlenet, keep
     battlenet.login_tickets.clear()
     opened = []
 
-    def browser(url):
+    def browser(url, web_session=None):
         opened.append(url)
         return battlenet.browser(MAIN)(url)
     assert launcher(vault).renew(VERSION, browser).id == MAIN and len(opened) == 1
     assert (vault.last('login_ticket_rejected') is not None) == keeps_login_ticket
+
+
+COOKIES = b'login=abc; secure; HttpOnly; domain=.battle.net; path=/'
+
+
+def test_a_sign_in_in_scuffles_window_keeps_its_browser_session_protected(vault, battlenet):
+    added = launcher(vault).sign_in(VERSION, battlenet.browser(MAIN, COOKIES, 'in the sign-in window'))
+    assert added.load_web_session() == COOKIES and owner_only(added.web_session_file)
+    assert COOKIES not in added.web_session_file.read_bytes().replace(b'dpapi:' + COOKIES, b'')
+    assert 'in the sign-in window' in vault.history.read_text()
+    # A sign-in in the user's browser has no session to keep, and none is made up.
+    assert not launcher(vault).sign_in(VERSION, battlenet.browser(ALT)).has_web_session()
+
+
+def test_an_ended_session_signs_in_again_with_the_kept_browser_session(vault, battlenet):
+    launcher(vault).sign_in(VERSION, battlenet.browser(MAIN, COOKIES))
+    battlenet.tickets.clear()       # the saved tickets expire within hours
+    battlenet.kept.clear()
+    newer = COOKIES + b'\nseen=2; domain=.battle.net; path=/'
+    renewed = launcher(vault).renew(VERSION, battlenet.browser(MAIN, newer, 'with the kept browser session'))
+    # The sign-in was handed the session kept for this account, and what it hands back is kept for the next.
+    assert battlenet.kept == [COOKIES]
+    assert renewed.id == MAIN and renewed.load_web_session() == newer
+    assert renewed.label == 'Wanderer#7395' and battlenet.tickets[saved_ticket(renewed)] == MAIN
+    assert 'with the kept browser session' in vault.history.read_text()
+
+
+def test_each_account_signs_in_again_with_its_own_browser_session(vault, battlenet):
+    launcher(vault).sign_in(VERSION, battlenet.browser(MAIN, b'main=1; domain=.battle.net; path=/'))
+    launcher(vault).sign_in(VERSION, battlenet.browser(ALT, b'alt=1; domain=.battle.net; path=/'))
+    battlenet.tickets.clear()
+    battlenet.kept.clear()
+    vault.activate(str(MAIN))
+    launcher(vault).renew(VERSION, battlenet.browser(MAIN))
+    # Adding an account, or signing in with none kept, starts from an empty browser.
+    launcher(vault).sign_in(VERSION, battlenet.browser(THIRD))
+    assert battlenet.kept == [b'main=1; domain=.battle.net; path=/', None]
+    assert vault.logins()[1].load_web_session() == b'alt=1; domain=.battle.net; path=/'
+
+
+def test_a_browser_session_that_cannot_be_kept_does_not_cost_the_sign_in(vault, battlenet, monkeypatch):
+    def full(self, cookies):
+        raise OSError('disk full')
+    monkeypatch.setattr(vault_module.Login, 'save_web_session', full)
+    added = launcher(vault).sign_in(VERSION, battlenet.browser(MAIN, COOKIES))
+    assert added.id == MAIN and not added.has_web_session() and vault.active().id == MAIN
+
+
+def test_signing_out_deletes_the_kept_browser_session(vault, battlenet):
+    added = launcher(vault).sign_in(VERSION, battlenet.browser(MAIN, COOKIES))
+    vault.forget(added)
+    assert not added.web_session_file.exists() and not added.directory.exists()
 
 
 @pytest.mark.parametrize('position, exit_time, text', [
