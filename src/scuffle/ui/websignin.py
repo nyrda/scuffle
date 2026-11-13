@@ -10,16 +10,19 @@ after the sign-in, which holds the ticket, and the cookies Battle.net sets.
 from __future__ import annotations
 
 import os
-from typing import Iterable
+from typing import TYPE_CHECKING, Iterable
 
 from PySide6.QtCore import QDateTime, QLocale, QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QGuiApplication
-from PySide6.QtNetwork import QNetworkCookie
 from PySide6.QtWidgets import QSizePolicy, QVBoxLayout, QWidget
 
 from ..launch import looks_like_redirect, parse_ticket
 from .style import BACKGROUND
 from .widgets import label
+
+if TYPE_CHECKING:
+    # Only where the browser engine is there. The AppImage's Qt has neither, and imports this module too.
+    from PySide6.QtNetwork import QNetworkCookie
 
 # Whose cookies are kept. The page also loads a captcha and fonts from elsewhere.
 KEPT_DOMAINS = ('battle.net', 'blizzard.com', 'battlenet.com.cn', 'blizzard.cn')
@@ -91,6 +94,7 @@ def pack(cookies: Iterable[QNetworkCookie]) -> bytes:
 
 
 def unpack(data: bytes) -> list[QNetworkCookie]:
+    from PySide6.QtNetwork import QNetworkCookie
     cookies = [cookie for line in data.split(b'\n') for cookie in QNetworkCookie.parseCookies(line)]
     return [cookie for cookie in cookies if kept(cookie) and not expired(cookie)]
 
@@ -186,6 +190,7 @@ class WebSignIn(QWidget):
         return cookie.name().data(), cookie.domain().lstrip('.'), cookie.path()
 
     def _added(self, cookie: QNetworkCookie) -> None:
+        from PySide6.QtNetwork import QNetworkCookie
         self._jar[self._key(cookie)] = QNetworkCookie(cookie)
         if self._waiting:
             self._waiting.discard(self._key(cookie))
