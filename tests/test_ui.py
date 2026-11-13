@@ -1628,8 +1628,9 @@ def test_a_running_game_closes_and_shift_turns_the_button_into_force_quit(qt, wi
     assert page.primary.text() == 'Close game' and page.primary.isEnabled()
     assert 'Running' in window.client_list.rows['wow'].status.text()
 
-    def click_and_wait(count):
-        page.primary.click()
+    def click_and_wait(count, modifiers=Qt.NoModifier):
+        from PySide6.QtTest import QTest
+        QTest.mouseClick(page.primary, Qt.LeftButton, modifiers)
         deadline = time.monotonic() + 5
         while len(calls) < count:
             qt.processEvents()
@@ -1645,9 +1646,15 @@ def test_a_running_game_closes_and_shift_turns_the_button_into_force_quit(qt, wi
     shift['held'] = True
     window.refresh()
     assert page.primary.text() == 'Force quit' and page.primary.isEnabled()
-    click_and_wait(2)
+    click_and_wait(2, Qt.ShiftModifier)
     assert calls[-1] == ([4242], True)
     shift['held'] = False
+    # A quick Shift+click: by the time the click is handled the key is up again, and the click still forces.
+    window.forced.discard('wow')
+    results.append(ASKED)
+    window.refresh()
+    click_and_wait(3, Qt.ShiftModifier)
+    assert calls[-1] == ([4242], True)
     window.closing['wow'] = time.monotonic()
     window.refresh()
     assert page.primary.text() == 'Closing…' and not page.primary.isEnabled()

@@ -1102,7 +1102,9 @@ class MainWindow(QMainWindow):
         code = self.selected()
         job = self.downloads.job(code)
         if self.game_running(code):
-            self.close_game(code, force=bool(QApplication.queryKeyboardModifiers() & Qt.ShiftModifier))
+            # The click's own modifiers. By the time the click is handled, Shift can be up again,
+            # as with a quick Shift+click, and asking the keyboard then says no Shift.
+            self.close_game(code, force=bool(QApplication.keyboardModifiers() & Qt.ShiftModifier))
             return
         if self.moving():
             return              # the button is disabled meanwhile, but a click can be on its way
