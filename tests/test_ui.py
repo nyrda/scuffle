@@ -1,5 +1,6 @@
 """Check the sign-in page's clipboard handling with a real Qt clipboard."""
 import os
+from pathlib import Path
 import sys
 import time
 
@@ -2723,3 +2724,34 @@ def test_only_battlenets_own_unexpired_cookies_are_kept(qt):
     assert b'captcha' not in session and b'fake' not in session and b'old' not in session
     # A session the vault could not protect is not kept at all.
     assert websignin.pack(cookies(b'big=' + b'x' * 40000 + b'; domain=.battle.net; path=/')) == b''
+
+
+def test_a_qt_without_the_browser_engine_signs_in_through_the_users_browser(tmp_path):
+    # The AppImage's Qt keeps only QtCore, QtGui and QtWidgets. The window has to start with that.
+    import subprocess
+    script = tmp_path / 'slim_qt.py'
+    script.write_text('''
+import importlib.abc, sys
+MISSING = ('PySide6.QtNetwork', 'PySide6.QtWebEngineCore', 'PySide6.QtWebEngineWidgets')
+
+class Slim(importlib.abc.MetaPathFinder):
+    def find_spec(self, name, path=None, target=None):
+        if name in MISSING:
+            raise ModuleNotFoundError(f'No module named {name!r}', name=name)
+sys.meta_path.insert(0, Slim())
+
+from PySide6.QtWidgets import QApplication
+app = QApplication([])
+from scuffle.ui import app as window, pages, websignin
+assert not websignin.available()
+pages.open_browser = lambda url: print('opened the browser')
+page = pages.SignInPage()
+page.start('https://eu.account.battle.net/login/?externalChallenge=login&app=wow')
+print('embedded', page.embedded, '| switch offered', not page.switch_button.isHidden())
+''')
+    # The same packages as this test run, wherever they come from, and Scuffle from the checkout.
+    paths = [str(Path(__file__).resolve().parents[1] / 'src'), *sys.path]
+    env = {**os.environ, 'QT_QPA_PLATFORM': 'offscreen', 'PYTHONPATH': os.pathsep.join(paths)}
+    result = subprocess.run([sys.executable, str(script)], env=env, capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, result.stderr[-2000:]
+    assert result.stdout.splitlines()[-2:] == ['opened the browser', 'embedded False | switch offered False']
