@@ -287,7 +287,16 @@ def preferences(settings: Settings, library) -> list[str]:
             f'Resume downloads on start: {yes(settings.resume_downloads)}, '
             f'pause while playing: {yes(settings.pause_while_playing)}',
             automatic_updates(settings),
-            f'Battle.net: {sign_in}']
+            f'Battle.net: {sign_in}',
+            f'Sign-in: {attempt(lambda: sign_in_place(settings), "unknown")}']
+
+
+def sign_in_place(settings: Settings) -> str:
+    """Where a sign-in happens. Only the sign-in window keeps Battle.net's browser session."""
+    from .ui import websignin
+    if not websignin.available():
+        return 'the browser, this build has no browser engine'
+    return 'the browser, by choice' if settings.sign_in_with_browser else "Scuffle's window"
 
 
 def automatic_updates(settings: Settings) -> str:

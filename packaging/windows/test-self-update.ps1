@@ -1,11 +1,12 @@
 <#
 .SYNOPSIS
-Update a real Scuffle.exe to another real Scuffle.exe on this Windows machine.
+Update a real Windows package to another real one on this Windows machine.
 
 .DESCRIPTION
 Builds two packages from copies of this checkout, one that asks a local server instead of GitHub
 and a newer one, then runs the update: a wrong checksum must change nothing, and a good release
-must replace the running program, start the new version and clear away the old file.
+must unpack beside the running program, replace it, start the new version and clear away the old
+program and its folder.
 #>
 param([Parameter(Mandatory)][string] $Venv)
 $ErrorActionPreference = 'Stop'
@@ -30,7 +31,7 @@ function Build-Copy([string] $name, [string] $version) {
     $project = Join-Path $copy 'pyproject.toml'
     [IO.File]::WriteAllText($project, (Get-Content $project -Raw).Replace("version = `"$current`"", "version = `"$version`""))
     & (Join-Path $copy 'packaging\windows\build.ps1') -Venv $Venv | Out-Host     # only the path is this function's answer
-    return Join-Path $copy 'dist\Scuffle.exe'
+    return Join-Path $copy 'dist'
 }
 
 function Invoke-Scuffle([string[]] $arguments) {
@@ -65,13 +66,15 @@ $older = Build-Copy 'older' $current
 $newer = Build-Copy 'newer' $newVersion
 $publish = Join-Path $work 'publish'
 New-Item -ItemType Directory -Force $publish | Out-Null
-$released = Join-Path $publish 'Scuffle.exe'
-Copy-Item $newer $released
+$released = Join-Path $publish "Scuffle-$newVersion-windows-x64.zip"
+Copy-Item (Join-Path $newer "Scuffle-$newVersion-windows-x64.zip") $released
 $install = Join-Path $work 'install'
-New-Item -ItemType Directory -Force $install | Out-Null
+Copy-Item -Recurse (Join-Path $older 'Scuffle') $install
 $exe = Join-Path $install 'Scuffle.exe'
-Copy-Item $older $exe
 $before = (Get-FileHash $exe).Hash
+$oldFolder = Join-Path $install "scuffle-$current"
+$newFolder = Join-Path $install "scuffle-$newVersion"
+Assert-That (Test-Path $oldFolder) 'the package keeps its version in a folder of its own'
 
 Assert-That ((Invoke-Scuffle @('--version')).Output.Trim() -eq "scuffle $current") 'the old package reports its version'
 
@@ -80,19 +83,23 @@ $refused = Invoke-Scuffle @('self-update')
 Stop-Process -Id $server.Id -Force
 Assert-That ($refused.Code -ne 0) 'a wrong checksum fails the update'
 Assert-That ((Get-FileHash $exe).Hash -eq $before) 'a wrong checksum leaves the program as it was'
-Assert-That (-not (Test-Path (Join-Path $install 'Scuffle.new.exe'))) 'a wrong checksum leaves no download behind'
+Assert-That (-not (Test-Path (Join-Path $install 'Scuffle.new.zip')) -and -not (Test-Path (Join-Path $install 'Scuffle.new.exe')) `
+    -and -not (Test-Path $newFolder)) 'a wrong checksum leaves no download behind'
 
 $server = Start-Server @()
 $result = Invoke-Scuffle @('self-update', '--start')
 Write-Host $result.Output $result.Errors
 Assert-That ($result.Code -eq 0 -and $result.Output -match '"updated": true') 'the update reports success'
-Assert-That ((Get-FileHash $exe).Hash -eq (Get-FileHash $released).Hash) 'the program file is the release'
+Assert-That ((Get-FileHash $exe).Hash -eq (Get-FileHash (Join-Path $newer 'Scuffle\Scuffle.exe')).Hash) 'the program file is the release'
+Assert-That (Test-Path (Join-Path $newFolder 'base_library.zip')) 'the new version folder is beside the program'
+Assert-That (-not (Test-Path (Join-Path $install 'Scuffle.new.zip'))) 'the download is gone'
 
-# The old file goes only once the new version has opened its window.
+# The old program and its folder go only once the new version has opened its window.
 $old = Join-Path $install 'Scuffle.old.exe'
 $deadline = (Get-Date).AddSeconds(120)
-while ((Test-Path $old) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
-Assert-That (-not (Test-Path $old)) 'the restarted Scuffle cleared away the old file'
+while (((Test-Path $old) -or (Test-Path $oldFolder)) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
+Assert-That (-not (Test-Path $old)) 'the restarted Scuffle cleared away the old program'
+Assert-That (-not (Test-Path $oldFolder)) 'the restarted Scuffle cleared away the old version folder'
 $running = @(Get-Process Scuffle -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe })
 Assert-That ($running.Count -gt 0) 'the updated Scuffle is running'
 $running | Stop-Process -Force

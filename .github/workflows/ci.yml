@@ -38,7 +38,7 @@ jobs:
           if-no-files-found: error
 
   windows:
-    name: Windows (tests and Scuffle.exe)
+    name: Windows (tests and package)
     runs-on: windows-2025
     timeout-minutes: 45
     steps:
@@ -46,7 +46,7 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.14'
-      - name: Build Scuffle.exe
+      - name: Build the package
         run: ./packaging/windows/build.ps1
       # The build's own environment has PySide6 at the version the package bundles.
       - name: Install pytest
@@ -55,13 +55,13 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: build/windows/venv/Scripts/python.exe -m pytest -q
-      - name: Update one Scuffle.exe to another
+      - name: Update one package to another
         timeout-minutes: 15
         run: ./packaging/windows/test-self-update.ps1 -Venv build/windows/venv
       - uses: actions/upload-artifact@v7
         with:
-          name: Scuffle-exe
-          path: dist/Scuffle.exe
+          name: Scuffle-windows
+          path: dist/Scuffle-*-windows-x64.zip
           if-no-files-found: error
 
   # A version tag publishes what the two jobs above built and tested.
@@ -91,20 +91,20 @@ jobs:
       - uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
-            release/Scuffle.exe
+            release/Scuffle-*-windows-x64.zip
             release/Scuffle-*-x86_64.AppImage
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           cd release
-          sha256sum Scuffle.exe Scuffle-*-x86_64.AppImage > SHA256SUMS
+          sha256sum Scuffle-*-windows-x64.zip Scuffle-*-x86_64.AppImage > SHA256SUMS
           cat SHA256SUMS
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag \
             --title "Scuffle ${GITHUB_REF_NAME#v}" \
             --notes "Scuffle is experimental. The README explains how to install it." \
             --generate-notes \
-            Scuffle.exe Scuffle-*-x86_64.AppImage SHA256SUMS
+            Scuffle-*-windows-x64.zip Scuffle-*-x86_64.AppImage SHA256SUMS
 
   # The real thing on real Windows: the release before this one, from GitHub, updates itself to this one.
   update-from-previous:
@@ -120,16 +120,22 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $tags = @(gh release list -R $env:GITHUB_REPOSITORY --limit 2 --exclude-pre-releases --json tagName --jq '.[].tagName')
-          gh release download $env:GITHUB_REF_NAME -R $env:GITHUB_REPOSITORY -p Scuffle.exe -D current
-          gh attestation verify current/Scuffle.exe -R $env:GITHUB_REPOSITORY
+          $package = 'Scuffle-*-windows-x64.zip'
+          gh release download $env:GITHUB_REF_NAME -R $env:GITHUB_REPOSITORY -p $package -D current
+          $zip = (Get-Item current/$package).FullName
+          gh attestation verify $zip -R $env:GITHUB_REPOSITORY
           if ($LASTEXITCODE) { throw 'The release has no valid attestation' }
           if ($tags.Count -lt 2) { Write-Host 'This is the first release.'; exit 0 }
-          gh release download $tags[1] -R $env:GITHUB_REPOSITORY -p Scuffle.exe -D install
+          $previous = @(gh release view $tags[1] -R $env:GITHUB_REPOSITORY --json assets --jq '.assets[].name') -like $package
+          if (-not $previous) { Write-Host "$($tags[1]) is a single Scuffle.exe, which does not update to a folder package."; exit 0 }
+          gh release download $tags[1] -R $env:GITHUB_REPOSITORY -p $package -D previous
+          Expand-Archive (Get-Item previous/$package).FullName -DestinationPath install
+          Expand-Archive $zip -DestinationPath expected
           $env:APPDATA = "$PWD/appdata"; $env:LOCALAPPDATA = "$PWD/localappdata"
           New-Item -ItemType Directory -Force $env:APPDATA, $env:LOCALAPPDATA | Out-Null
-          $update = Start-Process install/Scuffle.exe -ArgumentList 'self-update' -PassThru -NoNewWindow -RedirectStandardOutput update.txt -RedirectStandardError errors.txt
+          $update = Start-Process install/Scuffle/Scuffle.exe -ArgumentList 'self-update' -PassThru -NoNewWindow -RedirectStandardOutput update.txt -RedirectStandardError errors.txt
           $null = $update.Handle
           $update.WaitForExit()
           Get-Content update.txt, errors.txt
           if ($update.ExitCode) { throw 'The update failed' }
-          if ((Get-FileHash install/Scuffle.exe).Hash -ne (Get-FileHash current/Scuffle.exe).Hash) { throw 'The program is not the new release' }
+          if ((Get-FileHash install/Scuffle/Scuffle.exe).Hash -ne (Get-FileHash expected/Scuffle/Scuffle.exe).Hash) { throw 'The program is not the new release' }

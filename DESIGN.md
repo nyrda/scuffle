@@ -463,8 +463,12 @@ Drafts, pre-releases and anything not newer are ignored. Only addresses under th
 repository's release downloads are used. The update only happens when the user
 asks, because the program it replaces holds the Battle.net session.
 
-1. The file is downloaded beside the program, as `Scuffle.new.exe`, and must match
-   the release's size and its line in `SHA256SUMS`.
+1. The file is downloaded beside the program and must match the release's size
+   and its line in `SHA256SUMS`. The AppImage is downloaded as `.new`. The Windows
+   package is a zip, `Scuffle.new.zip`, of `Scuffle.exe` and the folder of its
+   version, `scuffle-<version>`. The folder is unpacked beside the running
+   version's own folder, as `.partial` until it is complete, and the program as
+   `Scuffle.new.exe`. An entry outside those two refuses the release.
 2. It must run with `--version` and name the release's version. So a package that
    cannot start here, or a wrong file under the right name, changes nothing.
 3. The running program is replaced. Linux hard links it as `.old` and renames the
@@ -475,11 +479,19 @@ asks, because the program it replaces holds the Battle.net session.
    still beside it is the working copy.
 4. Scuffle restarts once it has released the window's lock, or a new start would
    hand its request to the window that is closing. The new version removes `.old`
-   once its window is up.
+   once its window is up, and in the Windows package the other `scuffle-<version>`
+   folders. A failed or interrupted update leaves only names like these, so the
+   next start of either version clears them.
 
-A new Scuffle is started with `PYINSTALLER_RESET_ENVIRONMENT`, or a one-file
-package would use the unpacked files of the one that started it, and without the
-AppImage's own variables. The restart waits while a game runs or a download is
+The Windows package is a folder because a one-file program unpacks itself on
+every start, which took about 9 seconds with the sign-in window's browser
+engine inside. Each version's folder has its own name, since Windows cannot
+rename or replace a folder whose program and libraries are running. Only the
+program is swapped, as before.
+
+A new Scuffle is started without the AppImage's own variables, and with
+`PYINSTALLER_RESET_ENVIRONMENT`, which keeps PyInstaller's variables of the
+running Scuffle from reaching it. The restart waits while a game runs or a download is
 active, and repeats that check after the download, since a game can start during
 it.
 

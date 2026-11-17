@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Build dist/Scuffle.exe on a Windows machine over SSH.
+# Build the Windows package on a Windows machine over SSH.
 #
 # Usage: packaging/windows/remote-build.sh <ssh host> [remote folder]
 #
 # The working tree, with uncommitted changes, goes to <remote folder> in the
-# remote user's home, build.ps1 runs there, and the result comes back to
-# dist/Scuffle.exe. The remote machine needs Python from python.org with the
+# remote user's home, build.ps1 runs there, and the zip comes back to
+# dist/Scuffle-<version>-windows-x64.zip. The remote machine needs Python from python.org with the
 # py launcher. The remote folder keeps the build tools between runs.
 set -euo pipefail
 
@@ -36,6 +36,8 @@ remote_powershell "
     tar -xf '$remote\\source.tar' -C '$remote\\source'
     if (\$LASTEXITCODE) { exit 1 }
     & '$remote\\source\\packaging\\windows\\build.ps1' -Venv (Join-Path \$HOME '$remote\\venv')"
+version=$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+zip=Scuffle-$version-windows-x64.zip
 mkdir -p dist
-scp -q "$host:$remote/source/dist/Scuffle.exe" dist/Scuffle.exe
-echo "Fetched $root/dist/Scuffle.exe"
+scp -q "$host:$remote/source/dist/$zip" "dist/$zip"
+echo "Fetched $root/dist/$zip"

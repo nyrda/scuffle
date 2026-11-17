@@ -29,12 +29,16 @@ point it at clients you care about, and expect rough edges. Download the
 current version from
 [Releases](https://github.com/nyrda/scuffle/releases). Each release lists the
 SHA-256 sums of its files in `SHA256SUMS`, and GitHub records how each file was
-built, which `gh attestation verify Scuffle.exe -R nyrda/scuffle` checks.
+built, which `gh attestation verify <file> -R nyrda/scuffle` checks.
 
-**Windows**: `Scuffle.exe` is a single file with everything inside. Put it in a
-folder of its own and start it. It is not signed yet, so Smart App Control,
-which Windows 11 turns on for many new installations, can block it, sometimes
-only on its first start.
+**Windows**: unpack `Scuffle-<version>-windows-x64.zip` where you want Scuffle,
+for example in your user folder, and start `Scuffle.exe` in the `Scuffle`
+folder. Everything is inside that folder, the program and a `scuffle-<version>`
+folder beside it. It is not signed yet, so Smart App Control, which Windows 11
+turns on for many new installations, can block it, sometimes only on its first
+start. Scuffle 0.2.0 and earlier were a single `Scuffle.exe`, which cannot
+update itself to the folder. Unpack the new version once, and delete the old
+`Scuffle.exe`.
 
 **Linux**: the AppImage runs on Ubuntu 22.04 and newer, Fedora, Arch and
 SteamOS. Python, Qt, `umu-launcher` and the bridge are inside. Proton still
@@ -61,8 +65,8 @@ Scuffle asks GitHub once a day whether a newer version is out and says so in the
 window, the tray and a notification. **Update and restart** downloads it, checks
 it against the release's checksum and checks that it starts on your system, then
 replaces the program. Nothing is installed unless you click, and Scuffle waits
-while a game runs or a download is active. The AppImage keeps its file name, so
-shortcuts go on working. A folder Scuffle cannot write to stops the update, and
+while a game runs or a download is active. The AppImage and `Scuffle.exe` keep
+their file names, so shortcuts go on working. A folder Scuffle cannot write to stops the update, and
 **Release notes** has the download instead.
 
 **Settings › General** has **Check for Scuffle updates** and **Skip this version**.
@@ -100,8 +104,8 @@ in, the browser fails to open a page at `http://localhost:0/?ST=...`. Copy that
 address from the address bar. Scuffle reads it from the clipboard when you
 switch back, or you can paste it. Scuffle remembers the choice, and **Sign in
 here** changes it back. A sign-in in your browser lasts only as long as the
-game session, so Scuffle asks again about once a day. The AppImage and
-`Scuffle.exe` do not have the sign-in window yet and always use your browser.
+game session, so Scuffle asks again about once a day. The AppImage does not
+have the sign-in window yet and always uses your browser.
 
 **Several accounts.** The sidebar shows the signed-in account by its BattleTag,
 or "Account 1" until Battle.net sends one. Its menu switches accounts, signs out

@@ -24,16 +24,17 @@ def program_text(version=NEW, code=0):
 class GitHub:
     """Serves one release the way the API and the download addresses do."""
 
-    def __init__(self, monkeypatch, body=program_text(), listed_sum=None, listed_name=ASSET, size=None, cut_short=False, garbled=False, **release):
+    def __init__(self, monkeypatch, body=program_text(), listed_sum=None, listed_name=None, size=None, cut_short=False,
+                 garbled=False, asset=ASSET, **release):
         self.body, self.requests = body, []
         digest = listed_sum or hashlib.sha256(body).hexdigest()
-        files = {'/SHA256SUMS': f'{digest}  {listed_name}\n'.encode(), f'/{ASSET}': body}
+        files = {'/SHA256SUMS': f'{digest}  {listed_name or asset}\n'.encode(), f'/{asset}': body}
         github = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
                 github.requests.append(self.path)
-                if garbled and self.path == f'/{ASSET}':
+                if garbled and self.path == f'/{asset}':
                     self.wfile.write(b'not an HTTP answer\r\n\r\n')
                     self.close_connection = True
                     return
@@ -42,7 +43,7 @@ class GitHub:
                     data = json.dumps(github.description).encode()
                 self.send_response(200 if data is not None else 404)
                 # A connection that ends early promises more than it sends.
-                extra = 1000 if cut_short and self.path == f'/{ASSET}' else 0
+                extra = 1000 if cut_short and self.path == f'/{asset}' else 0
                 self.send_header('Content-Length', str(len(data or b'') + extra))
                 self.end_headers()
                 self.wfile.write(data or b'')
@@ -59,8 +60,8 @@ class GitHub:
         self.description = {
             'tag_name': f'v{NEW}', 'draft': False, 'prerelease': False,
             'html_url': f'{selfupdate.PAGES}tag/v{NEW}',
-            'assets': [{'name': ASSET, 'size': len(body) if size is None else size,
-                        'browser_download_url': f'{base}/{ASSET}'},
+            'assets': [{'name': asset, 'size': len(body) if size is None else size,
+                        'browser_download_url': f'{base}/{asset}'},
                        {'name': 'SHA256SUMS', 'size': 90, 'browser_download_url': f'{base}/SHA256SUMS'}],
             **release}
 
@@ -214,3 +215,65 @@ def test_the_version_flag_prints_what_a_new_download_is_checked_against(capsys):
     from scuffle import diagnostics
     cli.main(['--version'])
     assert capsys.readouterr().out == f'scuffle {diagnostics.version()}\n'
+
+
+# The Windows package: Scuffle.exe and its version's folder, released as a zip.
+WINDOWS_ASSET = f'Scuffle-{NEW}-windows-x64.zip'
+
+
+@pytest.fixture
+def windows_package(tmp_path, monkeypatch):
+    folder = tmp_path / 'Scuffle'
+    (folder / f'scuffle-{CURRENT}').mkdir(parents=True)
+    program = folder / 'Scuffle.exe'
+    program.write_bytes(b'the running program')
+    monkeypatch.delenv('APPIMAGE', raising=False)
+    monkeypatch.setattr(selfupdate.system, 'WINDOWS', True)
+    monkeypatch.setattr(sys, 'frozen', True, raising=False)
+    monkeypatch.setattr(sys, 'executable', str(program))
+    monkeypatch.setattr(sys, '_MEIPASS', str(folder / f'scuffle-{CURRENT}'), raising=False)
+    return program
+
+
+def zipped(entries):
+    import io
+    import zipfile
+    data = io.BytesIO()
+    with zipfile.ZipFile(data, 'w') as archive:
+        for name in entries:
+            archive.writestr(name, b'x')
+    return data.getvalue()
+
+
+@pytest.mark.parametrize('entries, message', [
+    (['Scuffle/Scuffle.exe', f'Scuffle/scuffle-{NEW}/../../outside.txt'], 'outside its folder'),
+    (['Scuffle/Scuffle.exe', f'Scuffle/scuffle-{NEW}/..\\outside.txt'], 'outside its folder'),
+    (['Scuffle/Scuffle.exe', f'Scuffle/scuffle-{NEW}/base_library.zip', 'Scuffle/elsewhere.dll'], 'unexpected file'),
+    ([f'Scuffle/scuffle-{NEW}/base_library.zip'], 'lacks Scuffle.exe'),
+    (['Scuffle/Scuffle.exe'], 'lacks Scuffle.exe or its version folder'),
+])
+def test_a_windows_release_that_unpacks_wrongly_changes_nothing(monkeypatch, windows_package, entries, message):
+    GitHub(monkeypatch, body=zipped(entries), asset=WINDOWS_ASSET)
+    release = selfupdate.latest()
+    assert release.asset == WINDOWS_ASSET
+    with pytest.raises(selfupdate.UpdateError, match=message):
+        selfupdate.install(release)
+    assert windows_package.read_bytes() == b'the running program'
+    assert siblings(windows_package) == ['Scuffle.exe', f'scuffle-{CURRENT}']
+    assert sorted(p.name for p in windows_package.parents[1].iterdir()) == ['Scuffle']
+
+
+def test_the_new_windows_version_clears_away_the_old_version_folders_and_nothing_else(windows_package, monkeypatch):
+    folder = windows_package.parent
+    for name in [f'scuffle-{NEW}', '9.9.9-notes', 'scuffle-0.1.0', 'scuffle-0.1.0.partial', 'saves']:
+        (folder / name).mkdir()
+        (folder / name / 'file').write_bytes(b'x')
+    for name in ['Scuffle.old.exe', 'Scuffle.new.exe', 'Scuffle.new.zip', 'scuffle-0.0.1']:
+        (folder / name).write_bytes(b'x')
+    monkeypatch.setattr(sys, '_MEIPASS', str(folder / f'scuffle-{NEW}'))
+    monkeypatch.setattr(selfupdate, 'FINISH_SECONDS', 0)
+    selfupdate.finish()
+    for thread in threading.enumerate():
+        if thread.name == 'scuffle-update-leftovers':
+            thread.join(5)
+    assert siblings(windows_package) == ['9.9.9-notes', 'Scuffle.exe', 'saves', 'scuffle-0.0.1', f'scuffle-{NEW}']

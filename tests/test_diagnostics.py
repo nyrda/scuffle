@@ -120,6 +120,14 @@ def test_a_report_leaves_out_every_signed_in_battle_net_account(home):
     assert 'Battle.net: signed in, 2 Battle.net accounts, 1 WoW account' in text
 
 
+def test_the_report_tells_where_a_sign_in_happens(home):
+    # Only the sign-in window keeps Battle.net's browser session, so a report of daily sign-ins needs this.
+    pytest.importorskip('PySide6.QtWebEngineWidgets')
+    assert "Sign-in: Scuffle's window\n" in diagnostics.report(Settings(), None, [])
+    chosen = diagnostics.report(Settings(sign_in_with_browser=True), None, [])
+    assert 'Sign-in: the browser, by choice\n' in chosen
+
+
 def test_a_report_comes_together_when_its_sources_are_missing_or_broken(home):
     root = home / 'Games/Scuffle'
     library = installed_library(root)
