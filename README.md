@@ -104,8 +104,8 @@ in, the browser fails to open a page at `http://localhost:0/?ST=...`. Copy that
 address from the address bar. Scuffle reads it from the clipboard when you
 switch back, or you can paste it. Scuffle remembers the choice, and **Sign in
 here** changes it back. A sign-in in your browser lasts only as long as the
-game session, so Scuffle asks again about once a day. The AppImage does not
-have the sign-in window yet and always uses your browser.
+game session, so Scuffle asks again about once a day. A Linux system without
+the libraries the sign-in window needs, such as NSS, also uses your browser.
 
 **Several accounts.** The sidebar shows the signed-in account by its BattleTag,
 or "Account 1" until Battle.net sends one. Its menu switches accounts, signs out

@@ -9,7 +9,10 @@ after the sign-in, which holds the ticket, and the cookies Battle.net sets.
 """
 from __future__ import annotations
 
+import functools
 import os
+import subprocess
+import sys
 from typing import TYPE_CHECKING, Iterable
 
 from PySide6.QtCore import QDateTime, QLocale, QTimer, QUrl, Qt, Signal
@@ -21,7 +24,7 @@ from .style import BACKGROUND
 from .widgets import label
 
 if TYPE_CHECKING:
-    # Only where the browser engine is there. The AppImage's Qt has neither, and imports this module too.
+    # Only where the browser engine is there. A Qt without it imports this module too.
     from PySide6.QtNetwork import QNetworkCookie
 
 # Whose cookies are kept. The page also loads a captcha and fonts from elsewhere.
@@ -35,6 +38,21 @@ PATIENCE = 20000
 # Cookies the redirect's own answer sets are reported a moment after the redirect.
 COOKIE_WAIT = 400
 MINIMUM_HEIGHT = 240
+# What Chromium's sandbox needs on Linux: a process that makes a user namespace, and in it the
+# PID and network namespaces it shuts the page's process into. os.unshare came with Python 3.12,
+# so 3.11 calls libc. The numbers are CLONE_NEWUSER, CLONE_NEWPID and CLONE_NEWNET.
+SANDBOX_PROBE = """
+import os
+unshare = getattr(os, 'unshare', None)
+if unshare is None:
+    import ctypes
+    libc = ctypes.CDLL(None, use_errno=True)
+    def unshare(flags):
+        if libc.unshare(flags):
+            raise OSError(ctypes.get_errno(), 'unshare')
+unshare(0x10000000)
+unshare(0x20000000 | 0x40000000)
+"""
 
 _engine = None
 
@@ -73,15 +91,42 @@ def engine():
     return _engine
 
 
-def without_display() -> None:
-    """Draw without a GPU where there is no display, or the engine stops the process over it.
+def prepare() -> None:
+    """Settings the engine reads once, when it starts at the first page.
 
-    The engine reads its flags when it starts, at the first page, which can be long after it was
-    loaded, as by the diagnostics before there is a window.
+    That can be long after it was loaded, as by the diagnostics before there is a window.
     """
-    flags = os.environ.get('QTWEBENGINE_CHROMIUM_FLAGS', '')
-    if QGuiApplication.platformName() == 'offscreen' and '--disable-gpu' not in flags.split():
-        os.environ['QTWEBENGINE_CHROMIUM_FLAGS'] = f'{flags} --disable-gpu'.strip()
+    flags = os.environ.get('QTWEBENGINE_CHROMIUM_FLAGS', '').split()
+    wanted = []
+    if QGuiApplication.platformName() == 'offscreen':
+        wanted.append('--disable-gpu')      # no display means no GPU, and the engine stops the process over that
+    if '--no-sandbox' not in flags and not sandbox_works():
+        # Without it the engine stops the process. The page then runs unsandboxed, as Scuffle does.
+        wanted.append('--no-sandbox')
+    added = [flag for flag in wanted if flag not in flags]
+    if added:
+        given = os.environ.get('QTWEBENGINE_CHROMIUM_FLAGS', '')
+        os.environ['QTWEBENGINE_CHROMIUM_FLAGS'] = ' '.join([given, *added]).strip()
+
+
+@functools.cache
+def sandbox_works() -> bool:
+    """Whether Chromium's sandbox can start here.
+
+    Ubuntu 24.04 lets a program without an AppArmor profile of its own make a user namespace,
+    but without the rights to do anything in it, and some systems turn user namespaces off.
+    Other systems than Linux sandbox differently.
+    """
+    if not sys.platform.startswith('linux'):
+        return True
+    if os.geteuid() == 0:
+        return False        # Chromium refuses its sandbox to root
+    try:
+        result = subprocess.run([sys.executable, '-I', '-S', '-c', SANDBOX_PROBE], stdin=subprocess.DEVNULL,
+                                capture_output=True, timeout=10, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
 
 
 def kept(cookie: QNetworkCookie) -> bool:
@@ -143,7 +188,7 @@ class WebSignIn(QWidget):
         """Open the sign-in page, signed in already when web_session is a session Battle.net still knows."""
         self.stop()
         parts = engine()
-        without_display()
+        prepare()
         self.asked, self._ticket, self._url = False, None, QUrl(url)
         self.profile = parts.Profile()          # without a name it keeps nothing on disk
         self.profile.setHttpAcceptLanguage(','.join(QLocale.system().uiLanguages()))

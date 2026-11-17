@@ -24,6 +24,15 @@ let
       url = "https://files.pythonhosted.org/packages/49/c2/a04fa003b4360e99d8e3fc2829abacf37396ace63ea1cd616402209ec7c6/shiboken6-6.12.0-cp310-abi3-manylinux_2_34_x86_64.whl";
       hash = "sha256-O95WW7CJAES1x/Y4CK3d7eWrwkHpOVor/tYZGYhNYkA=";
     })
+    # Qt WebEngine for the sign-in window, and the few Addons libraries it needs.
+    (fetchurl {
+      url = "https://files.pythonhosted.org/packages/ce/e0/cb8b68b962afc253709ed61555d0a4f297fd6786c0e77921d2e951504210/pyside6_webengine-6.12.0.140-cp310-abi3-manylinux_2_34_x86_64.whl";
+      hash = "sha256-wEHJkh18kcnlGiwCf0NNBcPFm6osjxe3HcgZTnd5HwY=";
+    })
+    (fetchurl {
+      url = "https://files.pythonhosted.org/packages/ff/3e/0d6c5934de575286ac0699a701d4155048185035b8da0ee78d57a38bc7ef/pyside6_addons-6.12.0-cp310-abi3-manylinux_2_34_x86_64.whl";
+      hash = "sha256-SrOMABfwRTZxqTE9OlPKHA43iST1SwfllrzqlKlkI5E=";
+    })
     # Desktop notifications over D-Bus, the version the Nix package uses. Pure Python.
     (fetchurl {
       url = "https://files.pythonhosted.org/packages/b2/a3/e137168c9c44d18eff0376253da9f1e9234d0239e0ee230d2fee6cea8e55/jeepney-0.9.0-py3-none-any.whl";
@@ -64,9 +73,15 @@ let
     url = "https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64";
     hash = "sha256-L8qLRDySUQ8Ug6iD9gBhrQm0a5eLJjHIB82HOkfsJg0=";
   };
-  # Qt libraries that QtCore, QtGui, QtWidgets and the kept plugins load. The build fails
-  # if a kept library needs one that is not here.
-  qtLibraries = [ "Core" "DBus" "Gui" "OpenGL" "Svg" "WaylandClient" "Widgets" "WlShellIntegration" "XcbQpa" ];
+  # Qt libraries that the kept modules and plugins load. The build fails if a kept library
+  # needs one that is not here.
+  qtLibraries = [ "Core" "DBus" "Gui" "OpenGL" "Svg" "WaylandClient" "Widgets" "WlShellIntegration" "XcbQpa" ]
+    # the sign-in window's browser engine
+    ++ [ "Network" "Positioning" "PrintSupport" "Qml" "QmlMeta" "QmlModels" "QmlWorkerScript" "Quick"
+         "QuickWidgets" "WebChannel" "WebEngineCore" "WebEngineWidgets" ];
+  # Python modules: the window, and the sign-in window's browser with what it imports.
+  qtModules = [ "QtCore" "QtGui" "QtWidgets" "QtNetwork" "QtWebChannel" "QtPrintSupport" "QtPositioning"
+                "QtQml" "QtQuick" "QtQuickWidgets" "QtOpenGL" "QtWebEngineCore" "QtWebEngineWidgets" ];
   # Plugins Scuffle uses: X11, Wayland and the offscreen platform, desktop themes and
   # input methods, SVG icons and images.
   qtPlugins = [ "iconengines" "imageformats" "platforminputcontexts" "platforms" "platformthemes"
@@ -100,11 +115,16 @@ stdenvNoCC.mkDerivation {
     done
     pyside=$site/PySide6
     find $pyside $site/shiboken6 -maxdepth 1 \( -name '*.pyi' -o -name include \) -exec rm -r {} +
-    find $pyside -maxdepth 1 -name 'Qt*.abi3.so' \
-      ! -name QtCore.abi3.so ! -name QtGui.abi3.so ! -name QtWidgets.abi3.so -delete
+    find $pyside -maxdepth 1 -name 'Qt*.abi3.so' ${lib.concatMapStrings (name: "! -name '${name}.abi3.so' ") qtModules} -delete
     find $pyside -maxdepth 1 -type f -executable ! -name '*.so*' -delete       # designer, qmlls and the like
-    rm -r $pyside/{doc,glue,scripts,typesystems,libpyside6qml.abi3.so*} $pyside/Qt/{libexec,metatypes,qml,translations}
+    rm -r $pyside/{doc,glue,scripts,typesystems} $pyside/Qt/{metatypes,qml}
+    # The browser engine runs pages in a program of its own, and reads its resources and the
+    # languages of its own messages from beside it.
+    find $pyside/Qt/libexec -mindepth 1 ! -name QtWebEngineProcess -delete
+    find $pyside/Qt/translations -mindepth 1 -maxdepth 1 ! -name qtwebengine_locales -exec rm -r {} +
+    rm $pyside/Qt/resources/qtwebengine_devtools_resources.pak
     find $pyside/Qt/lib -name 'libQt6*' ${lib.concatMapStrings (name: "! -name 'libQt6${name}.so.6' ") qtLibraries} -delete
+    rm $pyside/Qt/lib/lib{avcodec,avformat,avutil,swresample,swscale}.so*      # Qt Multimedia's FFmpeg
     find $pyside/Qt/plugins -mindepth 1 -maxdepth 1 ${lib.concatMapStrings (name: "! -name '${name}' ") qtPlugins} -exec rm -r {} +
     # Plugins for screens without a window system, and those whose libraries the wheel lacks.
     rm $pyside/Qt/plugins/platforms/lib{qeglfs,qlinuxfb,qminimalegl,qvkkhrdisplay,qvnc}.so
@@ -125,7 +145,7 @@ stdenvNoCC.mkDerivation {
           missing=1
         fi
       done
-    done < <(find $site -name '*.so*' -type f -print0)
+    done < <(find $site -name '*.so*' -type f -print0; printf '%s\0' $pyside/Qt/libexec/QtWebEngineProcess)
     [ $missing = 0 ]
 
     cp -r ${source} $site/scuffle

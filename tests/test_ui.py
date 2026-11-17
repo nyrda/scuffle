@@ -2727,7 +2727,7 @@ def test_only_battlenets_own_unexpired_cookies_are_kept(qt):
 
 
 def test_a_qt_without_the_browser_engine_signs_in_through_the_users_browser(tmp_path):
-    # The AppImage's Qt keeps only QtCore, QtGui and QtWidgets. The window has to start with that.
+    # A Qt without the browser engine, or a system without the libraries it needs. The window starts all the same.
     import subprocess
     script = tmp_path / 'slim_qt.py'
     script.write_text('''
