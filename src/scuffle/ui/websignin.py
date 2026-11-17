@@ -39,8 +39,20 @@ PATIENCE = 20000
 COOKIE_WAIT = 400
 MINIMUM_HEIGHT = 240
 # What Chromium's sandbox needs on Linux: a process that makes a user namespace, and in it the
-# PID and network namespaces it shuts the page's process into.
-SANDBOX_PROBE = 'import os; os.unshare(os.CLONE_NEWUSER); os.unshare(os.CLONE_NEWPID | os.CLONE_NEWNET)'
+# PID and network namespaces it shuts the page's process into. os.unshare came with Python 3.12,
+# so 3.11 calls libc. The numbers are CLONE_NEWUSER, CLONE_NEWPID and CLONE_NEWNET.
+SANDBOX_PROBE = """
+import os
+unshare = getattr(os, 'unshare', None)
+if unshare is None:
+    import ctypes
+    libc = ctypes.CDLL(None, use_errno=True)
+    def unshare(flags):
+        if libc.unshare(flags):
+            raise OSError(ctypes.get_errno(), 'unshare')
+unshare(0x10000000)
+unshare(0x20000000 | 0x40000000)
+"""
 
 _engine = None
 
