@@ -22,8 +22,8 @@ network code of its own, so `tests/conftest.py` makes every name it looks up
 this machine. A test's stand-in for Battle.net's page then answers under
 Battle.net's name, and nothing else can be reached. The engine comes with the
 PySide6 of the Nix dev shell and package, and with the `pyside6-webengine`
-wheel in `Scuffle.exe`. The AppImage is built from the smaller wheel without it, and
-signs in through the user's browser until its packaging adds it.
+wheel in the Windows package and the AppImage. `packaging/appimage/test-ubuntu.sh`
+signs in with the AppImage's own engine, as a user and as root.
 
 ## Screenshots
 

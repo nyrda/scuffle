@@ -6,14 +6,15 @@
 # The image gets the libraries every desktop has, but not Python or the xcb helper
 # libraries that the AppImage brings. The checks run without network, with folders of
 # their own: --help, the client list, the window on the offscreen, X11 and Wayland
-# platforms, the bundled umu-run in a mount of its own, and the bridge and umu-run that
-# Scuffle resolves. Needs podman.
+# platforms, a sign-in in the sign-in window's browser engine, the bundled umu-run in a
+# mount of its own, and the bridge and umu-run that Scuffle resolves. Needs podman.
 set -euo pipefail
 
 appimage=$(readlink -f "${1:?usage: test-ubuntu.sh <AppImage> [ubuntu tag]}")
 tag=${2:-24.04}
 image=scuffle-appimage-test:$tag
 fixture=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)/tests/fixtures/catalog-us.json
+sign_in=$(readlink -f "$(dirname "$0")/check-sign-in.py")
 
 podman build -q -t "$image" -f - <<EOF >/dev/null
 FROM docker.io/library/ubuntu:$tag
@@ -22,6 +23,11 @@ RUN apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -qq -y 
       libx11-6 libx11-xcb1 libxcb1 libxcb-glx0 libxcb-randr0 libxcb-render0 libxcb-shape0 \
       libxcb-shm0 libxcb-sync1 libxcb-xfixes0 libxcb-xkb1 libwayland-client0 libwayland-cursor0 \
       libwayland-egl1 fuse3 xvfb weston >/dev/null \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -qq -y --no-install-recommends \
+      libnss3 libxcomposite1 libxdamage1 libxrandr2 libxtst6 libxkbfile1 libgbm1 libudev1 libexpat1 \
+      libxcb-dri3-0 libfreetype6 libxext6 libxfixes3 \
+      \$(apt-cache show libasound2t64 >/dev/null 2>&1 && echo libasound2t64 || echo libasound2) >/dev/null \
+ && useradd -m -u 1500 player \
  && (dpkg -l libglib2.0-0 libglib2.0-0t64 2>/dev/null | grep -q ^ii || apt-get install -qq -y libglib2.0-0 >/dev/null) \
  && for lib in libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-util1; do \
       if dpkg -s \$lib >/dev/null 2>&1; then dpkg --remove --force-depends \$lib >/dev/null; fi; done \
@@ -29,7 +35,7 @@ RUN apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -qq -y 
 EOF
 
 podman run --rm -i --network=none --device /dev/fuse --cap-add SYS_ADMIN \
-    -v "$appimage:/test/Scuffle.AppImage:ro" -v "$fixture:/test/catalog.json:ro" \
+    -v "$appimage:/test/Scuffle.AppImage:ro" -v "$fixture:/test/catalog.json:ro" -v "$sign_in:/test/check-sign-in.py:ro" \
     "$image" bash -s <<'EOF'
 set -euo pipefail
 export HOME=/tmp/home XDG_CONFIG_HOME=/tmp/xdg/config XDG_DATA_HOME=/tmp/xdg/data XDG_CACHE_HOME=/tmp/xdg/cache
@@ -78,6 +84,15 @@ touch /tmp/marker && sleep 1
 check 'window from an extracted copy' "QT_QPA_PLATFORM=offscreen timeout 8 $root/AppRun; [ \$? = 124 ]"
 check 'umu-run from an extracted copy' "$root/usr/bin/umu-run --help | grep -q 'Unified Linux Wine Game Launcher'"
 check 'nothing written into the image' "[ -z \"\$(find $root -newer /tmp/marker)\" ]"
+
+# The sign-in window's engine, as a user with the sandbox this system allows, and as root,
+# which Chromium refuses its sandbox to.
+python="$root/usr/python/bin/python3.14 -I -B /test/check-sign-in.py"
+mkdir -p /tmp/player && chown player /tmp/player
+check 'sign-in window as a user' "setpriv --reuid=player --regid=player --init-groups env HOME=/tmp/player \
+    XDG_CONFIG_HOME=/tmp/player/config XDG_DATA_HOME=/tmp/player/data XDG_CACHE_HOME=/tmp/player/cache \
+    QT_QPA_PLATFORM=offscreen $python"
+check 'sign-in window as root' "QT_QPA_PLATFORM=offscreen $python"
 
 # What Scuffle resolves inside the AppImage, with AppRun's variables.
 check 'bridge copied to the data folder, umu-run from the AppImage' "

@@ -584,6 +584,12 @@ as the Battle.net app has one in its embedded browser.
   the address, the launch goes on and nobody was asked. When it stays, after a
   moment to settle, or does not load, the window shows it and the user signs
   in. The cookies of either end are kept for the next time.
+- **The sandbox.** Chromium shuts each page's process into Linux namespaces,
+  and stops the whole process when it cannot. Before the engine starts, a
+  child Python tries to make a user namespace and in it PID and network
+  namespaces. Where that fails, as for a program without an AppArmor profile
+  on Ubuntu 24.04 or for root, the engine runs with `--no-sandbox`, and the
+  page runs with Scuffle's own rights. It only shows Battle.net's sign-in.
 - **Accounts.** Each login has its own cookies. **Add account…** and a sign-in
   with none kept start from an empty browser, so no account is signed in to by
   itself.
@@ -828,13 +834,18 @@ would not find the host's OpenGL drivers, and it is several times larger.
 
 Only the Qt parts Scuffle uses are kept: QtCore, QtGui, QtWidgets, the X11,
 Wayland and offscreen platforms, desktop themes, input methods, and SVG icons
-and images. The build fails if a kept library needs a Qt or xcb helper library
+and images. The sign-in window adds Qt WebEngine from its own wheel with the
+Qt Quick, QML, network and printing libraries it loads, its
+`QtWebEngineProcess`, resources and page languages. It makes the AppImage
+144 MB instead of 45 MB, and as a mount it costs nothing at start. The build fails if a kept library needs a Qt or xcb helper library
 that is not bundled. The xcb helpers sit next to Qt's libraries, where the
 plugins' `RPATH` finds them, so the AppImage sets no `LD_LIBRARY_PATH` that the
 browser or the game would inherit. Everything else comes from the host and is
 part of every desktop: glibc, libstdc++, libxcb, libxkbcommon, the Wayland
 client libraries, fontconfig, OpenGL, GLib, D-Bus, zstd and the CA
-certificates. libxkbcommon-x11 is not bundled, since it must come from the same
+certificates. The engine also needs NSS, ALSA, libgbm, udev and a few X11
+libraries. Without one of them it does not load, and Scuffle signs in through
+the user's browser. libxkbcommon-x11 is not bundled, since it must come from the same
 release as the host's libxkbcommon. A mismatched pair crashes the X11 plugin.
 
 `AppRun` stops with a message that names the file when its Python or the
