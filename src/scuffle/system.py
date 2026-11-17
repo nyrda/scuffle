@@ -88,9 +88,9 @@ def attach_console() -> None:
         return
     import ctypes
     kernel32 = ctypes.windll.kernel32
-    # The one-file build runs Python in a child of the process that unpacked it, and
-    # that process has no console. The terminal is its parent.
-    attached = kernel32.AttachConsole(-1) or kernel32.AttachConsole(_parent_id(os.getppid()))  # -1: the parent
+    # -1 is the parent. A program started through another one, as PyInstaller's one-file
+    # build did, finds the terminal one step further up.
+    attached = kernel32.AttachConsole(-1) or kernel32.AttachConsole(_parent_id(os.getppid()))
     for name, device, mode in [('stdin', 'CONIN$', 'r'), ('stdout', 'CONOUT$', 'w'), ('stderr', 'CONOUT$', 'w')]:
         if getattr(sys, name) is None:
             setattr(sys, name, open(device if attached else os.devnull, mode, encoding='utf-8', buffering=1))

@@ -32,7 +32,7 @@ nix develop -c env QT_QPA_PLATFORM=offscreen PYTHONPATH=src \
 nix develop -c python3 tools/readme_screenshot.py  # docs/screenshot.png, after window changes
 nix build                                      # the Nix package, runs the tests
 nix build .#appimage                           # the Linux AppImage
-packaging/windows/remote-build.sh <ssh host>   # Scuffle.exe, built on Windows
+packaging/windows/remote-build.sh <ssh host>   # the Windows package, built on Windows
 ```
 
 ## Rules for the product

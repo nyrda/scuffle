@@ -1,8 +1,10 @@
 """Update Scuffle itself from its GitHub releases.
 
-The Windows package and the AppImage are single files that can replace themselves. Any other
-installation, such as the Nix package, is managed by what installed it and only hears about a release.
-A release is installed only when the user asks.
+The Windows package and the AppImage can replace themselves. The AppImage is a single file. The
+Windows package is Scuffle.exe with its version's folder beside it, so an update unpacks the new
+folder next to the old one and replaces only the program. Any other installation, such as the Nix
+package, is managed by what installed it and only hears about a release. A release is installed
+only when the user asks.
 """
 from __future__ import annotations
 
@@ -11,14 +13,16 @@ import hashlib
 import http.client
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
+import shutil
 import subprocess
 import sys
 import threading
 import time
 from typing import Callable
 import urllib.request
+import zipfile
 
 from . import diagnostics, system
 
@@ -28,11 +32,13 @@ PAGES = 'https://github.com/nyrda/scuffle/releases/'
 SUMS = 'SHA256SUMS'
 CHECK_SECONDS = 24 * 3600
 TIMEOUT = 30
-TRY_OUT_SECONDS = 180       # a one-file package unpacks itself first, and a virus scanner may look at it
+TRY_OUT_SECONDS = 180       # a virus scanner may look at a new program before it runs
 FINISH_SECONDS = 60         # the old Scuffle may still be exiting when the new one starts
 LIMIT = 1 << 20
 BLOCK = 1 << 20
 VERSION = re.compile(r'v?(\d+)\.(\d+)\.(\d+)')
+# A Windows package's version folder, and one an update was unpacking.
+FOLDER = re.compile(r'scuffle-\d+\.\d+\.\d+(\.partial)?')
 
 
 class UpdateError(RuntimeError):
@@ -59,7 +65,7 @@ def parsed(version: str) -> tuple[int, int, int] | None:
 
 
 def program() -> Path | None:
-    """The single file that is this Scuffle, when it can replace itself."""
+    """The program that is this Scuffle, when it can replace itself."""
     if getattr(sys, 'frozen', False) and system.WINDOWS:
         return Path(sys.executable)
     appimage = os.environ.get('APPIMAGE')
@@ -71,7 +77,12 @@ def can_install() -> bool:
 
 
 def asset_name(version: str) -> str:
-    return 'Scuffle.exe' if system.WINDOWS else f'Scuffle-{version}-x86_64.AppImage'
+    return f'Scuffle-{version}-windows-x64.zip' if system.WINDOWS else f'Scuffle-{version}-x86_64.AppImage'
+
+
+def version_folder(version: str) -> str:
+    """The folder beside Scuffle.exe with the rest of that version. scuffle.spec names it."""
+    return f'scuffle-{version}'
 
 
 def _sibling(path: Path, tag: str) -> Path:
@@ -146,10 +157,47 @@ def _download(release: Release, target: Path, expected: str, progress, cancelled
         target.chmod(0o755)
 
 
+def _unpack(archive: Path, staged: Path, version: str) -> Path:
+    """Unpack the release's version folder beside the running one, and its program as staged.
+
+    The folder is complete before it gets its name, so a folder of that name is never half there.
+    """
+    name = version_folder(version)
+    final, partial = staged.with_name(name), staged.with_name(f'{name}.partial')
+    for leftover in (final, partial):       # from an update that was interrupted
+        shutil.rmtree(leftover, ignore_errors=True)
+    try:
+        with zipfile.ZipFile(archive) as bundle:
+            for entry in bundle.infolist():
+                if entry.is_dir():
+                    continue
+                parts = PurePosixPath(entry.filename).parts
+                if any(part in ('', '.', '..') or '\\' in part or ':' in part for part in parts):
+                    raise UpdateError(f'The release holds a file outside its folder: {entry.filename}')
+                if parts == ('Scuffle', 'Scuffle.exe'):
+                    target = staged
+                elif len(parts) > 2 and parts[:2] == ('Scuffle', name):
+                    target = partial.joinpath(*parts[2:])
+                else:
+                    raise UpdateError(f'The release holds an unexpected file: {entry.filename}')
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with bundle.open(entry) as source, open(target, 'wb') as output:
+                    shutil.copyfileobj(source, output, BLOCK)
+                    output.flush()
+                    os.fsync(output.fileno())
+        if not staged.is_file() or not partial.is_dir():
+            raise UpdateError('The release lacks Scuffle.exe or its version folder')
+    except BaseException:
+        shutil.rmtree(partial, ignore_errors=True)
+        raise
+    os.replace(partial, final)
+    return final
+
+
 def clean_environment() -> dict[str, str]:
     """What another copy of Scuffle should start with, free of this running one's own package."""
     environment = dict(os.environ)
-    # Otherwise a one-file package takes the unpacked files of the one that started it.
+    # PyInstaller's variables of this running Scuffle must not reach the new one.
     environment['PYINSTALLER_RESET_ENVIRONMENT'] = '1'
     appdir = environment.get('APPDIR')
     for name in ['APPDIR', 'APPIMAGE', 'ARGV0', 'OWD', 'SCUFFLE_BRIDGE']:
@@ -194,17 +242,27 @@ def install(release: Release, progress: Callable[[int, int], None] | None = None
     if running is None or not release.asset:
         raise UpdateError('This installation cannot update itself')
     staged = _sibling(running, 'new')
+    archive = running.with_name(f'{running.stem}.new.zip')
+    folder, swapped = None, False
     try:
-        _download(release, staged, _expected_sum(release), progress, cancelled)
+        if system.WINDOWS:
+            _download(release, archive, _expected_sum(release), progress, cancelled)
+            folder = _unpack(archive, staged, release.version)
+        else:
+            _download(release, staged, _expected_sum(release), progress, cancelled)
         _try_out(staged, release.version)
         _swap(running, staged)
-    except (OSError, http.client.HTTPException) as error:
+        swapped = True
+    except (OSError, http.client.HTTPException, zipfile.BadZipFile) as error:
         raise UpdateError(f'The update could not be installed: {error}') from error
     finally:
-        try:
-            staged.unlink(missing_ok=True)
-        except OSError:
-            pass
+        for path in (staged, archive):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        if folder is not None and not swapped:
+            shutil.rmtree(folder, ignore_errors=True)
 
 
 def restart() -> None:
@@ -218,23 +276,46 @@ def restart() -> None:
                      stderr=subprocess.DEVNULL, close_fds=True, **options)
 
 
+def leftovers(running: Path) -> list[Path]:
+    """What an update leaves beside the program: the old one, and an interrupted download.
+
+    In the Windows package also the other versions' folders. Only names an update gives are listed.
+    """
+    found = [_sibling(running, 'old'), _sibling(running, 'new'), running.with_name(f'{running.stem}.new.zip')]
+    if system.WINDOWS:
+        own = Path(getattr(sys, '_MEIPASS', '')).name
+        found += [path for path in running.parent.iterdir()
+                  if FOLDER.fullmatch(path.name) and path.name != own and path.is_dir()]
+    return found
+
+
+def _remove(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink(missing_ok=True)
+
+
 def finish() -> None:
-    """The new version has started, so the old file and an interrupted download can go."""
+    """The new version has started, so the old one and an interrupted download can go."""
     running = program()
     if running is None:
         return
-    leftovers = [_sibling(running, 'old'), _sibling(running, 'new')]
+    try:
+        remaining = leftovers(running)
+    except OSError:
+        return
 
     def work():
         deadline = time.monotonic() + FINISH_SECONDS
         while True:
-            for path in list(leftovers):
+            for path in list(remaining):
                 try:
-                    path.unlink(missing_ok=True)
-                    leftovers.remove(path)
+                    _remove(path)
+                    remaining.remove(path)
                 except OSError:
                     pass
-            if not leftovers or time.monotonic() >= deadline:
+            if not remaining or time.monotonic() >= deadline:
                 return
             time.sleep(1)
 

@@ -65,8 +65,7 @@ def bridge_executable() -> Path:
 def installed_copy(packaged: Path, folder: Path) -> Path:
     """A copy of the packaged bridge that outlives this Scuffle.
 
-    The one-file Windows build unpacks into a temporary folder that is deleted when
-    Scuffle exits, and an AppImage unmounts. The bridge waits for the game, so it runs
+    A packaged build's folder can be replaced by an update, and an AppImage unmounts. The bridge waits for the game, so it runs
     from here. The name carries the content hash, so a newer Scuffle never replaces a
     bridge that a running game still uses.
     """

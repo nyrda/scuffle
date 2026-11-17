@@ -52,10 +52,6 @@ def engine():
     """Qt's browser engine, loaded on first use, since most starts never sign in."""
     global _engine
     if _engine is None:
-        if QGuiApplication.platformName() == 'offscreen':
-            # No display means no GPU to draw with, and the engine stops the process over that.
-            flags = os.environ.get('QTWEBENGINE_CHROMIUM_FLAGS', '')
-            os.environ['QTWEBENGINE_CHROMIUM_FLAGS'] = f'{flags} --disable-gpu'.strip()
         from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile
         from PySide6.QtWebEngineWidgets import QWebEngineView
 
@@ -75,6 +71,17 @@ def engine():
         Engine.Page, Engine.Profile, Engine.View = Page, QWebEngineProfile, QWebEngineView
         _engine = Engine
     return _engine
+
+
+def without_display() -> None:
+    """Draw without a GPU where there is no display, or the engine stops the process over it.
+
+    The engine reads its flags when it starts, at the first page, which can be long after it was
+    loaded, as by the diagnostics before there is a window.
+    """
+    flags = os.environ.get('QTWEBENGINE_CHROMIUM_FLAGS', '')
+    if QGuiApplication.platformName() == 'offscreen' and '--disable-gpu' not in flags.split():
+        os.environ['QTWEBENGINE_CHROMIUM_FLAGS'] = f'{flags} --disable-gpu'.strip()
 
 
 def kept(cookie: QNetworkCookie) -> bool:
@@ -136,6 +143,7 @@ class WebSignIn(QWidget):
         """Open the sign-in page, signed in already when web_session is a session Battle.net still knows."""
         self.stop()
         parts = engine()
+        without_display()
         self.asked, self._ticket, self._url = False, None, QUrl(url)
         self.profile = parts.Profile()          # without a name it keeps nothing on disk
         self.profile.setHttpAcceptLanguage(','.join(QLocale.system().uiLanguages()))

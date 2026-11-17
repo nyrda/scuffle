@@ -2,3 +2,5 @@
 pyinstaller==6.22.3
 pyinstaller-hooks-contrib==2026.9
 pyside6-essentials==6.12.0
+# Qt WebEngine, for the sign-in window. It needs pyside6-addons, but Scuffle uses none of that.
+pyside6-webengine==6.12.0.140

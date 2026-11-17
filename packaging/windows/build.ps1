@@ -1,6 +1,7 @@
 <#
 .SYNOPSIS
-Build dist\Scuffle.exe, the one-file Windows package.
+Build the Windows package: dist\Scuffle\ with Scuffle.exe and its version's folder, and
+dist\Scuffle-<version>-windows-x64.zip of it for a release.
 
 .DESCRIPTION
 Runs on Windows from a checkout. Build tools are installed from the hashed
@@ -45,8 +46,24 @@ Invoke-Native $python -m PyInstaller --noconfirm --clean --log-level WARN `
     (Join-Path $PSScriptRoot 'scuffle.spec')
 
 # The windowed program writes to a redirected stream, and PowerShell waits for it.
-$exe = Join-Path $root 'dist\Scuffle.exe'
+$package = Join-Path $root 'dist\Scuffle'
+$exe = Join-Path $package 'Scuffle.exe'
 $help = & $exe --help | Out-String
 if ($LASTEXITCODE -or $help -notmatch 'usage: scuffle') { throw "Scuffle.exe --help failed:`n$help" }
-$size = [math]::Round((Get-Item $exe).Length / 1MB, 1)
-Write-Output "Built $exe ($size MB)"
+# The browser engine loads in the package, with settings of its own rather than the user's.
+$saved = $env:APPDATA, $env:LOCALAPPDATA
+$env:APPDATA = $env:LOCALAPPDATA = Join-Path $work 'empty-profile'
+try {
+    $started = Get-Date
+    $report = & $exe diagnostics | Out-String
+    $seconds = [math]::Round(((Get-Date) - $started).TotalSeconds, 1)
+} finally {
+    $env:APPDATA, $env:LOCALAPPDATA = $saved
+}
+if ($LASTEXITCODE -or $report -notmatch "Sign-in: Scuffle's window") { throw "Scuffle.exe has no sign-in window:`n$report" }
+$version = (& $python -c "import tomllib; print(tomllib.load(open(r'$root\pyproject.toml', 'rb'))['project']['version'])").Trim()
+$zip = Join-Path $root "dist\Scuffle-$version-windows-x64.zip"
+Remove-Item -Force -ErrorAction SilentlyContinue $zip
+Invoke-Native $python (Join-Path $PSScriptRoot 'zip_package.py') $package $zip
+$size = [math]::Round((Get-Item $zip).Length / 1MB, 1)
+Write-Output "Built $zip ($size MB, a report in $seconds s)"

@@ -2748,10 +2748,14 @@ pages.open_browser = lambda url: print('opened the browser')
 page = pages.SignInPage()
 page.start('https://eu.account.battle.net/login/?externalChallenge=login&app=wow')
 print('embedded', page.embedded, '| switch offered', not page.switch_button.isHidden())
+from scuffle import diagnostics
+from scuffle.settings import Settings
+print(diagnostics.sign_in_place(Settings()))
 ''')
     # The same packages as this test run, wherever they come from, and Scuffle from the checkout.
     paths = [str(Path(__file__).resolve().parents[1] / 'src'), *sys.path]
     env = {**os.environ, 'QT_QPA_PLATFORM': 'offscreen', 'PYTHONPATH': os.pathsep.join(paths)}
     result = subprocess.run([sys.executable, str(script)], env=env, capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, result.stderr[-2000:]
-    assert result.stdout.splitlines()[-2:] == ['opened the browser', 'embedded False | switch offered False']
+    assert result.stdout.splitlines()[-3:] == ['opened the browser', 'embedded False | switch offered False',
+                                               'the browser, this build has no browser engine']

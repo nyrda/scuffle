@@ -21,9 +21,9 @@ The tests never reach the network. The sign-in window's browser engine has
 network code of its own, so `tests/conftest.py` makes every name it looks up
 this machine. A test's stand-in for Battle.net's page then answers under
 Battle.net's name, and nothing else can be reached. The engine comes with the
-PySide6 of the Nix dev shell and package. The AppImage and `Scuffle.exe` are
-built from the smaller PySide6 wheel without it, and sign in through the user's
-browser until their packaging adds it.
+PySide6 of the Nix dev shell and package, and with the `pyside6-webengine`
+wheel in `Scuffle.exe`. The AppImage is built from the smaller wheel without it, and
+signs in through the user's browser until its packaging adds it.
 
 ## Screenshots
 
@@ -87,6 +87,16 @@ python.org with the `py` launcher. On a Windows checkout,
 The build tools are pinned with hashes in `packaging/windows/requirements.txt`.
 After changing `requirements.in`, regenerate it with the command at its top.
 
+The package is a folder, `dist\Scuffle`, with `Scuffle.exe` and the folder of
+its version, `scuffle-<version>`, beside it. `build.ps1` zips it as
+`dist\Scuffle-<version>-windows-x64.zip` for a release. It is not one file,
+because a one-file program unpacks itself on every start, and with the sign-in
+window's browser engine inside that took about 9 seconds.
+
+The engine runs pages in `QtWebEngineProcess.exe`, with its resources beside
+it. The build fails when PyInstaller leaves one of them out, and `build.ps1`
+then checks that `Scuffle.exe diagnostics` reports the sign-in window.
+
 ## Self-update checks
 
 `packaging/windows/test-self-update.ps1` and `packaging/appimage/test-self-update.sh`
@@ -106,7 +116,7 @@ Both packages bundle other programs, unchanged and each under its own license:
 | --- | --- | --- |
 | CPython, from python-build-standalone on Linux | PSF License | both |
 | Qt for Python (PySide6, Shiboken6) and the Qt libraries it ships | LGPL 3 | both |
-| PyInstaller's bootloader | GPL 2 with an exception for bundled programs | `Scuffle.exe` |
+| PyInstaller's bootloader | GPL 2 with an exception for bundled programs | `Scuffle.exe` in the Windows package |
 | umu-launcher | GPL 3 | AppImage |
 | jeepney | MIT | AppImage |
 | The xcb utility libraries from Debian 12 | MIT and X11 | AppImage |
@@ -119,7 +129,8 @@ and `packaging/windows/requirements.txt`. Their sources are at those projects.
 
 A tag such as `v0.1.0` that matches the version in `pyproject.toml` makes CI
 build both packages, test them and publish a GitHub release with
-`Scuffle.exe`, `Scuffle-<version>-x86_64.AppImage` and their `SHA256SUMS`.
+`Scuffle-<version>-windows-x64.zip`, `Scuffle-<version>-x86_64.AppImage` and
+their `SHA256SUMS`.
 Each file gets a GitHub build attestation, which needs the repository to be
 public. Before tagging, refresh the client snapshot and the README picture, and
 raise the version in `pyproject.toml`.
