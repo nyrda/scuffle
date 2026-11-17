@@ -6,7 +6,7 @@ still lists the clients. Generated, do not edit.
 
 SNAPSHOT = {
     'format': 1,
-    'checked_at': 1794668165,
+    'checked_at': 1794920662,
     'build': 'PUB-30 5260',
     'installs': {
         'wow': {'uid': 'wow', 'name': 'World of Warcraft', 'kind': 'live', 'product': 'WoW', 'deprecated': False, 'modes': []},
