@@ -2,6 +2,7 @@
 import os
 from pathlib import Path
 import sys
+import threading
 import time
 
 import pytest
@@ -1613,7 +1614,7 @@ def test_a_running_game_closes_and_shift_turns_the_button_into_force_quit(qt, wi
     monkeypatch.setattr(window.library, 'running', lambda code, processes=None: code == 'wow')
     monkeypatch.setattr(window.library, 'game_processes', lambda code: [4242])
     window._running = window.scan_running(window.library)      # as the background scan finds it
-    results, calls = [NO_WINDOW, ASKED], []
+    results, calls = [NO_WINDOW, ASKED, ASKED], []
 
     def close(executable, processes, *, force=False):
         calls.append((processes, force))
@@ -1637,29 +1638,29 @@ def test_a_running_game_closes_and_shift_turns_the_button_into_force_quit(qt, wi
             qt.processEvents()
             assert time.monotonic() < deadline
         qt.processEvents()
-    # A hung game has no window to close, so the banner points at Force quit.
-    click_and_wait(1)
-    # The worker reports after its call returns, so the banner can come a moment later.
-    deadline = time.monotonic() + 5
-    while 'Force quit' not in page.banner.text.text() and time.monotonic() < deadline:
+    # A game hung after quitting has no window to ask, so Close ends it, and its exit is no crash.
+    click_and_wait(2)
+    assert calls == [([4242], False), ([4242], True)]
+    while any(thread.name == 'scuffle-close' for thread in threading.enumerate()):
         qt.processEvents()
-    assert calls[-1] == ([4242], False) and 'Force quit' in page.banner.text.text()
+    qt.processEvents()
+    assert 'wow' in window.forced and 'wow' not in window.closing and 'window' not in page.banner.text.text()
     shift['held'] = True
     window.refresh()
     assert page.primary.text() == 'Force quit' and page.primary.isEnabled()
-    click_and_wait(2, Qt.ShiftModifier)
+    click_and_wait(3, Qt.ShiftModifier)
     assert calls[-1] == ([4242], True)
     shift['held'] = False
     # A quick Shift+click: by the time the click is handled the key is up again, and the click still forces.
     window.forced.discard('wow')
     results.append(ASKED)
     window.refresh()
-    click_and_wait(3, Qt.ShiftModifier)
+    click_and_wait(4, Qt.ShiftModifier)
     assert calls[-1] == ([4242], True)
     window.closing['wow'] = time.monotonic()
     window.refresh()
     assert page.primary.text() == 'Closing…' and not page.primary.isEnabled()
-    # A game that has not quit after the grace time gets the same hint.
+    # A game that has not quit after the grace time gets a banner that points at Force quit.
     monkeypatch.setattr(ui, 'CLOSE_GRACE', 0)
     window.close_overdue('wow', window.closing['wow'])
     assert 'wow' not in window.closing and 'Force quit' in page.banner.text.text()
