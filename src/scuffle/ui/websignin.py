@@ -19,6 +19,7 @@ from PySide6.QtCore import QDateTime, QLocale, QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import QSizePolicy, QVBoxLayout, QWidget
 
+from ..auth.websession import KEPT_DOMAINS, SESSION_LIMIT
 from ..launch import looks_like_redirect, parse_ticket
 from .style import BACKGROUND
 from .widgets import label
@@ -27,10 +28,6 @@ if TYPE_CHECKING:
     # Only where the browser engine is there. A Qt without it imports this module too.
     from PySide6.QtNetwork import QNetworkCookie
 
-# Whose cookies are kept. The page also loads a captcha and fonts from elsewhere.
-KEPT_DOMAINS = ('battle.net', 'blizzard.com', 'battlenet.com.cn', 'blizzard.cn')
-# What the bridge can protect, with room to spare.
-SESSION_LIMIT = 30000
 # After the page loaded and before it is shown: a page that knows the account redirects by then.
 SETTLE = 1500
 # A page that neither loads nor redirects is shown after this long, so the user sees why.

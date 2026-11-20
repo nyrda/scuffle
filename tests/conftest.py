@@ -95,3 +95,59 @@ def save_login():
             login.session.write_bytes(ticket)
         return login
     return save
+
+
+class SignInSite:
+    """A stand-in for Battle.net's sign-in on this machine, under Battle.net's names.
+
+    Like the real one it sends a browser it knows by its cookie straight on to the address that
+    holds the ticket, and shows a form to any other. A test can give a path an answer of its own.
+    """
+    TICKET = b'EU-0123abcd-412345678'
+    REDIRECT = f'http://localhost:0/?ST={TICKET.decode()}&flowTrackingId='
+
+    def __init__(self):
+        import http.server
+        import threading
+        site = self
+        self.asked = []         # the host, path and cookies of every request
+        self.answers = {}       # path -> status and headers, instead of the sign-in's own answer
+
+        class Page(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *_):
+                pass
+
+            def do_GET(self):
+                path, cookies = self.path.split('?')[0], self.headers.get('Cookie', '')
+                site.asked.append((self.headers.get('Host', '').split(':')[0], path, cookies))
+                status, headers = site.answers.get(path) or site.sign_in(cookies)
+                body = b'<form><input name="accountName"><button>Continue</button></form>' if status == 200 else b''
+                self.send_response(status)
+                for name, value in [*headers, ('Content-Length', str(len(body)))]:
+                    self.send_header(name, value)
+                self.end_headers()
+                self.wfile.write(body)
+
+        self.server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Page)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.address = self.at('eu.account.battle.net', '/login/?externalChallenge=login&app=wow')
+
+    def at(self, host: str, path: str) -> str:
+        return f'http://{host}:{self.server.server_port}{path}'
+
+    def sign_in(self, cookies: str):
+        if 'login=known' not in cookies:
+            return 200, [('Content-Type', 'text/html')]
+        # The answer that redirects also renews a cookie, which belongs to the session too.
+        return 302, [('Location', self.REDIRECT), ('Set-Cookie', 'seen=again; Path=/; Max-Age=86400; HttpOnly')]
+
+
+@pytest.fixture
+def sign_in_site(no_network, monkeypatch):
+    """Battle.net's sign-in for requests Scuffle makes itself. Every name is this machine, so nothing else is reached."""
+    resolve = socket.getaddrinfo
+    monkeypatch.setattr(socket, 'getaddrinfo', lambda host, *args, **kwargs: resolve('127.0.0.1', *args, **kwargs))
+    site = SignInSite()
+    yield site
+    site.server.shutdown()
+    site.server.server_close()

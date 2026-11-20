@@ -57,6 +57,10 @@ class RpcRejected(RuntimeError):
         self.status = status
 
 
+class TicketRejected(RuntimeError):
+    """Battle.net did not accept the ticket a sign-in ended with."""
+
+
 class QueueDropped(RuntimeError):
     """The connection ended while Battle.net's login queue held this logon."""
 
@@ -216,8 +220,8 @@ class BGS:
         try:
             return self.await_logon(ticket)
         except CredentialRejected as error:
-            raise RuntimeError(f'Battle.net did not accept the sign-in ticket ({error}). '
-                               'Sign in again, since each ticket works only once') from None
+            raise TicketRejected(f'Battle.net did not accept the sign-in ticket ({error}). '
+                                 'Sign in again, since each ticket works only once') from None
 
     def await_logon(self, credential):
         for header, body in self.notifications():
