@@ -136,8 +136,9 @@ answer for when it is offline. If a client is behind, **Play** starts its
 update instead.
 
 While a game runs, its button reads **Close game**, which closes it as its
-window's close button does. Hold Shift for **Force quit**, for a game that
-hangs.
+window's close button does. A game that has no window left, as when it hangs
+after you quit it, is ended at once. Hold Shift for **Force quit**, for a game
+that hangs with its window open.
 
 **Uninstall…** in the **⋯** menu removes a client. Content other clients share
 stays. By default your WTF, Interface and Screenshots folders move to

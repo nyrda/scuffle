@@ -822,8 +822,14 @@ from an earlier window, counts too. A worker lists the processes at most every
   their arguments, are left alone. They exit when the game is gone. On Windows
   Scuffle ends the process through the handle it checked the file with, so
   its ID cannot pass to another process in between.
-- A game without a window, as when it hangs while quitting, or one that has
-  not quit after 20 seconds, gets a banner that points at Force quit.
+- A game without a window cannot be asked, so Close ends it as Force quit
+  does. WoW hangs like this after the user quit it: it writes its settings and
+  saved variables, destroys its window and device, and then can run for hours
+  without exiting. Such a game also counts as running and holds back updates.
+  Close of a game that is still starting ends it the same way, which is what
+  the user asked for.
+- A game that has not quit 20 seconds after Close asked its window gets a
+  banner that points at Force quit.
 
 ## Linux packaging
 

@@ -1153,9 +1153,14 @@ class MainWindow(QMainWindow):
         label = catalog.get(code).label
         if result != ASKED or force:
             self.closing.pop(code, None)   # an asked game quits in its own time, watched by close_overdue
+        if result == NO_WINDOW and not force:
+            # Nothing is left to ask. A game hangs like this after it quit and saved its settings,
+            # so ending it is the close the user asked for.
+            events.log.info('%s has no window to close', code)
+            self.close_game(code, force=True)
+            return
         if result == NO_WINDOW:
-            self.notify(f'{label} has no window to close. A game can hang like this while it quits. '
-                        'Hold Shift and press Force quit to end it.', 'error', client=code)
+            self.notify(f'{label} could not be ended.', 'error', client=code)
         elif result not in (ASKED, NOT_RUNNING):
             self.notify(result, 'error', client=code)
         self._running_at = float('-inf')
