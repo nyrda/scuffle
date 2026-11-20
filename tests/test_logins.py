@@ -46,6 +46,7 @@ class Battlenet:
         self.login_tickets = {}     # lasting ticket -> account, handed back by a browser sign-in
         self.hands_back_login_ticket = False
         self.echoes = False
+        self.sign_in_address = 'https://eu.account.battle.net/login'
 
     def ticket(self, owner) -> bytes:
         self.issued += 1
@@ -91,10 +92,12 @@ class Battlenet:
                 pass
 
             def web_challenge(self, device, version):
-                return 'https://eu.account.battle.net/login'
+                return server.sign_in_address
 
             def verify_web_ticket(self, ticket):
                 server.verified.append(ticket)
+                if ticket not in server.redirects:
+                    raise bgs.TicketRejected('Battle.net did not accept the sign-in ticket')
                 self.owner = server.redirects.pop(ticket)
                 return server.record(self.owner, server.login_ticket(self.owner, ticket))
 
@@ -453,6 +456,62 @@ def test_an_ended_session_signs_in_again_with_the_kept_browser_session(vault, ba
     assert renewed.id == MAIN and renewed.load_web_session() == newer
     assert renewed.label == 'Wanderer#7395' and battlenet.tickets[saved_ticket(renewed)] == MAIN
     assert 'with the kept browser session' in vault.history.read_text()
+
+
+KNOWN = b'login=known; HttpOnly; domain=.battle.net; path=/'
+
+
+def test_a_browser_session_battlenet_knows_signs_in_again_without_a_browser(vault, battlenet, sign_in_site):
+    launcher(vault).sign_in(VERSION, battlenet.browser(MAIN, KNOWN, 'in the sign-in window'))
+    battlenet.tickets.clear()       # the saved tickets expire within hours
+    battlenet.sign_in_address = sign_in_site.address
+    battlenet.redirects[sign_in_site.TICKET] = MAIN
+    # Neither the sign-in window nor a browser is asked, so no browser engine is loaded for it.
+    renewed = launcher(vault).renew(VERSION, never)
+    assert renewed.id == MAIN and battlenet.verified[-1] == sign_in_site.TICKET
+    assert battlenet.tickets[saved_ticket(renewed)] == MAIN
+    # The session is kept with what Battle.net's answer set, for the next time.
+    kept = renewed.load_web_session().split(b'\n')
+    assert KNOWN in kept and any(line.startswith(b'seen=again') for line in kept)
+    assert json.loads(vault.history.read_text().splitlines()[-2]) | {'time': ''} == {
+        'time': '', 'event': 'signed_in', 'detail': 'with the kept browser session, without a browser'}
+
+
+def test_a_browser_session_battlenet_no_longer_knows_is_handed_to_the_sign_in_window(vault, battlenet, sign_in_site):
+    ended = b'login=ended; domain=.battle.net; path=/'
+    launcher(vault).sign_in(VERSION, battlenet.browser(MAIN, ended))
+    battlenet.tickets.clear()
+    battlenet.kept.clear()
+    battlenet.sign_in_address = sign_in_site.address
+    renewed = launcher(vault).renew(VERSION, battlenet.browser(MAIN, KNOWN, 'in the sign-in window'))
+    # Battle.net was asked once and showed its page, which is the user's. The window got the session as it was kept.
+    assert len(sign_in_site.asked) == 1 and battlenet.kept == [ended]
+    assert renewed.id == MAIN and renewed.load_web_session() == KNOWN
+    assert 'in the sign-in window' in vault.history.read_text().splitlines()[-2]
+
+
+def test_a_ticket_of_the_plain_request_that_battlenet_rejects_goes_on_to_the_sign_in_window(vault, battlenet,
+                                                                                          sign_in_site):
+    launcher(vault).sign_in(VERSION, battlenet.browser(MAIN, KNOWN))
+    battlenet.tickets.clear()
+    battlenet.kept.clear()
+    battlenet.sign_in_address = sign_in_site.address        # its ticket is one the logon does not know
+    renewed = launcher(vault).renew(VERSION, battlenet.browser(MAIN, KNOWN, 'in the sign-in window'))
+    # The window was asked once, with the session as it was kept, and its sign-in is the one that counts.
+    assert battlenet.verified[-2] == sign_in_site.TICKET and battlenet.kept == [KNOWN]
+    assert renewed.id == MAIN and len(sign_in_site.asked) == 1
+    assert 'in the sign-in window' in vault.history.read_text().splitlines()[-2]
+    # A ticket of the window or a browser that is rejected is still the failure it was.
+    battlenet.tickets.clear()
+    battlenet.sign_in_address = 'https://eu.account.battle.net/login'
+    with pytest.raises(RuntimeError, match='did not accept the sign-in ticket'):
+        launcher(vault).renew(VERSION, lambda url, kept=None: launch.SignedIn(b'ST-unknown'))
+
+
+def test_a_sign_in_with_no_browser_session_kept_asks_battlenet_nothing_by_itself(vault, battlenet, sign_in_site):
+    battlenet.sign_in_address = sign_in_site.address
+    launcher(vault).sign_in(VERSION, battlenet.browser(MAIN))
+    assert sign_in_site.asked == []
 
 
 def test_each_account_signs_in_again_with_its_own_browser_session(vault, battlenet):

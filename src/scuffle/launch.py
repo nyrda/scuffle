@@ -15,7 +15,8 @@ import urllib.parse
 import webbrowser
 
 from . import catalog, events, system
-from .auth.bgs import BuildRefused, CredentialRejected, login, renew
+from .auth import websession
+from .auth.bgs import BuildRefused, CredentialRejected, TicketRejected, login, renew
 from .auth.vault import Login, Vault
 from .launch_options import ClientOptions, OptionError, linux_environment, wrapper_command
 from .library import Library, LibraryError
@@ -38,6 +39,8 @@ class SignedIn:
     web_session: bytes | None = None
     how: str = 'in the browser'
 
+
+WITHOUT_BROWSER = 'with the kept browser session, without a browser'
 
 # Takes Battle.net's sign-in address and the browser session kept for the account, if any.
 SignIn = Callable[[str, 'bytes | None'], SignedIn]
@@ -80,6 +83,22 @@ def ticket_account(ticket: bytes) -> str | None:
 
 def looks_like_redirect(text: str) -> bool:
     return 'localhost:0' in text and 'ST=' in text
+
+
+def kept_session_sign_in(url: str, web_session: bytes | None) -> SignedIn | None:
+    """Sign in with the kept browser session alone, or None when the sign-in takes the window or a browser.
+
+    Battle.net sends a session it knows straight on to the address with the ticket, so no browser is
+    loaded for it. The session to keep comes back with the ticket.
+    """
+    ended = websession.follow(url, web_session) if web_session else None
+    if ended is None:
+        return None
+    address, session = ended
+    try:
+        return SignedIn(parse_ticket(address), session, WITHOUT_BROWSER)
+    except ValueError:
+        return None
 
 
 def open_browser(url: str) -> None:
@@ -182,17 +201,26 @@ class Launcher:
     def sign_in(self, version: int, sign_in: SignIn, queue=None, web_session: bytes | None = None) -> Login:
         """Add the account the sign-in is for, or renew its session if it is listed. It becomes active.
 
-        web_session is the browser session kept for the account whose session ended. Battle.net's page
-        then signs in by itself, as a browser that is still signed in does.
+        web_session is the browser session kept for the account whose session ended. Battle.net then
+        signs in by itself, as it does for a browser that is still signed in. That is tried without a
+        browser first, and sign_in is asked only when it did not end in a ticket.
         """
         self.runtime.prepare()
         answer = SignedIn(b'')
+        alone = True
 
         def ask(url: str) -> bytes:
             nonlocal answer
-            answer = sign_in(url, web_session)
+            answer = (kept_session_sign_in(url, web_session) if alone else None) or sign_in(url, web_session)
             return answer.ticket
-        added = login(self.vault, self.settings.auth_host, version, ask, queue)
+        try:
+            added = login(self.vault, self.settings.auth_host, version, ask, queue)
+        except TicketRejected:
+            if answer.how != WITHOUT_BROWSER:
+                raise
+            # The ticket of the plain request did not work, so the sign-in is asked as if there had been none.
+            alone = False
+            added = login(self.vault, self.settings.auth_host, version, ask, queue)
         if answer.web_session:
             try:
                 added.save_web_session(answer.web_session)

@@ -532,10 +532,12 @@ near 300 MB afterwards with 5 MB in use. `memory.py` therefore sends buffers fro
 and trims after each job. The window with a running download now uses 240 to
 290 MB, at the same speed, and about 140 MB once the job ends.
 
-The sign-in window's browser engine is loaded for the first sign-in of a run,
-also one that shows no page. It adds about 150 MB, counted with its two helper
-processes and shared pages once, and keeps them until Scuffle quits, since the
-engine cannot be unloaded. A run that never signs in never loads it.
+The sign-in window's browser engine is loaded the first time a run needs
+Battle.net's page. It adds about 150 MB, counted with its two helper processes
+and shared pages once, and keeps them until Scuffle quits, since the engine
+cannot be unloaded. Signing in again with the kept browser session is one plain
+request and loads no engine. That is the sign-in of most days, so most runs
+never load it.
 
 Holding Shift turns **Close game** into **Force quit**. The window asks for the
 key's state a few times a second while it shows. A filter on every event of the
@@ -579,11 +581,27 @@ as the Battle.net app has one in its embedded browser.
   for that. Session cookies are kept too, as a browser that is never closed
   keeps them.
 - **Signing in again.** When Battle.net rejects a login's saved tickets, the
-  launch reads the login's cookies before its folder goes and hands them to the
-  sign-in. The page is loaded with them and is not shown. When it is sent on to
-  the address, the launch goes on and nobody was asked. When it stays, after a
-  moment to settle, or does not load, the window shows it and the user signs
-  in. The cookies of either end are kept for the next time.
+  launch reads the login's cookies before its folder goes. `auth/websession.py`
+  then asks for the sign-in address itself, with those cookies and without a
+  browser. Battle.net answers a session it knows with a redirect straight to
+  the address that holds the ticket, before any page, so the launch goes on and
+  nobody was asked. Only the answer's status, the address it points to and the
+  cookies it sets are read. A redirect is followed only to Battle.net's own
+  domains and never away from HTTPS, for at most five requests. The request
+  names a browser as its sender, since the session is a browser's. Whether
+  Battle.net would answer a request under Scuffle's own name was not tried.
+- **When that takes the page.** A page in answer is for the user. Then, and
+  when Battle.net does not answer, points elsewhere or the logon rejects the
+  ticket, the same cookies go to the sign-in window. The page is loaded with
+  them and is not shown. When it is sent on to the address, the launch goes on
+  as above. When it stays, after a moment to settle, or does not load, the
+  window shows it and the user signs in.
+- **One form for both.** The plain request keeps the session as the window's
+  browser writes it, one cookie to a line, with the cookies the answer set and
+  without those it took back or that ran out. So either reads what the other
+  kept, and the cookies of either end are kept for the next time. A session
+  from the window also signs in again this way after the user chose their own
+  browser, and in a package without the engine.
 - **The sandbox.** Chromium shuts each page's process into Linux namespaces,
   and stops the whole process when it cannot. Before the engine starts, a
   child Python tries to make a user namespace and in it PID and network
@@ -606,7 +624,8 @@ as the Battle.net app has one in its embedded browser.
 - **What is not known.** How long Battle.net keeps a session of the sign-in
   window, and whether it treats the engine like the user's browser.
   `history.jsonl` records for each sign-in whether it was in the sign-in
-  window, with the kept browser session or in the browser.
+  window, with the kept browser session, with that session without a browser,
+  or in the browser.
 
 A rejected session with no browser session left starts the sign-in again.
 Battle.net can also refuse every logon from one build, with status 33
